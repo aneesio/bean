@@ -376,6 +376,7 @@ Enable Inline Highlights, then in TextEdit type a sentence with several issues
 | PS14 | No text in logs | Enable diagnostics, use passive, check `log stream` | Only reason codes / counts; no text | ☐ |
 | PS15 | Others still work | Quick Proofread, Action Menu, Reply/Compose | All still work | ☐ |
 | PS16 | Likelihood cost gate | Enable "Only call AI…"; pause on locally clean text | No provider call; diagnostics reason `noLocalSignal` | ☐ |
+| PS17 | Upgrade cost migration | Seed old automatic-AI preferences without `automaticAICostSafetyVersion`; launch Bean | Passive/Web Inline are off; inline is local-only with no LLM/fallback; explicit shortcuts still work | ☐ |
 
 ## Phase 4: Reply & Compose
 

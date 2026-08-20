@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bean — Inline Proofreading (Beta)",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bean inline proofreading for web text fields. Off by default; enable per site in options.",
   "permissions": ["storage", "nativeMessaging"],
   "host_permissions": ["http://*/*", "https://*/*"],

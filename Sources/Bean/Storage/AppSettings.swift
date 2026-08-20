@@ -98,6 +98,9 @@ final class AppSettings: ObservableObject {
         static let bubbleDelay = "bubbleDelaySeconds"
         static let bubbleOpenOnHover = "bubbleOpenOnHover"
         static let webInlineEnabled = "webInlineEnabled"
+        // One-time migrations for settings whose old defaults could spend API
+        // tokens after a typing pause. Explicit actions are never affected.
+        static let automaticAICostSafetyVersion = "automaticAICostSafetyVersion"
     }
 
     private let defaults = UserDefaults.standard
@@ -231,6 +234,19 @@ final class AppSettings: ObservableObject {
     @Published var lastSupportReason: String = ""
 
     init() {
+        // Versions before this migration allowed previously stored automatic-AI
+        // settings to survive the new cost-safe defaults. Reset those paid
+        // background paths once on upgrade; users can deliberately re-enable
+        // individual features afterward. Local inline detection remains on.
+        if defaults.integer(forKey: Keys.automaticAICostSafetyVersion) < 1 {
+            defaults.set(false, forKey: Keys.passiveEnabled)
+            defaults.set(true, forKey: Keys.inlineLocalOnly)
+            defaults.set(false, forKey: Keys.inlineIncludeLLM)
+            defaults.set(false, forKey: Keys.inlineFallbackPassive)
+            defaults.set(false, forKey: Keys.webInlineEnabled)
+            defaults.set(1, forKey: Keys.automaticAICostSafetyVersion)
+        }
+
         let providerRaw = defaults.string(forKey: Keys.provider) ?? ProviderKind.openai.rawValue
         let resolvedProvider = ProviderKind(rawValue: providerRaw) ?? .openai
         self.provider = resolvedProvider

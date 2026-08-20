@@ -82,6 +82,12 @@ cd BrowserExtension/test/fixtures && python3 -m http.server   # then visit local
 Type/edit, wait ~1.2s, hover/click an underline, Apply one and continue. Verify
 the password/search/email/readonly/code blocks never get underlines.
 
+Run the upgrade/default migration regression test with:
+
+```bash
+node test/settingsMigration.test.js
+```
+
 ## What works best (honest)
 
 - **Good:** plain `textarea` and text `input`, and simple `contenteditable`
@@ -96,6 +102,9 @@ the password/search/email/readonly/code blocks never get underlines.
 
 - **Off by default**; per-site allowlist/blocklist. Provider-backed checking is a
   second, separate opt-in and is rate-limited to one request per 15 seconds.
+- Upgrading to extension 0.1.1 resets the old paid native-bridge default once.
+  Local checks remain available; provider calls can be explicitly re-enabled in
+  the extension options afterward.
 - The default detector runs entirely in the page — **no network, no API key, no
   logging or storage of your text**.
 - Model output from the provider/native bridge is mapped by

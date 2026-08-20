@@ -1,6 +1,8 @@
 // Bean options page logic. Reads/writes the small local settings the content
 // script uses, renders a status summary, and tests the native bridge. Stores no
 // text and shows no user content.
+const SETTINGS_SCHEMA_VERSION = 2;
+
 function parseList(text) {
   return text.split(/\s+/).map((s) => s.trim()).filter(Boolean);
 }
@@ -12,7 +14,7 @@ function setStatusCell(id, text, cls) {
 }
 
 function renderStatus() {
-  chrome.storage.local.get(["enabled", "allowlist", "blocklist", "useBridge", "localFallback"], (s) => {
+  chrome.storage.local.get(["enabled", "allowlist", "blocklist", "useBridge", "localFallback", "settingsSchemaVersion"], (s) => {
     setStatusCell("s-enabled", s.enabled ? "On" : "Off", s.enabled ? "ok" : "off");
     const allow = s.allowlist || [], block = s.blocklist || [];
     const siteText = block.length || allow.length
@@ -24,11 +26,11 @@ function renderStatus() {
 }
 
 function load() {
-  chrome.storage.local.get(["enabled", "allowlist", "blocklist", "useBridge", "localFallback"], (s) => {
+  chrome.storage.local.get(["enabled", "allowlist", "blocklist", "useBridge", "localFallback", "settingsSchemaVersion"], (s) => {
     document.getElementById("enabled").checked = !!s.enabled;
     document.getElementById("allowlist").value = (s.allowlist || []).join("\n");
     document.getElementById("blocklist").value = (s.blocklist || []).join("\n");
-    document.getElementById("useBridge").checked = !!s.useBridge;
+    document.getElementById("useBridge").checked = s.settingsSchemaVersion >= SETTINGS_SCHEMA_VERSION && !!s.useBridge;
     document.getElementById("localFallback").checked = s.localFallback !== false;
     renderStatus();
   });
@@ -40,7 +42,8 @@ function save() {
     allowlist: parseList(document.getElementById("allowlist").value),
     blocklist: parseList(document.getElementById("blocklist").value),
     useBridge: document.getElementById("useBridge").checked,
-    localFallback: document.getElementById("localFallback").checked
+    localFallback: document.getElementById("localFallback").checked,
+    settingsSchemaVersion: SETTINGS_SCHEMA_VERSION
   };
   chrome.storage.local.set(data, () => {
     const status = document.getElementById("status");

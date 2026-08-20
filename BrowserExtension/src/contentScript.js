@@ -10,6 +10,7 @@
 (function () {
   const DEBOUNCE_MS = 1200;
   const BRIDGE_MIN_INTERVAL_MS = 15000;
+  const SETTINGS_SCHEMA_VERSION = 2;
   const state = { active: null, entries: [], selectedId: null, fingerprint: 0, shownFingerprint: 0,
                   ignored: new Set(), reqGen: 0, groups: [], selectedGroupId: null,
                   correctedFps: new Set(), fixingGroup: false,
@@ -25,11 +26,13 @@
     return state.allowlist.length === 0 || state.allowlist.includes(host());
   }
   function loadSettings(cb) {
-    chrome.storage.local.get(["enabled", "allowlist", "blocklist", "useBridge", "localFallback"], (s) => {
+    chrome.storage.local.get(["enabled", "allowlist", "blocklist", "useBridge", "localFallback", "settingsSchemaVersion"], (s) => {
       state.enabled = !!s.enabled;
       state.allowlist = s.allowlist || [];
       state.blocklist = s.blocklist || [];
-      state.useBridge = !!s.useBridge;               // paid provider path: explicit opt-in
+      // Requiring the current schema makes an old persisted `useBridge: true`
+      // harmless even if this content script starts before migration completes.
+      state.useBridge = s.settingsSchemaVersion >= SETTINGS_SCHEMA_VERSION && !!s.useBridge;
       state.localFallback = s.localFallback !== false; // default on
       cb && cb();
     });

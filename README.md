@@ -441,6 +441,9 @@ Menu → **Settings…**
 - **Usage & Cost** shows whether typing-pause features can call the provider and
   provides one-click **Disable automatic AI checks**. Explicit shortcuts and the
   Bean Bubble still work; native inline checks continue locally without tokens.
+- On the first launch after upgrading to the cost-safe settings, Bean disables
+  previously stored paid typing-pause paths once. Each provider-backed feature
+  can be deliberately re-enabled later.
 
 ## How it works
 

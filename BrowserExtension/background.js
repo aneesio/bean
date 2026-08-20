@@ -4,14 +4,23 @@
 //
 // Stores no text. Forwards request text to the local Bean host only.
 const HOST = "com.bean.nativehost";
+const SETTINGS_SCHEMA_VERSION = 2;
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(["enabled"], (s) => {
+  chrome.storage.local.get(["enabled", "settingsSchemaVersion"], (s) => {
+    const update = {};
     if (s.enabled === undefined) {
       // Provider-backed checks are opt-in separately because they can create an
       // API call after each typing pause. The offline detector remains available.
-      chrome.storage.local.set({ enabled: false, allowlist: [], blocklist: [], useBridge: false, localFallback: true });
+      Object.assign(update, { enabled: false, allowlist: [], blocklist: [], localFallback: true });
     }
+    // Old extension versions defaulted the paid native bridge on. Disable it
+    // once on upgrade; a later explicit opt-in is preserved by this version key.
+    if ((s.settingsSchemaVersion || 0) < SETTINGS_SCHEMA_VERSION) {
+      update.useBridge = false;
+      update.settingsSchemaVersion = SETTINGS_SCHEMA_VERSION;
+    }
+    if (Object.keys(update).length) chrome.storage.local.set(update);
   });
 });
 
