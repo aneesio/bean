@@ -38,6 +38,9 @@ struct LLMRequest {
     let model: String
     let apiKey: String
     let timeout: TimeInterval
+    /// Hard ceiling for generated tokens. Keeping this request-specific avoids a
+    /// runaway explanatory response and materially limits output-token spend.
+    let maxOutputTokens: Int
 }
 
 // Clean abstraction over a chat/completions-style provider. New providers

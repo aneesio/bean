@@ -175,7 +175,8 @@ final class TextActionCoordinator {
 
         statusHUD.show(.progress, action == .proofread ? "Fixing…" : "Rewriting…")
 
-        let personalization = userContent.personalization(action: action, context: job.context, explicitProfile: explicitProfile)
+        let personalization = userContent.personalization(action: action, context: job.context,
+                                                          explicitProfile: explicitProfile, sourceText: job.core)
 
         let raw: String
         do {
@@ -192,7 +193,7 @@ final class TextActionCoordinator {
             endSession(restore: true, .error, "Could not transform text: \(error.localizedDescription)"); return
         }
 
-        let outCore = TextNormalizer.stripArtifacts(raw, originalCore: job.core)
+        let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: job.core)
 
         if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
             Log.event("validation: blocked (\(reason))")
@@ -261,7 +262,8 @@ final class TextActionCoordinator {
         Task { [weak self] in
             guard let self else { return }
             defer { model.isRunning = false }
-            let personalization = self.userContent.personalization(action: action, context: job.context, explicitProfile: explicitProfile)
+            let personalization = self.userContent.personalization(action: action, context: job.context,
+                                                                   explicitProfile: explicitProfile, sourceText: job.core)
             do {
                 let raw = try await self.transformer.transform(
                     text: job.core, action: action, context: job.context,
@@ -270,7 +272,7 @@ final class TextActionCoordinator {
                     provider: self.settings.provider, model: self.settings.model,
                     apiKey: self.settings.apiKey, timeout: self.settings.timeoutSeconds
                 )
-                let outCore = TextNormalizer.stripArtifacts(raw, originalCore: job.core)
+                let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: job.core)
                 if case .suspicious = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
                     model.errorMessage = "That result looked unsafe — try again."
                     return

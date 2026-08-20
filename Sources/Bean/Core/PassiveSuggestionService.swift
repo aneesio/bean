@@ -56,7 +56,7 @@ final class PassiveSuggestionService {
         guard forced || settings.passiveActive else { reason = "passiveOff"; return false }
         guard !settings.apiKey.isEmpty else { reason = "noKey"; return false }
         guard !field.isSecure else { reason = "secureField"; return false }
-        guard field.isTextLike, let value = field.value else { reason = "cannotReadText"; return false }
+        guard field.acceptsTextInput, let value = field.value else { reason = "cannotReadText"; return false }
         guard categoryAllowed(field: field) else { reason = "appDisabled"; return false }
 
         let (leading, core, trailing) = TextNormalizer.split(value)
@@ -66,13 +66,27 @@ final class PassiveSuggestionService {
             reason = "cleanWord"; return false
         }
 
+        // This setting existed in the UI but was not previously enforced, so a
+        // clean field still generated a paid request after every pause. Use the
+        // offline detector as the preflight signal when the cost-saving gate is on.
+        if settings.passiveOnlyWhenLikely {
+            var local = IssueDetector()
+            local.maxIssues = 1
+            guard !local.localIssues(in: core, dictionary: userContent.dictionary).isEmpty else {
+                reason = "noLocalSignal"; return false
+            }
+        }
+
         let fp = fingerprint(value)
         if fp == lastShownFingerprint { reason = "unchanged"; return false }
         if ignoredFingerprints.contains(fp) { reason = "ignored"; return false }
-        if let last = lastCallTime, Date().timeIntervalSince(last) < 8 { reason = "rateLimited"; return false }
+        if let last = lastCallTime, Date().timeIntervalSince(last) < EngineConfig.automaticLLMCooldown {
+            reason = "rateLimited"; return false
+        }
         lastCallTime = Date()
 
-        let personalization = userContent.personalization(action: .proofread, context: context, explicitProfile: nil)
+        let personalization = userContent.personalization(action: .proofread, context: context,
+                                                          explicitProfile: nil, sourceText: core)
         let raw: String
         do {
             raw = try await transformer.transform(
@@ -87,7 +101,7 @@ final class PassiveSuggestionService {
               let nowValue = AccessibilityService.value(of: field.element),
               fingerprint(nowValue) == fp else { reason = "staleDiscarded"; return false }
 
-        let outCore = TextNormalizer.stripArtifacts(raw, originalCore: core)
+        let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: core)
         if case .suspicious(let r) = OutputSafetyValidator.validate(input: core, output: outCore, action: .proofread) {
             reason = r; return false
         }
@@ -150,14 +164,15 @@ final class PassiveSuggestionService {
         Task { [weak self] in
             guard let self else { return }
             defer { model.isRunning = false }
-            let personalization = self.userContent.personalization(action: .proofread, context: session.context, explicitProfile: nil)
+            let personalization = self.userContent.personalization(action: .proofread, context: session.context,
+                                                                   explicitProfile: nil, sourceText: session.sourceCore)
             do {
                 let raw = try await self.transformer.transform(
                     text: session.sourceCore, action: .proofread, context: session.context,
                     personalization: personalization.systemBlock, extraContextLines: personalization.contextLines,
                     provider: self.settings.provider, model: self.settings.model,
                     apiKey: self.settings.apiKey, timeout: self.settings.timeoutSeconds)
-                let outCore = TextNormalizer.stripArtifacts(raw, originalCore: session.sourceCore)
+                let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: session.sourceCore)
                 if case .suspicious = OutputSafetyValidator.validate(input: session.sourceCore, output: outCore, action: .proofread) {
                     model.errorMessage = "That result looked unsafe — try again."; return
                 }
@@ -196,7 +211,8 @@ final class PassiveSuggestionService {
 
         if AccessibilityService.isValueSettable(element), AccessibilityService.setValue(corrected, on: element) {
             await Task.pause(Timing.afterActivate)
-            if let after = AccessibilityService.value(of: element), after.contains(trimmed) { return .replacedConfirmed }
+            if let after = AccessibilityService.value(of: element),
+               after.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed { return .replacedConfirmed }
         }
 
         let saved = ClipboardService.snapshot()
@@ -209,7 +225,7 @@ final class PassiveSuggestionService {
 
         let result: TextSelectionService.ReplacementResult
         if let after = AccessibilityService.value(of: element) {
-            if after.contains(trimmed) { result = .replacedConfirmed }
+            if after.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed { result = .replacedConfirmed }
             else if after == original { result = .copiedToClipboardFallback }
             else { result = .replacementSentUnconfirmed }
         } else { result = .replacementSentUnconfirmed }

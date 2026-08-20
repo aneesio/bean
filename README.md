@@ -137,9 +137,10 @@ highlighting and **never** auto-replaces.
   (chat / mail+browser on; code / search off), "only when changes are likely",
   "require preview before apply" (on → the popover offers Preview/Ignore, not
   Apply), and **Pause for 1 hour**.
-- **Conservative gating:** requires Accessibility, an editable non-secure field,
-  an allowed app category, and length within bounds. **Never** runs in
-  password/secure fields. Debounced, rate-limited (≤1 call/8s), and **stale-safe**:
+- **Conservative gating:** requires Accessibility, an enabled, writable,
+  semantically text-role field (a writable AX value alone is not enough), an
+  allowed app category, and length within bounds. **Never** runs in
+  password/secure fields. Debounced, rate-limited (≤1 call/20s), and **stale-safe**:
   if the field text changed since the suggestion, Apply refuses ("Text changed.
   Run Bean again."). **Ignore** suppresses that exact text until it changes.
 - **Privacy:** only in-memory hashes (fingerprints) are kept to detect changes —
@@ -219,7 +220,7 @@ web `input` / `textarea` / `contenteditable` fields, with the same UX as the app
 (underline → hover/click → anchored card → Apply continues to the next).
 Password/search/code fields and Google Docs are always skipped.
 
-**Native Messaging bridge (implemented).** With the bridge installed, the
+**Native Messaging bridge (implemented, provider checks off by default).** With the bridge installed, the
 extension asks the **Bean Mac app** for suggestions — so it uses your configured
 provider, API key (Keychain), prompt safety, and personal dictionary instead of
 the tiny offline detector. The "host" is the Bean app binary itself run in a
@@ -301,7 +302,7 @@ explicitly user-created. Edit in **Settings**:
   product vocabulary (Bean never reads your apps/pages). Enabled cards are added
   to prompts as a clearly-labeled *inert background* section (terminology/tone
   only — never obeyed as instructions, never inserted as facts), within a
-  4,000-character budget; oversized cards are skipped rather than cut mid-word.
+  1,500-character budget; oversized cards are skipped rather than cut mid-word.
 - **Personal Dictionary** — terms Bean preserves exactly instead of "correcting"
   (product names, acronyms). Add, import (newline-separated), or export.
 - **App Defaults** — default style per app category (chat → Slack Casual, mail →
@@ -434,9 +435,12 @@ Menu → **Settings…**
 
 - Provider: **OpenAI** or **Anthropic**
 - API key (stored in **Keychain**, never in UserDefaults)
-- Model (defaults: `gpt-4o-mini`, `claude-3-5-haiku-latest`)
+- Model (defaults: `gpt-4.1-nano`, `claude-haiku-4-5`)
 - Request timeout (default 30s)
 - **Test connection** button + live permission status
+- **Usage & Cost** shows whether typing-pause features can call the provider and
+  provides one-click **Disable automatic AI checks**. Explicit shortcuts and the
+  Bean Bubble still work; native inline checks continue locally without tokens.
 
 ## How it works
 
@@ -470,8 +474,9 @@ to french: hello` gets *corrected* (`Translate this to French: Hello`), not
 executed. No window titles or surrounding content are sent. (A `lightClarity`
 mode exists internally for later; it is not wired to any UI.)
 
-**Post-process** — strips accidental wrapping quotes / "Corrected text:" labels
-the model sometimes adds (only when the original didn't have them). If the
+**Post-process** — extracts only the model's `<bean_output>` block and strips
+accidental wrapping quotes, labels, invisible characters, and recognizable model
+status footers that were not in the source. If the
 corrected core is identical to the original, Bean shows "No changes needed" and
 doesn't touch the field.
 

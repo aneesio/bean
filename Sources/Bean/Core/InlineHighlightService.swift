@@ -65,7 +65,7 @@ final class InlineHighlightService {
             return .degraded(mode: .appAdapter, reason: InlineCoverageReason.electronEditorRequiresAdapter)
         }
 
-        guard field.isTextLike, let value = field.value, !value.isEmpty else {
+        guard field.acceptsTextInput, let value = field.value, !value.isEmpty else {
             return .unsupported(reason: InlineCoverageReason.richTextUnsupported)
         }
         guard value.count <= 1500 else { return .unsupported(reason: "textTooLong") }
@@ -96,17 +96,23 @@ final class InlineHighlightService {
         guard let value = field.value, !value.isEmpty else { reason = "cannotReadText"; return false }
         let fp = fingerprint(value)
         if fp == lastFingerprint { reason = "unchanged"; return false }
-        if let last = lastCallTime, Date().timeIntervalSince(last) < 8 { reason = "rateLimited"; return false }
-        lastCallTime = Date()
 
         var issues = detector.localIssues(in: value, dictionary: userContent.dictionary)
         var llmCount = 0
-        if !settings.inlineLocalOnly, settings.inlineIncludeLLM, !settings.apiKey.isEmpty {
+        let wantsLLM = issues.count < settings.inlineMaxIssues
+            && !settings.inlineLocalOnly && settings.inlineIncludeLLM && !settings.apiKey.isEmpty
+        let llmCooldownElapsed = lastCallTime.map {
+            Date().timeIntervalSince($0) >= EngineConfig.automaticLLMCooldown
+        } ?? true
+        if wantsLLM, llmCooldownElapsed {
+            lastCallTime = Date()
             let llm = await detector.llmIssues(in: value, context: context, dictionary: userContent.dictionary,
                                                provider: settings.provider, model: settings.model,
                                                apiKey: settings.apiKey, timeout: settings.timeoutSeconds)
             llmCount = llm.count
             issues += llm
+        } else if wantsLLM, !llmCooldownElapsed, issues.isEmpty {
+            reason = "rateLimited"; return false
         }
 
         guard isCurrent(), let nowValue = AccessibilityService.value(of: field.element), fingerprint(nowValue) == fp else {

@@ -15,14 +15,25 @@ struct OpenAIProvider: LLMProvider {
 
         // Trusted instructions go in the system message; the user's (untrusted,
         // delimited) content goes in the user message. Never merge them.
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": request.model,
-            "temperature": 0,
             "messages": [
                 ["role": "system", "content": request.systemPrompt],
                 ["role": "user", "content": request.userText]
             ]
         ]
+        if Self.usesModernCompletionLimit(request.model) {
+            body["max_completion_tokens"] = request.maxOutputTokens
+            // GPT-5 family models reject arbitrary temperature values. Minimal
+            // reasoning and low verbosity fit Bean's short transformation task.
+            if request.model.lowercased().hasPrefix("gpt-5") {
+                body["reasoning_effort"] = "minimal"
+                body["verbosity"] = "low"
+            }
+        } else {
+            body["max_tokens"] = request.maxOutputTokens
+            body["temperature"] = 0
+        }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let session = makeSession(timeout: request.timeout)
@@ -65,5 +76,11 @@ struct OpenAIProvider: LLMProvider {
             return message
         }
         return String(data: data, encoding: .utf8) ?? "Unknown error"
+    }
+
+    private static func usesModernCompletionLimit(_ model: String) -> Bool {
+        let lower = model.lowercased()
+        return lower.hasPrefix("gpt-5")
+            || lower.hasPrefix("o1") || lower.hasPrefix("o3") || lower.hasPrefix("o4")
     }
 }

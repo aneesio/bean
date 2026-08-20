@@ -21,7 +21,7 @@ struct AnthropicProvider: LLMProvider {
         // user's text are not treated as commands.
         let body: [String: Any] = [
             "model": request.model,
-            "max_tokens": 4096,
+            "max_tokens": request.maxOutputTokens,
             "temperature": 0,
             "system": request.systemPrompt,
             "messages": [

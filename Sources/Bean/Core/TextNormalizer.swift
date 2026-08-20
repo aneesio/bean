@@ -39,7 +39,21 @@ enum TextNormalizer {
     // Labels the model occasionally prepends. Compared case-insensitively.
     private static let labelPrefixes = [
         "corrected text:", "corrected:", "here is the corrected text:",
-        "here's the corrected text:", "correction:"
+        "here's the corrected text:", "rewritten text:", "transformed text:",
+        "here is the rewritten text:", "here's the rewritten text:", "correction:"
+    ]
+
+    private static let outputOpenTag = "<bean_output>"
+    private static let outputCloseTag = "</bean_output>"
+
+    // Common model status notes. These are removed only when they appear as a
+    // newly-added final line/paragraph, never when the user's source ended with
+    // the same words.
+    private static let commentaryPrefixes = [
+        "all looked good", "everything looks good", "looks good", "this looks good",
+        "the text looks good", "no changes needed", "no corrections needed",
+        "no edits needed", "i made no changes", "i didn't make any changes",
+        "the original text is already", "your text is already", "the text was already"
     ]
 
     /// Conservatively strips accidental wrapping quotes and leading labels the
@@ -47,6 +61,13 @@ enum TextNormalizer {
     /// never remove legitimate quotes/labels that are part of the user's text.
     static func stripArtifacts(_ output: String, originalCore: String) -> String {
         var result = output
+
+        // 0. Prefer the explicit response envelope. Any analysis or status text
+        // outside it is discarded. An incomplete/malformed envelope is left in
+        // place so OutputSafetyValidator can block it instead of guessing.
+        if let enclosed = extractOutputEnvelope(from: result, originalCore: originalCore) {
+            result = enclosed
+        }
 
         // 1. Leading label like "Corrected text:" (only if the original didn't
         //    start with that label).
@@ -72,6 +93,61 @@ enum TextNormalizer {
             }
         }
 
+        result = stripTrailingCommentary(from: result, originalCore: originalCore)
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Full provider-output cleanup used by every desktop/web-host transform.
+    /// ParagraphSanitizer handles code fences, wrapping quotes, and zero-width
+    /// artifacts; the logic above then handles Bean's envelope and model prose.
+    static func sanitizeModelOutput(_ output: String, originalCore: String) -> String {
+        let cleaned = ParagraphSanitizer.sanitize(output).text
+        return stripArtifacts(cleaned, originalCore: originalCore)
+    }
+
+    private static func extractOutputEnvelope(from text: String, originalCore: String) -> String? {
+        let sourceTagCount = occurrenceCount(of: outputOpenTag, in: originalCore)
+        let outputTagCount = occurrenceCount(of: outputOpenTag, in: text)
+        // If the source itself contains this literal tag and the model did not
+        // add an outer one, it is source content—not Bean's response envelope.
+        guard sourceTagCount == 0 || outputTagCount > sourceTagCount,
+              let open = text.range(of: outputOpenTag, options: [.caseInsensitive]),
+              let close = text.range(of: outputCloseTag, options: [.caseInsensitive, .backwards]),
+              open.upperBound <= close.lowerBound else { return nil }
+        return String(text[open.upperBound..<close.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func occurrenceCount(of needle: String, in text: String) -> Int {
+        var count = 0
+        var start = text.startIndex
+        while start < text.endIndex,
+              let range = text.range(of: needle, options: [.caseInsensitive],
+                                     range: start..<text.endIndex) {
+            count += 1
+            start = range.upperBound
+        }
+        return count
+    }
+
+    private static func stripTrailingCommentary(from text: String, originalCore: String) -> String {
+        let originalLower = originalCore.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // A footer is only considered commentary when separated from the result
+        // by a line break. This avoids deleting a legitimate sentence in prose.
+        while let newline = result.lastIndex(of: "\n") {
+            let footer = String(result[result.index(after: newline)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let footerLower = footer.lowercased()
+            guard isCommentary(footerLower), !originalLower.hasSuffix(footerLower) else { break }
+            result = String(result[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         return result
+    }
+
+    private static func isCommentary(_ lower: String) -> Bool {
+        let normalized = lower.trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
+        return commentaryPrefixes.contains { normalized.hasPrefix($0) }
     }
 }

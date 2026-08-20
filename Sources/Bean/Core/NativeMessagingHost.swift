@@ -152,7 +152,7 @@ enum NativeMessagingHost {
         do {
             raw = try await service.transform(
                 text: text, action: .proofread, context: context,
-                personalization: nil, extraContextLines: HostConfig.dictionaryPreservationLines,
+                personalization: nil, extraContextLines: HostConfig.dictionaryPreservationLines(for: text),
                 provider: HostConfig.provider, model: HostConfig.model,
                 apiKey: HostConfig.apiKey, timeout: HostConfig.timeout
             )
@@ -160,16 +160,18 @@ enum NativeMessagingHost {
             return encode(HostResponse.error(id: request.id, code: "providerError", message: "Couldn't reach the provider."))
         }
 
-        // Last-line safety: reject translations / answers / leaked prompts.
-        if case .suspicious = OutputSafetyValidator.validate(input: text, output: raw, action: .proofread) {
+        let corrected = TextNormalizer.sanitizeModelOutput(raw, originalCore: text)
+
+        // Last-line safety runs on the exact text that would be returned, after
+        // harmless provider wrappers/commentary have been removed.
+        if case .suspicious = OutputSafetyValidator.validate(input: text, output: corrected, action: .proofread) {
             return encode(HostResponse.error(id: request.id, code: "unsafeOutput", message: "The correction looked unsafe."))
         }
 
-        let cleaned = ParagraphSanitizer.sanitize(raw)
-        guard !cleaned.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return encode(HostResponse.error(id: request.id, code: "unsafeOutput", message: "The correction was empty."))
         }
-        return encode(HostResponse(id: request.id, ok: true, text: cleaned.text))
+        return encode(HostResponse(id: request.id, ok: true, text: corrected))
     }
 
     private static func encode(_ response: HostResponse) -> Data {
@@ -185,7 +187,7 @@ private enum HostConfig {
     static var provider: ProviderKind {
         ProviderKind(rawValue: defaults.string(forKey: "provider") ?? "") ?? .openai
     }
-    static var model: String { defaults.string(forKey: "model") ?? provider.defaultModel }
+    static var model: String { provider.migratedModel(defaults.string(forKey: "model")) }
     static var apiKey: String { KeychainService.get(account: provider.keychainAccount) ?? "" }
     static var timeout: TimeInterval { let t = defaults.double(forKey: "timeoutSeconds"); return t > 0 ? t : 30 }
     static var webInlineEnabled: Bool { defaults.bool(forKey: "webInlineEnabled") }
@@ -202,10 +204,13 @@ private enum HostConfig {
 
     /// A single trusted <context> line asking the proofread to preserve the
     /// user's dictionary terms (preserve-only; never inserted). Capped.
-    static var dictionaryPreservationLines: [String] {
-        let terms = dictionary
+    static func dictionaryPreservationLines(for text: String) -> [String] {
+        let terms = dictionary.filter { term in
+            let options: String.CompareOptions = term.caseSensitive ? [] : [.caseInsensitive]
+            return text.range(of: term.term, options: options) != nil
+        }
         guard !terms.isEmpty else { return [] }
-        let list = terms.prefix(50)
+        let list = terms.prefix(30)
             .map { $0.caseSensitive ? "\"\($0.term)\" (keep exact casing)" : "\"\($0.term)\"" }
             .joined(separator: ", ")
         return ["Preserve these user terms exactly; do not 'correct' them: \(list)."]

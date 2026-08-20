@@ -100,6 +100,7 @@ struct SettingsView: View {
                 ProviderSetupSection(settings: settings, compact: true)
                 timeoutRow
             }
+            Section("Usage & Cost") { usageCostSection }
         case .shortcuts:
             Section("Shortcuts") { shortcutSection }
         case .style:
@@ -180,6 +181,22 @@ struct SettingsView: View {
         }
     }
 
+    private var usageCostSection: some View {
+        Group {
+            LabeledContent("Automatic provider checks") {
+                StatusPill(text: settings.automaticAIChecksEnabled ? "On" : "Off",
+                           kind: settings.automaticAIChecksEnabled ? .warning : .success,
+                           showsIcon: false)
+            }
+            Text("Passive Suggestions, provider-backed Inline Highlights, and Web Inline Support can call the API after typing pauses. Manual shortcuts and the Bean Bubble call it only when you choose an action.")
+                .font(.caption).foregroundColor(.secondary)
+            Button("Disable automatic AI checks") { settings.disableAutomaticAIChecks() }
+                .disabled(!settings.automaticAIChecksEnabled)
+            Text("This keeps explicit actions available and leaves native inline checking in local-only mode. For lower per-token cost, OpenAI's gpt-4.1-nano is Bean's default OpenAI model; switching providers requires an OpenAI API key.")
+                .font(.caption2).foregroundColor(.secondary)
+        }
+    }
+
     // MARK: - Shortcut
 
     private var shortcutSection: some View {
@@ -257,7 +274,7 @@ struct SettingsView: View {
     private var passiveSection: some View {
         Group {
             Toggle("Enable Passive Suggestions", isOn: $settings.passiveEnabled)
-            Text("Shows a small suggestion after you pause typing. It does not underline text and does not change anything until you Apply. Bean only checks the focused field, and only when Passive Suggestions is enabled.")
+            Text("Shows a small suggestion after you pause typing. It can make paid provider calls; keep it off for manual-only usage. It never changes anything until you Apply.")
                 .font(.caption).foregroundColor(.secondary)
 
             monitorStatusRow
@@ -285,7 +302,7 @@ struct SettingsView: View {
                 Toggle("Enable in mail / browser text fields", isOn: $settings.passiveInMailBrowser)
                 Toggle("Enable in code editors", isOn: $settings.passiveInCode)
                 Toggle("Enable in search / address fields", isOn: $settings.passiveInSearch)
-                Toggle("Only when changes are likely", isOn: $settings.passiveOnlyWhenLikely)
+                Toggle("Only call AI when an offline check finds a likely issue", isOn: $settings.passiveOnlyWhenLikely)
                 Toggle("Require preview before apply", isOn: $settings.passiveRequirePreview)
             }
         }
@@ -316,7 +333,7 @@ struct SettingsView: View {
                 Text("Code editors, search/address bars, and secure fields are always excluded.")
                     .font(.caption2).foregroundColor(.secondary)
                 Stepper("Max issues shown: \(settings.inlineMaxIssues)", value: $settings.inlineMaxIssues, in: 1...8)
-                Toggle("Use local checks only", isOn: $settings.inlineLocalOnly)
+                Toggle("Use local checks only (no token cost)", isOn: $settings.inlineLocalOnly)
                 Toggle("Include LLM issue suggestions", isOn: $settings.inlineIncludeLLM)
                     .disabled(settings.inlineLocalOnly)
                 Toggle("Show explanation in correction card", isOn: $settings.inlineShowExplanation)

@@ -19,8 +19,34 @@ enum ProviderKind: String, CaseIterable, Identifiable {
     /// A sensible default model for each provider.
     var defaultModel: String {
         switch self {
-        case .openai: return "gpt-4o-mini"
-        case .anthropic: return "claude-3-5-haiku-latest"
+        case .openai: return "gpt-4.1-nano"
+        case .anthropic: return "claude-haiku-4-5"
+        }
+    }
+
+    /// Replaces provider model IDs that have been retired and now fail every
+    /// request. Custom/active model IDs are left untouched.
+    func migratedModel(_ stored: String?) -> String {
+        guard let stored, !stored.isEmpty else { return defaultModel }
+        if ProviderKind.allCases.contains(where: { $0 != self && $0.ownsModelID(stored) }) {
+            return defaultModel
+        }
+        if self == .anthropic {
+            let retired = ["claude-3-5-haiku-latest", "claude-3-5-haiku-20241022", "claude-3-haiku-20240307"]
+            if retired.contains(stored) { return defaultModel }
+        }
+        return stored
+    }
+
+    fileprivate func ownsModelID(_ model: String) -> Bool {
+        let lower = model.lowercased()
+        switch self {
+        case .openai:
+            return lower.hasPrefix("gpt-") || lower.hasPrefix("chatgpt-")
+                || lower.hasPrefix("o1") || lower.hasPrefix("o3") || lower.hasPrefix("o4")
+                || lower.hasPrefix("ft:gpt-")
+        case .anthropic:
+            return lower.hasPrefix("claude-")
         }
     }
 
@@ -79,9 +105,9 @@ final class AppSettings: ObservableObject {
     @Published var provider: ProviderKind {
         didSet {
             defaults.set(provider.rawValue, forKey: Keys.provider)
-            // When the model field has never been customised for the new
-            // provider, fall back to that provider's default model.
-            if model.isEmpty {
+            // A model ID from the previous provider cannot work after a switch.
+            // Preserve unknown custom IDs, but migrate recognized provider IDs.
+            if model.isEmpty || oldValue.ownsModelID(model) {
                 model = provider.defaultModel
             }
         }
@@ -208,7 +234,7 @@ final class AppSettings: ObservableObject {
         let providerRaw = defaults.string(forKey: Keys.provider) ?? ProviderKind.openai.rawValue
         let resolvedProvider = ProviderKind(rawValue: providerRaw) ?? .openai
         self.provider = resolvedProvider
-        self.model = defaults.string(forKey: Keys.model) ?? resolvedProvider.defaultModel
+        self.model = resolvedProvider.migratedModel(defaults.string(forKey: Keys.model))
 
         let storedTimeout = defaults.double(forKey: Keys.timeout)
         self.timeoutSeconds = storedTimeout > 0 ? storedTimeout : 30
@@ -240,10 +266,10 @@ final class AppSettings: ObservableObject {
         // Inline Highlights — off by default.
         self.inlineHighlightsEnabled = defaults.bool(forKey: Keys.inlineEnabled)
         let im = defaults.integer(forKey: Keys.inlineMaxIssues); self.inlineMaxIssues = im > 0 ? im : 5
-        self.inlineLocalOnly = defaults.bool(forKey: Keys.inlineLocalOnly) // default false
-        self.inlineIncludeLLM = defaults.object(forKey: Keys.inlineIncludeLLM) == nil ? true : defaults.bool(forKey: Keys.inlineIncludeLLM)
+        self.inlineLocalOnly = defaults.object(forKey: Keys.inlineLocalOnly) == nil ? true : defaults.bool(forKey: Keys.inlineLocalOnly)
+        self.inlineIncludeLLM = defaults.bool(forKey: Keys.inlineIncludeLLM) // default false
         self.inlineShowExplanation = defaults.object(forKey: Keys.inlineShowExplanation) == nil ? true : defaults.bool(forKey: Keys.inlineShowExplanation)
-        self.inlineFallbackPassive = defaults.object(forKey: Keys.inlineFallbackPassive) == nil ? true : defaults.bool(forKey: Keys.inlineFallbackPassive)
+        self.inlineFallbackPassive = defaults.bool(forKey: Keys.inlineFallbackPassive) // default false
 
         // Bean Bubble — off by default; sensible defaults otherwise.
         self.bubbleEnabled = defaults.bool(forKey: Keys.bubbleEnabled)
@@ -296,4 +322,22 @@ final class AppSettings: ObservableObject {
     }
 
     var hasAPIKey: Bool { !apiKey.isEmpty }
+
+    /// True when merely pausing after typing can spend provider tokens. The Bean
+    /// Bubble and explicit shortcuts are intentionally not included.
+    var automaticAIChecksEnabled: Bool {
+        passiveEnabled
+            || (inlineHighlightsEnabled && ((!inlineLocalOnly && inlineIncludeLLM) || inlineFallbackPassive))
+            || webInlineEnabled
+    }
+
+    /// One-click cost guard. Explicit shortcuts/actions keep using the provider;
+    /// native inline checks remain available through the offline local detector.
+    func disableAutomaticAIChecks() {
+        passiveEnabled = false
+        inlineLocalOnly = true
+        inlineIncludeLLM = false
+        inlineFallbackPassive = false
+        webInlineEnabled = false
+    }
 }

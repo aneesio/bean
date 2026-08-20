@@ -24,11 +24,14 @@ enum OutputSafetyValidator {
         guard !outText.isEmpty else { return .suspicious(reason: "empty") }
 
         // Applies to every action: leaked prompt/wrapper labels.
-        if startsWithLabel(outText) {
+        if startsWithLabel(outText), !startsWithLabel(inText) {
             return .suspicious(reason: "unsafeWrapper")
         }
-        if leaksPrompt(outText) {
+        if leaksPrompt(outText, comparedTo: inText) {
             return .suspicious(reason: "leakedPrompt")
+        }
+        if addsMetaCommentary(outText, comparedTo: inText) {
+            return .suspicious(reason: "modelCommentary")
         }
 
         // Script flip: Latin in, mostly non-Latin out (e.g. translated). Applies
@@ -107,11 +110,25 @@ enum OutputSafetyValidator {
     // Phrases that suggest the model echoed the prompt/system framing.
     private static let promptLeakMarkers = [
         "<text_to_correct>", "<provided_text>", "<context>", "system:",
-        "your task:", "as an ai", "i cannot ", "i can't fulfill"
+        "<bean_output>", "</bean_output>", "your task:", "as an ai",
+        "i cannot ", "i can't fulfill"
     ]
 
-    private static func leaksPrompt(_ text: String) -> Bool {
+    private static func leaksPrompt(_ text: String, comparedTo input: String) -> Bool {
         let lower = text.lowercased()
-        return promptLeakMarkers.contains { lower.contains($0) }
+        let inputLower = input.lowercased()
+        return promptLeakMarkers.contains { lower.contains($0) && !inputLower.contains($0) }
+    }
+
+    private static let commentaryMarkers = [
+        "all looked good", "everything looks good", "no changes needed",
+        "no corrections needed", "no edits needed", "i made no changes",
+        "the text is already correct", "the original text is already correct"
+    ]
+
+    private static func addsMetaCommentary(_ output: String, comparedTo input: String) -> Bool {
+        let lower = output.lowercased()
+        let inputLower = input.lowercased()
+        return commentaryMarkers.contains { lower.contains($0) && !inputLower.contains($0) }
     }
 }

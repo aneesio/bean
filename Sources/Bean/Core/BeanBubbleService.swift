@@ -43,7 +43,7 @@ final class BeanBubbleService {
         guard PermissionService.isAccessibilityGranted else { return hide("noPermission") }
         guard let field = AccessibilityService.focusedField() else { return hide("noField") }
         guard !field.isSecure else { return hide("secureField") }
-        guard field.isTextLike else { return hide("cannotReadText") }
+        guard field.acceptsTextInput else { return hide("notEditableText") }
         guard categoryAllowed(field) else { return hide("appDisabled") }
 
         guard let origin = bubbleOrigin(for: field) else { return hide("noBounds") }

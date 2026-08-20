@@ -14,12 +14,16 @@ CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/build"
 APP="$BUILD_DIR/Bean.app"
+SWIFTPM_ARGS=()
+if [[ "${BEAN_DISABLE_SWIFTPM_SANDBOX:-0}" == "1" ]]; then
+    SWIFTPM_ARGS+=(--disable-sandbox)
+fi
 
 echo "==> Building Bean ($CONFIG) with SwiftPM…"
 cd "$ROOT"
-swift build -c "$CONFIG"
+swift build -c "$CONFIG" "${SWIFTPM_ARGS[@]}"
 
-BIN_PATH="$(swift build -c "$CONFIG" --show-bin-path)"
+BIN_PATH="$(swift build -c "$CONFIG" "${SWIFTPM_ARGS[@]}" --show-bin-path)"
 EXE="$BIN_PATH/Bean"
 
 if [[ ! -f "$EXE" ]]; then

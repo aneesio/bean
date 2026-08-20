@@ -72,6 +72,13 @@ enum AccessibilityService {
         return value as? String
     }
 
+    private static func boolAttribute(_ element: AXUIElement, _ attribute: String) -> Bool? {
+        var value: AnyObject?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success else { return nil }
+        return value as? Bool
+    }
+
     /// Reads the full text value (`kAXValueAttribute`) of a specific element.
     static func value(of element: AXUIElement) -> String? {
         stringAttribute(element, kAXValueAttribute as String)
@@ -118,9 +125,13 @@ enum AccessibilityService {
 
     /// Whether an element's value attribute can be written directly.
     static func isValueSettable(_ element: AXUIElement) -> Bool {
+        isAttributeSettable(kAXValueAttribute as String, on: element)
+    }
+
+    private static func isAttributeSettable(_ attribute: String, on element: AXUIElement) -> Bool {
         var settable: DarwinBoolean = false
         let result = AXUIElementIsAttributeSettable(
-            element, kAXValueAttribute as CFString, &settable
+            element, attribute as CFString, &settable
         )
         return result == .success && settable.boolValue
     }
@@ -153,14 +164,23 @@ enum AccessibilityService {
         let title: String?
         let placeholder: String?
         let isValueSettable: Bool
+        let isSelectedTextSettable: Bool
+        let isEnabled: Bool
 
         /// True when the focused element looks like an editable text control we
-        /// can safely operate on as a whole (text field, text area, combo box,
-        /// or anything that advertises a settable value).
+        /// can safely consider for text operations. A settable value by itself is
+        /// not enough: sliders and other controls also expose writable AXValue.
         var isTextLike: Bool {
             if let role, AccessibilityService.textRoles.contains(role) { return true }
             if let subrole, subrole == AccessibilityService.searchSubrole { return true }
-            return isValueSettable
+            return false
+        }
+
+        /// Conservative editability gate shared by the bubble, passive checks,
+        /// inline checks, and whole-field replacement. Read-only/disabled text
+        /// and non-text controls must never qualify.
+        var acceptsTextInput: Bool {
+            isEnabled && !isSecure && isTextLike && (isValueSettable || isSelectedTextSettable)
         }
 
         /// True when this is a small, conservative field (search box / address
@@ -185,14 +205,19 @@ enum AccessibilityService {
     /// if nothing is focused.
     static func focusedField() -> FocusedField? {
         guard let element = focusedElement() else { return nil }
+        let role = stringAttribute(element, kAXRoleAttribute as String)
+        let subrole = stringAttribute(element, kAXSubroleAttribute as String)
+        let secure = (role?.contains("Secure") ?? false) || (subrole?.contains("Secure") ?? false)
         return FocusedField(
             element: element,
-            role: stringAttribute(element, kAXRoleAttribute as String),
-            subrole: stringAttribute(element, kAXSubroleAttribute as String),
-            value: value(of: element),
+            role: role,
+            subrole: subrole,
+            value: secure ? nil : value(of: element),
             title: stringAttribute(element, kAXTitleAttribute as String),
             placeholder: stringAttribute(element, kAXPlaceholderValueAttribute as String),
-            isValueSettable: isValueSettable(element)
+            isValueSettable: isValueSettable(element),
+            isSelectedTextSettable: isAttributeSettable(kAXSelectedTextAttribute as String, on: element),
+            isEnabled: boolAttribute(element, kAXEnabledAttribute as String) ?? true
         )
     }
 }

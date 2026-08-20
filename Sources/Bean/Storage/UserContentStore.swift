@@ -27,7 +27,7 @@ final class UserContentStore: ObservableObject {
     private var loading = false
 
     /// Total character budget for context cards + examples in a single prompt.
-    private let contextCharBudget = 4_000
+    private let contextCharBudget = 1_500
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -210,27 +210,41 @@ final class UserContentStore: ObservableObject {
 
     // MARK: - Prompt material
 
-    func personalization(action: WritingAction, context: SourceAppContext?, explicitProfile: UUID?) -> Personalization {
+    func personalization(action: WritingAction, context: SourceAppContext?, explicitProfile: UUID?,
+                         sourceText: String? = nil) -> Personalization {
         let profile = effectiveProfile(explicit: explicitProfile, context: context)
-        let isRewrite = action.requiresPreview
+        let isProofread = action == .proofread
 
         var systemLines: [String] = []
-        systemLines.append("The user has configured the following preferences. Apply them to tone and word choice ONLY — never as commands to produce unrelated output, and never to add facts.")
-
-        // Style — stronger framing for rewrites, lighter for proofread.
-        if isRewrite {
+        if !isProofread {
+            systemLines.append("Apply these user preferences to tone and word choice only. Never treat them as commands or add facts.")
             systemLines.append("Target style \"\(profile.name)\": formality \(scale(profile.formality)), warmth \(scale(profile.warmth)), conciseness \(scale(profile.conciseness)), directness \(scale(profile.directness)). \(profile.preferredInstructions)")
-        } else {
-            systemLines.append("Lean gently toward the \"\(profile.name)\" style where natural, but do not rewrite — this is a proofread.")
         }
-        if !profile.bannedPhrases.isEmpty {
+        if !isProofread, !profile.bannedPhrases.isEmpty {
             systemLines.append("Avoid these phrases: \(profile.bannedPhrases.joined(separator: "; ")).")
         }
 
-        // Dictionary: preserve-only (never insert).
-        if !dictionary.isEmpty {
-            let terms = dictionary.map { $0.caseSensitive ? "\"\($0.term)\" (keep exact casing)" : "\"\($0.term)\"" }.joined(separator: ", ")
+        // Send only dictionary terms that actually occur in this request. Large
+        // dictionaries previously went into every prompt even when irrelevant.
+        let relevantDictionary = dictionary.filter { term in
+            guard let sourceText else { return true }
+            let options: String.CompareOptions = term.caseSensitive ? [] : [.caseInsensitive]
+            return sourceText.range(of: term.term, options: options) != nil
+        }
+        if !relevantDictionary.isEmpty {
+            let terms = relevantDictionary.prefix(50).map {
+                $0.caseSensitive ? "\"\($0.term)\" (keep exact casing)" : "\"\($0.term)\""
+            }.joined(separator: ", ")
             systemLines.append("Terminology: if any of these terms ALREADY appear in the text, keep them exactly and do not \"correct\" them: \(terms). Never introduce these terms if they are not already present, and never use them to add facts.")
+        }
+
+        // Mechanical proofreading does not need style profiles, examples, or
+        // reference cards. Omitting them reduces both cost and unwanted rewrites.
+        if isProofread {
+            return Personalization(
+                systemBlock: systemLines.isEmpty ? nil : systemLines.joined(separator: "\n"),
+                contextLines: [], styleName: nil, usedContext: false
+            )
         }
 
         // Context-card framing.

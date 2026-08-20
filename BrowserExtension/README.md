@@ -6,9 +6,10 @@ Slack web, Notion, Jira contenteditable, etc.). The Bean Mac app handles native
 macOS fields; this extension handles the web.
 
 > Status: **working.** It uses the offline local detector out of the box, and a
-> **Native Messaging bridge** to the Bean Mac app (provider-backed suggestions)
-> once you run `../scripts/install_native_messaging_host.sh <extension-id>`
-> (see `../NativeMessaging/`). It falls back to local automatically.
+> optional **Native Messaging bridge** to the Bean Mac app (provider-backed
+> suggestions) once you run `../scripts/install_native_messaging_host.sh
+> <extension-id>` (see `../NativeMessaging/`). Provider checks are separately
+> opt-in because they can incur API charges; local checks remain the default.
 
 ## Install (Chrome / Edge / Brave, developer mode)
 
@@ -23,8 +24,9 @@ Browser Extension ▸ Reveal Extension Folder**.)
 
 ## What it does
 
-- Detects editable fields: `input` (text/email/url), `textarea`, and
-  `contenteditable`.
+- Detects editable fields: text `input`, `textarea`, and `contenteditable`.
+  Disabled/read-only controls and interactive elements such as buttons or links
+  nested inside an editor are excluded.
 - After a typing pause, underlines small issues **in the page** and shows a
   Bean-style **correction card anchored to the word** on hover/click — with
   **Apply · Ignore · Next · ✕**. Apply fixes one issue and continues to the next.
@@ -77,7 +79,7 @@ open BrowserExtension/test/fixtures/editor.html        # or:
 cd BrowserExtension/test/fixtures && python3 -m http.server   # then visit localhost:8000/editor.html
 ```
 
-Type/edit, wait ~0.7s, hover/click an underline, Apply one and continue. Verify
+Type/edit, wait ~1.2s, hover/click an underline, Apply one and continue. Verify
 the password/search/email/readonly/code blocks never get underlines.
 
 ## What works best (honest)
@@ -92,10 +94,11 @@ the password/search/email/readonly/code blocks never get underlines.
 
 ## Safety & privacy
 
-- **Off by default**; per-site allowlist/blocklist.
+- **Off by default**; per-site allowlist/blocklist. Provider-backed checking is a
+  second, separate opt-in and is rate-limited to one request per 15 seconds.
 - The default detector runs entirely in the page — **no network, no API key, no
   logging or storage of your text**.
-- Model output (when a provider/native bridge is later added) is mapped by
+- Model output from the provider/native bridge is mapped by
   **exact substring only** (model indexes are never trusted); duplicate or
   missing matches are skipped; nothing ambiguous is ever replaced.
 - **Fix Paragraph** replaces only the verified paragraph: Bean reads the live

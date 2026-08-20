@@ -28,7 +28,7 @@ function load() {
     document.getElementById("enabled").checked = !!s.enabled;
     document.getElementById("allowlist").value = (s.allowlist || []).join("\n");
     document.getElementById("blocklist").value = (s.blocklist || []).join("\n");
-    document.getElementById("useBridge").checked = s.useBridge !== false;
+    document.getElementById("useBridge").checked = !!s.useBridge;
     document.getElementById("localFallback").checked = s.localFallback !== false;
     renderStatus();
   });

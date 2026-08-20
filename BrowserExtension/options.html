@@ -54,9 +54,9 @@
 
   <div class="card">
     <strong>Bean app (Native Bridge)</strong>
-    <label class="row"><input type="checkbox" id="useBridge" /> Use the Bean app when available</label>
+    <label class="row"><input type="checkbox" id="useBridge" /> Use the Bean app/provider for deeper checks</label>
     <label class="row"><input type="checkbox" id="localFallback" /> Fall back to the offline detector if the bridge is unavailable</label>
-    <p class="muted">When connected, suggestions come from the Bean Mac app using your configured AI provider and dictionary. Bean does not store this text.</p>
+    <p class="muted">Provider checks are off by default because they can make a paid API call after typing pauses. The offline detector has no token cost. When enabled, Bean sends only the focused field text and does not store it.</p>
   </div>
 
   <div class="card">

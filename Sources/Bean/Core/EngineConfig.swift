@@ -5,6 +5,10 @@ import Foundation
 // checkbox lives in AppSettings). Timing delays live in Timing.swift; this file
 // holds the behavioural limits.
 enum EngineConfig {
+    /// Minimum gap between provider-backed checks that happen automatically
+    /// after typing. Explicit shortcut/menu actions are never rate-limited.
+    static let automaticLLMCooldown: TimeInterval = 20
+
     /// Maximum length of a focused field that Bean will auto-correct in full
     /// (when there is no selection). Longer fields ask the user to select a
     /// smaller section instead, to avoid expensive/destructive whole-document

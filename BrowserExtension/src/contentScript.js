@@ -8,11 +8,12 @@
 // optional LLM provider would send only the focused field's text, and only when
 // the user configures it — see README. The default local detector is offline.)
 (function () {
-  const DEBOUNCE_MS = 700;
+  const DEBOUNCE_MS = 1200;
+  const BRIDGE_MIN_INTERVAL_MS = 15000;
   const state = { active: null, entries: [], selectedId: null, fingerprint: 0, shownFingerprint: 0,
                   ignored: new Set(), reqGen: 0, groups: [], selectedGroupId: null,
                   correctedFps: new Set(), fixingGroup: false,
-                  enabled: false, allowlist: [], blocklist: [], useBridge: true, localFallback: true };
+                  enabled: false, allowlist: [], blocklist: [], useBridge: false, localFallback: true };
   let debounce = null, scrollThrottle = null;
   let lastBridgeAt = 0;
 
@@ -28,7 +29,7 @@
       state.enabled = !!s.enabled;
       state.allowlist = s.allowlist || [];
       state.blocklist = s.blocklist || [];
-      state.useBridge = s.useBridge !== false;       // default on
+      state.useBridge = !!s.useBridge;               // paid provider path: explicit opt-in
       state.localFallback = s.localFallback !== false; // default on
       cb && cb();
     });
@@ -48,7 +49,7 @@
     if (!state.useBridge) return Promise.resolve({ issues: null, code: "bridgeFallbackLocal" });
     const now = Date.now();
     if (now < bridgeCooldownUntil) return Promise.resolve({ issues: null, code: bridgeCooldownCode });
-    if (now - lastBridgeAt < 1500) return Promise.resolve({ issues: null, code: "bridgeRateLimited" }); // rate limit
+    if (now - lastBridgeAt < BRIDGE_MIN_INTERVAL_MS) return Promise.resolve({ issues: null, code: "bridgeRateLimited" });
     lastBridgeAt = now;
     return new Promise((resolve) => {
       let done = false;
@@ -84,7 +85,7 @@
 
   // --- Field helpers --------------------------------------------------------
   function isEditable(el) {
-    if (!el) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
     if (el.isContentEditable) return true;
     if (el.tagName === "TEXTAREA") return true;
     if (el.tagName === "INPUT") {
@@ -94,13 +95,19 @@
     return false;
   }
   function isExcluded(el) {
+    // Interactive controls nested in a contenteditable region inherit
+    // `isContentEditable`; they still are not typing surfaces.
+    if (el.closest("button, a[href], [role='button'], [role='link'], [role='checkbox'], [role='radio'], [role='switch'], [role='tab'], [role='menuitem'], [role='option']")) return true;
+    if (el.closest("[inert], [aria-disabled='true'], [aria-readonly='true']")) return true;
     // Secure / non-prose / non-editable inputs.
     if (el.tagName === "INPUT") {
       const t = (el.type || "text").toLowerCase();
       if (["password", "search", "email", "url", "tel", "number"].includes(t)) return true;
     }
-    if (el.disabled || el.readOnly || el.getAttribute("aria-readonly") === "true") return true;
+    if (el.disabled || el.readOnly) return true;
     if (el.getAttribute("contenteditable") === "false") return true;
+    const editableRoot = el.closest("[contenteditable]");
+    if (editableRoot && editableRoot.getAttribute("contenteditable") === "false") return true;
     // Hidden / zero-size.
     if (!el.offsetParent && el.tagName !== "BODY") return true;
     const rect = el.getBoundingClientRect();

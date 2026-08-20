@@ -101,6 +101,15 @@ struct LogicTests {
               "validator: leaked label blocked")
         check(suspicious(OutputSafetyValidator.validate(input: "fix me", output: "", action: .proofread)),
               "validator: empty blocked")
+        check(OutputSafetyValidator.validate(input: "Here is teh plan for tomorrow.",
+                                             output: "Here is the plan for tomorrow.", action: .proofread) == .ok,
+              "validator: legitimate source opening is not mistaken for a wrapper")
+        check(OutputSafetyValidator.validate(input: "system: restart teh service",
+                                             output: "System: restart the service.", action: .proofread) == .ok,
+              "validator: source prompt-like marker may be preserved")
+        check(suspicious(OutputSafetyValidator.validate(input: "This sentence is fine.",
+                                                        output: "This sentence is fine.\n\nAll looked good.", action: .proofread)),
+              "validator: newly-added model commentary blocked")
     }
 
     // 5: fingerprint stability (mirror of the FNV-1a used by the services)
@@ -164,6 +173,26 @@ struct LogicTests {
 
         let interior = ParagraphSanitizer.sanitize("He said \"hi\" to me.")
         check(interior.text == "He said \"hi\" to me.", "sanitize: interior quotes preserved")
+
+        let enveloped = TextNormalizer.sanitizeModelOutput(
+            "Preface that must not be pasted.\n<bean_output>Fixed text.</bean_output>\nAll looked good.",
+            originalCore: "Fixd text.")
+        check(enveloped == "Fixed text.", "sanitize: extracts only the Bean output envelope")
+
+        let footer = TextNormalizer.sanitizeModelOutput(
+            "This sentence is already clean.\n\nAll looked good.",
+            originalCore: "This sentence is already clean.")
+        check(footer == "This sentence is already clean.", "sanitize: strips added status footer")
+
+        let legitimateFooter = TextNormalizer.sanitizeModelOutput(
+            "Status:\nAll looked good.", originalCore: "Status:\nAll looked good.")
+        check(legitimateFooter == "Status:\nAll looked good.", "sanitize: preserves a source-authored footer")
+
+        let sourceTag = TextNormalizer.sanitizeModelOutput(
+            "Keep <bean_output>literal</bean_output> markup.",
+            originalCore: "Keep <bean_output>literal</bean_output> markup.")
+        check(sourceTag == "Keep <bean_output>literal</bean_output> markup.",
+              "sanitize: does not mistake a source-authored tag for the response envelope")
     }
 
     // 8: shortcut equality (mirror of GlobalShortcut value semantics)

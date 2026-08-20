@@ -224,7 +224,7 @@ struct TryBeanSection: View {
                     text: core, action: .proofread, context: context,
                     provider: provider, model: model, apiKey: key, timeout: timeout
                 )
-                let corrected = TextNormalizer.stripArtifacts(raw, originalCore: core)
+                let corrected = TextNormalizer.sanitizeModelOutput(raw, originalCore: core)
                 await MainActor.run {
                     if corrected == core {
                         status = .noChanges

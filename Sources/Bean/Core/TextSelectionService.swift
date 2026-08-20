@@ -100,7 +100,7 @@ final class TextSelectionService {
 
         if let value = field.value,
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           field.isTextLike {
+           field.acceptsTextInput {
             if value.count > EngineConfig.maxAutoFieldCharacters {
                 Log.event("Focused field exceeds length guard")
                 return .tooLong
@@ -124,7 +124,7 @@ final class TextSelectionService {
         // Only when: enabled, the focused element is clearly a text field, and
         // the app isn't a document editor where Cmd+A grabs the whole buffer.
         let cmdAAllowed = EngineConfig.allowCmdAFieldFallback
-            && field.isTextLike
+            && field.acceptsTextInput
             && !EngineConfig.isCmdAFallbackBlocked(bundleID: targetApp?.bundleIdentifier)
 
         guard cmdAAllowed else {
@@ -217,14 +217,23 @@ final class TextSelectionService {
     // MARK: - Selection replacement (verified paste)
 
     private func replaceSelection(corrected: String, trimmedCorrected: String, pending: Pending) async -> ReplacementResult {
-        guard AccessibilityService.hasFocusedElement else {
-            Log.event("replace(selection): no focused element; clipboard fallback")
+        // A preview/menu click gives Bean focus. Reactivate the original app
+        // before checking the target; checking first made preview replacements
+        // incorrectly fall back to the clipboard every time.
+        activate(pending.targetApp)
+        await Task.pause(Timing.afterActivate)
+
+        guard let current = AccessibilityService.focusedElement() else {
+            Log.event("replace(selection): no focused element after activation; clipboard fallback")
             ClipboardService.writeString(corrected)
             return .copiedToClipboardFallback
         }
-
-        activate(pending.targetApp)
-        await Task.pause(Timing.afterActivate)
+        if let target = pending.focusedElement,
+           !AccessibilityService.isSameElement(current, target) {
+            Log.event("replace(selection): target focus not restored; clipboard fallback")
+            ClipboardService.writeString(corrected)
+            return .copiedToClipboardFallback
+        }
 
         ClipboardService.writeString(corrected)
         await Task.pause(Timing.afterActivate)
@@ -239,11 +248,19 @@ final class TextSelectionService {
     // MARK: - Focused-field replacement
 
     private func replaceFocusedField(corrected: String, trimmedCorrected: String, pending: Pending) async -> ReplacementResult {
-        // Safety: make sure focus is still on the element we acquired from.
-        guard let target = pending.focusedElement,
-              let current = AccessibilityService.focusedElement(),
+        guard let target = pending.focusedElement else {
+            Log.event("replace(field): no saved target; clipboard fallback")
+            ClipboardService.writeString(corrected)
+            return .copiedToClipboardFallback
+        }
+
+        // Preview/menu UI can temporarily own focus. Restore the source app, let
+        // it reinstate its field, and only then perform the same-element guard.
+        activate(pending.targetApp)
+        await Task.pause(Timing.afterActivate)
+        guard let current = AccessibilityService.focusedElement(),
               AccessibilityService.isSameElement(current, target) else {
-            Log.event("replace(field): focus changed; clipboard fallback")
+            Log.event("replace(field): target focus not restored; clipboard fallback")
             ClipboardService.writeString(corrected)
             return .copiedToClipboardFallback
         }
@@ -258,15 +275,12 @@ final class TextSelectionService {
             return .staleCopiedToClipboard
         }
 
-        activate(pending.targetApp)
-        await Task.pause(Timing.afterActivate)
-
         // 1. Prefer a direct AX value write when the element supports it.
         if pending.valueSettable {
             if AccessibilityService.setValue(corrected, on: target) {
                 await Task.pause(Timing.afterActivate)
                 if let after = AccessibilityService.value(of: target),
-                   after.contains(trimmedCorrected) {
+                   after.trimmingCharacters(in: .whitespacesAndNewlines) == trimmedCorrected {
                     Log.event("replace(field): AX setValue confirmed")
                     // AX write didn't touch the clipboard; nothing to restore.
                     return .replacedConfirmed
@@ -329,7 +343,7 @@ final class TextSelectionService {
             Log.event("verify(field): unchanged -> clipboard fallback")
             return .copiedToClipboardFallback
         }
-        if after.contains(trimmedCorrected) {
+        if after.trimmingCharacters(in: .whitespacesAndNewlines) == trimmedCorrected {
             Log.event("verify(field): confirmed")
             return .replacedConfirmed
         }

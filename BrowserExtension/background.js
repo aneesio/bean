@@ -8,7 +8,9 @@ const HOST = "com.bean.nativehost";
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(["enabled"], (s) => {
     if (s.enabled === undefined) {
-      chrome.storage.local.set({ enabled: false, allowlist: [], blocklist: [], useBridge: true, localFallback: true });
+      // Provider-backed checks are opt-in separately because they can create an
+      // API call after each typing pause. The offline detector remains available.
+      chrome.storage.local.set({ enabled: false, allowlist: [], blocklist: [], useBridge: false, localFallback: true });
     }
   });
 });
