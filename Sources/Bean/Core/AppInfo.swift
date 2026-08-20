@@ -1,0 +1,20 @@
+import Foundation
+
+// App identity / version info, read from the bundle's Info.plist with sensible
+// fallbacks (the plist isn't present when running the raw `swift run`
+// executable, only in the assembled Bean.app).
+enum AppInfo {
+    static let name = "Bean"
+    static let tagline = "A small writing helper for your menu bar."
+    static let copyright = "© 2026 Bean"
+
+    static var version: String { string("CFBundleShortVersionString") ?? "1.1.0" }
+    static var build: String { string("CFBundleVersion") ?? "1" }
+
+    /// e.g. "Version 1.0.0 (1)"
+    static var versionDisplay: String { "Version \(version) (\(build))" }
+
+    private static func string(_ key: String) -> String? {
+        Bundle.main.infoDictionary?[key] as? String
+    }
+}

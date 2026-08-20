@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Bean extension — test fixture</title>
+  <style>
+    body { font: 15px -apple-system, system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1d1d1f; }
+    h2 { font-size: 14px; margin: 24px 0 6px; color: #555; }
+    textarea, input { width: 100%; box-sizing: border-box; font: 15px inherit; padding: 8px; border: 1px solid #ccc; border-radius: 8px; }
+    textarea { min-height: 90px; }
+    .ce { border: 1px solid #ccc; border-radius: 8px; padding: 8px; min-height: 70px; }
+    .codeish { font-family: ui-monospace, Menlo, monospace; white-space: pre; }
+    .note { color: #888; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Bean extension test fixture</h1>
+  <p class="note">Load the extension (chrome://extensions → Load unpacked → BrowserExtension), enable it in Options, then type/edit below and wait ~0.7s. Hover or click an underline to see the correction card. <strong>No real data here.</strong></p>
+
+  <h2>Textarea (supported)</h2>
+  <textarea id="ta">i has a apple and  it dont work,next we will recieve teh package tommorow.</textarea>
+
+  <h2>Text input (supported)</h2>
+  <input type="text" id="ti" value="this  is definately a calender issue" />
+
+  <h2>Contenteditable (supported)</h2>
+  <div class="ce" contenteditable="true">She dont know weather the meeting is tommorow or not.</div>
+
+  <h2>Gmail-like contenteditable — multi-block (range-mismatch regression)</h2>
+  <p class="note">Reproduces the corruption case. innerText inserts newlines between these blocks; mapping/apply must use the verified text-node range. Expected: <code>better. and keeps → better. And keeps</code> and <code>forwaforward → forward</code>, applied at the right spot (no "bettebetter", no swallowed letters).</p>
+  <div class="ce" contenteditable="true">
+    <div>Okay, let's see if it works this time around.</div>
+    <div><br></div>
+    <div>This is definitely so much better. and keeps going forwaforward the fixes. Quite impressive, actually.</div>
+  </div>
+
+  <h2>Fix Paragraph — textarea (whole-paragraph proofread in one pass)</h2>
+  <p class="note">The first line has multiple issues → a tiny Bean icon appears at the line's left. Click it → <strong>Fix Paragraph</strong> proofreads the WHOLE paragraph in one go (spelling + punctuation + capitalization + spacing), e.g. <code>okay here's the next attemp . let's see if it shows its magic.</code> → <code>Okay, here's the next attempt. Let's see if it shows its magic.</code>. No repeated passes. The single-issue last line gets <em>no</em> icon. (Needs the native bridge + Web Inline + API key for the full proofread; otherwise local fallback fixes obvious typos only.)</p>
+  <textarea id="para-ta">okay here's the next attemp . let's see if it shows its magic.
+
+this paragraph is fine.
+
+just one typo: tommorow.</textarea>
+
+  <h2>Fix Paragraph — line breaks preserved (fix first paragraph only)</h2>
+  <p class="note">Fix the first paragraph; the blank line and the second paragraph must stay exactly as-is.</p>
+  <textarea id="para-lb">okay here's the next attemp . let's see if it works.
+
+this is the next paragraf .</textarea>
+
+  <h2>Paragraph control — contenteditable blocks (icon per multi-issue block)</h2>
+  <p class="note">Each block with ≥2 issues gets its own paragraph icon; blocks group by DOM boundary (div/p), never across blocks.</p>
+  <div class="ce" contenteditable="true">
+    <div>She dont know weather the meeting is tommorow or not.</div>
+    <div><br></div>
+    <div>We will definately recieve teh package tommorow.</div>
+  </div>
+
+  <h2>Line-break safety (fixing the last word must NOT merge paragraphs)</h2>
+  <p class="note">Apply the fix on <code>recieve</code> / <code>tommorow</code> at the end of a line; the newline before the next paragraph must remain. No issue range may ever contain a newline.</p>
+  <textarea id="linebreak-ta">we will recieve the package tommorow
+the next paragraph must stay separate.</textarea>
+
+  <h2>Repeated substring (ambiguous → should be skipped, not mis-highlighted)</h2>
+  <div class="ce" contenteditable="true">better. and keeps going. better. and keeps going again.</div>
+
+  <h2>Repeated typo in textarea (ambiguous → skipped)</h2>
+  <textarea id="dup">teh cat sat on teh mat near teh door.</textarea>
+
+  <h2>Inline spans (apply only if range matches exactly)</h2>
+  <div class="ce" contenteditable="true">This has an <span style="color:#06c">forwaforward</span> inside a span.</div>
+
+  <h2>Password (must be ignored)</h2>
+  <input type="password" value="" placeholder="never read" />
+
+  <h2>Search (ignored by default)</h2>
+  <input type="search" value="best coffee beans calgary" />
+
+  <h2>Email (ignored)</h2>
+  <input type="email" value="someone@example.com" />
+
+  <h2>Read-only (ignored)</h2>
+  <textarea readonly>this is readonly and should not be checked, recieve.</textarea>
+
+  <h2>Code-like editor block (should be ignored)</h2>
+  <div class="ace_editor"><div class="ce codeish" contenteditable="true">const x = recieve(); // dont touch this</div></div>
+
+  <h2>Long text (capped / safe)</h2>
+  <textarea id="long"></textarea>
+  <script>
+    document.getElementById('long').value = ('this is a long paragraph with teh occasional typo. ').repeat(60);
+  </script>
+</body>
+</html>

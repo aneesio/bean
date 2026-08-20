@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Bean app icon — documented vector source of truth.
+
+  The actual .icns is rendered deterministically by scripts/IconGenerator.swift
+  (CoreGraphics) so it needs no external SVG rasterizer. This SVG mirrors that
+  design 1:1 at 1024×1024 for reference / hand-editing.
+
+  Design: macOS rounded-square, warm-neutral background gradient, a single
+  centered abstract coffee bean (tilted ellipse) with an S-shaped groove and a
+  soft shadow. No text, face, cup, or steam. Deliberately muted (productivity
+  utility, not a food app).
+-->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FAF8F4"/>
+      <stop offset="1" stop-color="#E7E1D6"/>
+    </linearGradient>
+    <linearGradient id="bean" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A4742"/>
+      <stop offset="1" stop-color="#2C2A26"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="-12" stdDeviation="26" flood-color="#000000" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+
+  <!-- Body: rounded square (~0.06 padding, radius ≈ 0.2237 × body width). -->
+  <rect x="61" y="61" width="902" height="902" rx="202" ry="202" fill="url(#bg)"/>
+
+  <!-- Bean: tilted ellipse with an S-groove, centered. -->
+  <g transform="translate(512 512) rotate(-30)" filter="url(#soft)">
+    <ellipse cx="0" cy="0" rx="215" ry="307" fill="url(#bean)"/>
+    <path d="M 0 129 C 108 37 -108 -37 0 -129"
+          fill="none" stroke="#F2EEE6" stroke-opacity="0.85"
+          stroke-width="22" stroke-linecap="round"/>
+  </g>
+</svg>
