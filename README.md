@@ -211,8 +211,11 @@ reveals the extension folder.
   **desktop** (Electron) falls back to the Bean Bubble / Passive Suggestions
   unless macOS exposes reliable text positions. Bean also queries Slack's
   application-specific Accessibility tree when the system-wide focus query is
-  unavailable. Explicit selected-text fixes use a source-app-confirmed paste and
-  honestly report "Replacement sent" when Slack cannot expose verification.
+  unavailable. If Slack exposes no focused element at all, two printable
+  keystrokes after a recent non-control click provide short-lived, content-free
+  composer evidence: Bean anchors its bubble near that click and can safely use
+  a guarded Cmd+A/C/V draft fallback. These unverifiable edits honestly report
+  "Replacement sent."
 - **Google Docs:** its canvas/custom editor isn't supported for inline; Bean
   degrades to the Bubble / Passive Suggestions / shortcuts rather than drawing
   fake underlines.

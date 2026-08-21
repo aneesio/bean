@@ -294,9 +294,11 @@ Enable Inline Highlights, then in TextEdit type a sentence with several issues
 | BB17 | Shortcuts intact | ⌘⇧G and ⌃⌥B | Quick Proofread and Bean menu still work | ☐ |
 | BB18 | No extra monitors | Both bubble + passive on | One shared monitor; no duplicate suggestions | ☐ |
 | BB19 | Non-text AX controls | Focus buttons, sliders, checkboxes, static/disabled text | No bubble even if the control exposes a writable AXValue | ☐ |
-| BB20 | Slack Electron editor | Focus/type in the Slack desktop composer | Bubble appears when Slack exposes a semantic text role or web editable ancestor; never on Slack buttons/links | ☐ |
+| BB20 | Slack Electron editor | Click the Slack desktop composer, type at least two characters, then pause | Bubble uses AX bounds when available; otherwise appears beside the composer click using short-lived typing evidence | ☐ |
 | BB21 | Unsupported inline → bubble | Inline on, passive fallback off; type in Slack and pause | Inline reports the Electron adapter limitation, then the bubble appears instead of leaving no UI | ☐ |
 | BB22 | Permission becomes available | Launch after rebuilding/re-grant Accessibility without toggling a Bean feature | Typing monitor starts automatically within about 3 seconds | ☐ |
+| BB23 | Slack controls stay excluded | Click a Slack button/link and do not type printable draft text | No fallback bubble appears | ☐ |
+| BB24 | Slack AX-free draft action | Click composer, type a draft, pause, then Bubble → Proofread without selecting | Guarded Cmd+A/C acquires only after typing evidence; corrected draft is pasted and HUD says Replacement sent | ☐ |
 
 ## Premium UX/UI QA
 

@@ -44,6 +44,7 @@ final class TextSelectionService {
         var fieldValueReadable: Bool   // can we read the field value to verify?
         var valueBefore: String?       // pre-change value, for verification
         var acquiredViaCmdA: Bool
+        var allowsAXFreeFullFieldPaste: Bool
     }
 
     private var pending: Pending?
@@ -76,7 +77,8 @@ final class TextSelectionService {
                 valueSettable: field?.isValueSettable ?? false,
                 fieldValueReadable: valueBeforeSelection != nil,
                 valueBefore: valueBeforeSelection,
-                acquiredViaCmdA: false
+                acquiredViaCmdA: false,
+                allowsAXFreeFullFieldPaste: false
             )
             let context = SourceAppContext.current(app: targetApp, field: field, mode: .selectedText)
             Log.event("Acquired \(context.logDescription)")
@@ -95,6 +97,10 @@ final class TextSelectionService {
 
         // ---- B. Accessibility focused-field full text ---------------------
         guard let field = AccessibilityService.focusedField() else {
+            if ElectronTextFocusEvidence.validAnchor(for: targetApp) != nil {
+                return await acquireSlackFieldWithoutAX(targetApp: targetApp,
+                                                        savedClipboard: savedClipboard)
+            }
             Log.event("No focused editable field found")
             return .noSelectionOrFocusedField
         }
@@ -116,7 +122,8 @@ final class TextSelectionService {
                 valueSettable: field.isValueSettable,
                 fieldValueReadable: true,
                 valueBefore: value,
-                acquiredViaCmdA: false
+                acquiredViaCmdA: false,
+                allowsAXFreeFullFieldPaste: false
             )
             let context = SourceAppContext.current(app: targetApp, field: field, mode: .focusedFieldFullText)
             Log.event("Acquired \(context.logDescription)")
@@ -164,10 +171,51 @@ final class TextSelectionService {
             valueSettable: field.isValueSettable,
             fieldValueReadable: false, // AX value wasn't readable
             valueBefore: nil,
-            acquiredViaCmdA: true
+            acquiredViaCmdA: true,
+            allowsAXFreeFullFieldPaste: false
         )
         let context = SourceAppContext.current(app: targetApp, field: field, mode: .focusedFieldFullText)
         Log.event("Acquired \(context.logDescription) (Cmd+A)")
+        return .acquired(text: copied, mode: .focusedFieldFullText, context: context)
+    }
+
+    /// Slack-only whole-composer acquisition when Electron exposes no AX field.
+    /// Short-lived click+typing evidence is required before this method can be
+    /// reached, so Cmd+A is never sent merely because Slack is frontmost.
+    private func acquireSlackFieldWithoutAX(targetApp: NSRunningApplication?,
+                                            savedClipboard: ClipboardService.Snapshot) async -> TextAcquisitionResult {
+        let preCount = ClipboardService.changeCount
+        ClipboardService.simulateSelectAll()
+        await Task.pause(Timing.afterActivate)
+        ClipboardService.simulateCopy()
+        await Task.pause(Timing.afterCopy)
+
+        guard ClipboardService.changeCount != preCount,
+              let copied = ClipboardService.readString(),
+              !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            Log.event("Slack AX-free Cmd+A fallback produced no text")
+            ClipboardService.restore(savedClipboard)
+            return .noSelectionOrFocusedField
+        }
+        guard copied.count <= EngineConfig.maxAutoFieldCharacters else {
+            Log.event("Slack AX-free focused text exceeds length guard")
+            ClipboardService.restore(savedClipboard)
+            return .tooLong
+        }
+
+        pending = Pending(
+            mode: .focusedFieldFullText,
+            savedClipboard: savedClipboard,
+            targetApp: targetApp,
+            focusedElement: nil,
+            valueSettable: false,
+            fieldValueReadable: false,
+            valueBefore: nil,
+            acquiredViaCmdA: true,
+            allowsAXFreeFullFieldPaste: true
+        )
+        let context = SourceAppContext.current(app: targetApp, field: nil, mode: .focusedFieldFullText)
+        Log.event("Acquired \(context.logDescription) (Slack typing-evidence Cmd+A)")
         return .acquired(text: copied, mode: .focusedFieldFullText, context: context)
     }
 
@@ -258,6 +306,9 @@ final class TextSelectionService {
 
     private func replaceFocusedField(corrected: String, trimmedCorrected: String, pending: Pending) async -> ReplacementResult {
         guard let target = pending.focusedElement else {
+            if pending.allowsAXFreeFullFieldPaste {
+                return await replaceSlackFieldWithoutAX(corrected: corrected, pending: pending)
+            }
             Log.event("replace(field): no saved target; clipboard fallback")
             ClipboardService.writeString(corrected)
             return .copiedToClipboardFallback
@@ -321,6 +372,24 @@ final class TextSelectionService {
             result = .replacementSentUnconfirmed
         }
 
+        await finishClipboard(for: result, corrected: corrected, saved: pending.savedClipboard)
+        return result
+    }
+
+    private func replaceSlackFieldWithoutAX(corrected: String, pending: Pending) async -> ReplacementResult {
+        guard await reactivateAndConfirm(pending.targetApp) else {
+            Log.event("replace(field): Slack source app not frontmost; clipboard fallback")
+            ClipboardService.writeString(corrected)
+            return .copiedToClipboardFallback
+        }
+        ClipboardService.writeString(corrected)
+        await Task.pause(Timing.afterActivate)
+        ClipboardService.simulateSelectAll()
+        await Task.pause(Timing.afterActivate)
+        ClipboardService.simulatePaste()
+        await Task.pause(Timing.afterPaste)
+        Log.event("replace(field): Slack AX-free paste sent unconfirmed")
+        let result: ReplacementResult = .replacementSentUnconfirmed
         await finishClipboard(for: result, corrected: corrected, saved: pending.savedClipboard)
         return result
     }

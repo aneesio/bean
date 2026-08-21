@@ -40,17 +40,26 @@ final class BeanBubbleService {
 
     // MARK: - Evaluate (called by the dispatcher on focus/selection)
 
-    func evaluate() {
+    func evaluate(fallbackOrigin: CGPoint? = nil) {
         guard settings.bubbleEnabled else { return hide() }
         guard PermissionService.isAccessibilityGranted else { return hide("noPermission") }
-        guard let field = AccessibilityService.focusedField() else { return hide("noField") }
+        guard let field = AccessibilityService.focusedField() else {
+            if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
+            return hide("noField")
+        }
         guard !field.isSecure else { return hide("secureField") }
         let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let electronTextSurface = AppCategory.isElectron(bundle) && field.isSemanticTextSurface
-        guard field.acceptsTextInput || electronTextSurface else { return hide("notEditableText") }
+        guard field.acceptsTextInput || electronTextSurface else {
+            if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
+            return hide("notEditableText")
+        }
         guard categoryAllowed(field) else { return hide("appDisabled") }
 
-        guard let origin = bubbleOrigin(for: field) else { return hide("noBounds") }
+        guard let origin = bubbleOrigin(for: field) else {
+            if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
+            return hide("noBounds")
+        }
 
         // Reset the drag offset when focus moves to a different field/app.
         if offsetElement == nil || !AccessibilityService.isSameElement(field.element, offsetElement!) {
@@ -69,6 +78,35 @@ final class BeanBubbleService {
             onReset: { [weak self] in self?.bubbleOffset = .zero; self?.diag(["bubbleReset": "true"]) }
         )
         diag(["bubbleShown": "true", "app": AppCategory.from(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier).rawValue])
+    }
+
+    /// Slack desktop sometimes exposes neither a focused AX element nor editor
+    /// bounds. After the dispatcher has independently observed a recent click
+    /// plus printable typing in Slack, place the bubble beside that click. The
+    /// evidence gate prevents this path from appearing on ordinary controls.
+    private func showSlackFallback(near point: CGPoint) {
+        let app = NSWorkspace.shared.frontmostApplication
+        guard app?.bundleIdentifier == "com.tinyspeck.slackmacgap",
+              settings.bubbleInChat,
+              let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) else {
+            return hide("invalidSlackFallback")
+        }
+
+        if offsetElement != nil { diag(["bubbleReset": "true"]) }
+        offsetElement = nil
+        bubbleOffset = .zero
+        let origin = clampedOrigin(x: point.x + 12, y: point.y + 12,
+                                   size: 24, in: screen.visibleFrame)
+        controller.showBubble(
+            at: origin,
+            savedOffset: .zero,
+            openOnHover: settings.bubbleOpenOnHover,
+            onOpen: { [weak self] in self?.openMenu() },
+            onDismiss: { [weak self] in self?.hide("dismissed") },
+            onCommitOffset: { [weak self] off in self?.bubbleOffset = off; self?.diag(["bubbleDragged": "true"]) },
+            onReset: { [weak self] in self?.bubbleOffset = .zero; self?.diag(["bubbleReset": "true"]) }
+        )
+        diag(["bubbleShown": "true", "app": "chat", "anchor": "slackTypingEvidence"])
     }
 
     // MARK: - Mini menu

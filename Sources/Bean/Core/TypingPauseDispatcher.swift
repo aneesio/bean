@@ -52,8 +52,8 @@ final class TypingPauseDispatcher {
     private func start() {
         guard PermissionService.isAccessibilityGranted else { return }
         if keyMonitor == nil {
-            let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] _ in
-                Task { @MainActor in self?.handleTyping() }
+            let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+                Task { @MainActor in self?.handleTyping(event) }
             }
             keyMonitor = monitor
             if monitor != nil { Log.event("dispatcher: monitoring started") }
@@ -83,6 +83,7 @@ final class TypingPauseDispatcher {
         pendingBubble?.cancel(); pendingBubble = nil
         permissionRetry?.cancel(); permissionRetry = nil
         generation += 1
+        ElectronTextFocusEvidence.clear()
         hideAll()
         Log.event("dispatcher: monitoring stopped")
     }
@@ -110,9 +111,10 @@ final class TypingPauseDispatcher {
 
     // MARK: - Events
 
-    private func handleTyping() {
+    private func handleTyping(_ event: NSEvent) {
         // Typing hides everything (including the bubble) and re-arms the
         // typing-pause router.
+        ElectronTextFocusEvidence.recordKey(event, app: NSWorkspace.shared.frontmostApplication)
         hideAll()
         generation += 1
         let gen = generation
@@ -125,12 +127,19 @@ final class TypingPauseDispatcher {
     private func handleClick() {
         // A click elsewhere dismisses current Bean UI, then (after a delay) may
         // show the bubble for the newly focused field/selection.
+        let field = AccessibilityService.focusedField()
+        ElectronTextFocusEvidence.recordClick(
+            app: NSWorkspace.shared.frontmostApplication,
+            point: NSEvent.mouseLocation,
+            focusedElementIsKnownNonText: field.map { !$0.isSemanticTextSurface } ?? false
+        )
         hideAll()
         generation += 1
         scheduleBubble(generation)
     }
 
     private func handleAppSwitch() {
+        ElectronTextFocusEvidence.clear()
         hideAll()
         generation += 1
         if settings.bubbleEnabled { scheduleBubble(generation) }
@@ -147,7 +156,8 @@ final class TypingPauseDispatcher {
         guard gen == generation, settings.bubbleEnabled, !coordinatorIsBusy() else { return }
         // Bubble is lowest priority: yield to passive/inline if they're showing.
         guard !passive.isShowingUI, !inline.isShowingUI else { return }
-        bubble.evaluate()
+        let app = NSWorkspace.shared.frontmostApplication
+        bubble.evaluate(fallbackOrigin: ElectronTextFocusEvidence.validAnchor(for: app))
     }
 
     // MARK: - Typing-pause routing (passive / inline)
