@@ -28,6 +28,8 @@ automatic versus manual provider usage.
 
 ## Phase 1 — Activation and diagnostics
 
+**Status:** Complete.
+
 ### Actions
 
 1. Add a Setup & Status screen with live checks for app location, API key,
@@ -57,6 +59,8 @@ automatic versus manual provider usage.
 - No source or transformed text is encoded in the history or support report.
 
 ## Phase 2 — Trust and recovery
+
+**Status:** Complete.
 
 ### Actions
 

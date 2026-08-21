@@ -16,8 +16,9 @@ final class TextActionCoordinator {
     private let settings: AppSettings
     private let userContent: UserContentStore
     private let history: OperationHistoryStore
+    private let undoStore: ReplacementUndoStore
     private let statusHUD: StatusHUD
-    private let selection = TextSelectionService()
+    private let selection: TextSelectionService
     private let transformer = WritingTransformService()
     private let actionMenu = ActionMenuController()
 
@@ -27,10 +28,13 @@ final class TextActionCoordinator {
     private var sessionActive = false
 
     init(settings: AppSettings, userContent: UserContentStore,
-         history: OperationHistoryStore, statusHUD: StatusHUD) {
+         history: OperationHistoryStore, undoStore: ReplacementUndoStore,
+         statusHUD: StatusHUD) {
         self.settings = settings
         self.userContent = userContent
         self.history = history
+        self.undoStore = undoStore
+        self.selection = TextSelectionService(undoStore: undoStore)
         self.statusHUD = statusHUD
     }
 
@@ -58,6 +62,37 @@ final class TextActionCoordinator {
             statusHUD.show(.warning, "Accessibility permission required")
             PermissionService.requestAccessibility()
             PermissionService.openAccessibilitySettings()
+        }
+    }
+
+    /// Reverts only the last confirmed whole-field Bean replacement, and only
+    /// while the exact Bean output is still present in that same field.
+    func undoLastChange() {
+        guard !isRunning, !sessionActive else {
+            statusHUD.show(.warning, "Finish the current Bean action before undoing")
+            return
+        }
+        isRunning = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isRunning = false }
+            let startedAt = Date()
+            let result = await self.undoStore.undo()
+            self.reportUndo(result)
+            let app = NSWorkspace.shared.frontmostApplication
+            self.history.record(OperationRecord(
+                source: .local,
+                appName: app?.localizedName,
+                appBundleIdentifier: app?.bundleIdentifier,
+                appCategory: AppCategory.from(bundleIdentifier: app?.bundleIdentifier).rawValue,
+                action: "undo",
+                inputMode: "verifiedWholeField",
+                inputLength: 0,
+                durationMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1_000),
+                safetyResult: "exactValueGuard",
+                outcome: self.resultCode(result),
+                usageEstimated: false
+            ))
         }
     }
 
@@ -171,7 +206,12 @@ final class TextActionCoordinator {
                 diagnostics(job: job, action: action, outLen: fixedWord.count,
                             validator: "local_typo", replacement: resultCode(result),
                             startedAt: operationStartedAt)
-                sessionActive = false
+                if needsRecovery(result) {
+                    presentReplacementRecovery(job: job, action: action, outCore: fixedWord,
+                                               result: result, model: nil)
+                } else {
+                    sessionActive = false
+                }
                 return
             }
             if job.core.count < 4 {
@@ -217,10 +257,20 @@ final class TextActionCoordinator {
         let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: job.core)
 
         if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
-            Log.event("validation: blocked (\(reason))")
-            diagnostics(job: job, action: action, outLen: outCore.count, validator: reason,
-                        replacement: "blocked", startedAt: operationStartedAt)
-            endSession(restore: true, .warning, "Transformation looked unsafe. Original text was not changed.")
+            switch OutputSafetyValidator.disposition(for: reason) {
+            case .hardBlock:
+                Log.event("validation: blocked (\(reason))")
+                diagnostics(job: job, action: action, outLen: outCore.count, validator: reason,
+                            replacement: "blocked", startedAt: operationStartedAt)
+                endSession(restore: true, .warning, "Transformation was blocked because it contained unsafe model output.")
+            case .reviewRequired:
+                Log.event("validation: review required (\(reason))")
+                diagnostics(job: job, action: action, outLen: outCore.count, validator: reason,
+                            replacement: "reviewRequired", startedAt: operationStartedAt)
+                presentPreview(job: job, action: action, outCore: outCore,
+                               explicitProfile: explicitProfile, personalization: personalization,
+                               reviewReason: reason)
+            }
             return
         }
 
@@ -241,53 +291,79 @@ final class TextActionCoordinator {
             report(result, mode: job.mode)
             diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok",
                         replacement: resultCode(result), startedAt: operationStartedAt)
-            sessionActive = false
+            if needsRecovery(result) {
+                presentReplacementRecovery(job: job, action: action, outCore: outCore,
+                                           result: result, model: nil)
+            } else {
+                sessionActive = false
+            }
         }
     }
 
     // MARK: - Preview
 
     private func presentPreview(job: Job, action: WritingAction, outCore: String,
-                                explicitProfile: UUID?, personalization: Personalization) {
+                                explicitProfile: UUID?, personalization: Personalization,
+                                reviewReason: String? = nil) {
+        sessionActive = true
         statusHUD.show(.info, "Preview ready")
-        let model = PreviewModel(actionName: action.displayName, transformedText: outCore)
+        let model = PreviewModel(actionName: action.displayName, transformedText: outCore,
+                                 originalText: job.core)
         model.styleName = personalization.styleName
         model.usedContext = personalization.usedContext
         model.allowsReplace = action.allowsReplaceFromPreview
         model.helperText = action.previewHelperText
+        if let reviewReason {
+            model.reviewWarning = OutputSafetyValidator.reviewMessage(for: reviewReason)
+        }
         model.onReplace = { [weak self] in self?.previewReplace(job: job, action: action, model: model) }
-        model.onCopy = { [weak self] in self?.previewCopy(model: model) }
+        model.onCopy = { [weak self] in self?.previewCopy(job: job, action: action, model: model) }
         model.onTryAgain = { [weak self] in self?.previewRetry(job: job, action: action, model: model, explicitProfile: explicitProfile) }
-        model.onCancel = { [weak self] in self?.previewCancel() }
+        model.onCancel = { [weak self] in self?.previewCancel(job: job, action: action) }
         actionMenu.presentPreview(model)
     }
 
     private func previewReplace(job: Job, action: WritingAction, model: PreviewModel) {
+        model.isRunning = true
+        model.errorMessage = nil
         let startedAt = Date()
         let finalText = job.leading + model.transformedText + job.trailing
         Task { [weak self] in
             guard let self else { return }
             let result = await self.selection.replace(corrected: finalText, original: job.original, mode: job.mode)
+            model.isRunning = false
             self.report(result, mode: job.mode)
             self.diagnostics(job: job, action: action, outLen: model.transformedText.count,
                              validator: "previewApproved", replacement: self.resultCode(result),
                              startedAt: startedAt)
-            self.actionMenu.dismissPreview()
-            self.sessionActive = false
+            if self.needsRecovery(result) {
+                self.presentReplacementRecovery(job: job, action: action,
+                                                outCore: model.transformedText,
+                                                result: result, model: model)
+            } else if case let .failed(reason) = result {
+                model.errorMessage = reason
+            } else {
+                self.actionMenu.dismissPreview()
+                self.sessionActive = false
+            }
         }
     }
 
-    private func previewCopy(model: PreviewModel) {
-        ClipboardService.writeString(model.transformedText)
+    private func previewCopy(job: Job, action: WritingAction, model: PreviewModel) {
+        ClipboardService.writeString(job.leading + model.transformedText + job.trailing)
         selection.discard() // leave transformed text on the clipboard; don't restore
         actionMenu.dismissPreview()
         sessionActive = false
+        diagnostics(job: job, action: action, outLen: model.transformedText.count,
+                    validator: model.reviewWarning == nil ? "userApprovedPreview" : "userReviewedWarning",
+                    replacement: "copied", startedAt: Date())
         statusHUD.show(.success, "Copied")
     }
 
     private func previewRetry(job: Job, action: WritingAction, model: PreviewModel, explicitProfile: UUID?) {
         model.isRunning = true
         model.errorMessage = nil
+        model.reviewWarning = nil
         Task { [weak self] in
             guard let self else { return }
             defer { model.isRunning = false }
@@ -302,9 +378,12 @@ final class TextActionCoordinator {
                     apiKey: self.settings.apiKey, timeout: self.settings.timeoutSeconds
                 )
                 let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: job.core)
-                if case .suspicious = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
-                    model.errorMessage = "That result looked unsafe — try again."
-                    return
+                if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
+                    if OutputSafetyValidator.disposition(for: reason) == .hardBlock {
+                        model.errorMessage = "That result contained unsafe model output. Try again."
+                        return
+                    }
+                    model.reviewWarning = OutputSafetyValidator.reviewMessage(for: reason)
                 }
                 model.transformedText = outCore
             } catch {
@@ -313,9 +392,48 @@ final class TextActionCoordinator {
         }
     }
 
-    private func previewCancel() {
+    private func previewCancel(job: Job, action: WritingAction) {
         actionMenu.dismissPreview()
+        diagnostics(job: job, action: action, outLen: 0, validator: "userDecision",
+                    replacement: "cancelled", startedAt: Date())
         endSession(restore: true, .info, "Replacement cancelled")
+    }
+
+    private func presentReplacementRecovery(job: Job, action: WritingAction, outCore: String,
+                                            result: TextSelectionService.ReplacementResult,
+                                            model existingModel: PreviewModel?) {
+        sessionActive = true
+        let model = existingModel ?? PreviewModel(
+            actionName: "Replacement Recovery",
+            transformedText: outCore,
+            originalText: job.core
+        )
+        model.isRunning = false
+        model.errorMessage = nil
+        model.allowsReplace = false
+        model.reviewWarning = recoveryMessage(for: result)
+        model.helperText = "The suggestion is still available here and on your clipboard."
+        model.onCopy = { [weak self] in self?.previewCopy(job: job, action: action, model: model) }
+        model.onTryAgain = { [weak self] in self?.previewReplace(job: job, action: action, model: model) }
+        model.onCancel = { [weak self] in self?.previewCancel(job: job, action: action) }
+        if existingModel == nil { actionMenu.presentPreview(model) }
+        statusHUD.show(.warning, "Bean could not verify replacement. Review, retry, or copy.")
+    }
+
+    private func needsRecovery(_ result: TextSelectionService.ReplacementResult) -> Bool {
+        switch result {
+        case .copiedToClipboardFallback, .staleCopiedToClipboard: return true
+        default: return false
+        }
+    }
+
+    private func recoveryMessage(for result: TextSelectionService.ReplacementResult) -> String {
+        switch result {
+        case .staleCopiedToClipboard:
+            return "The field changed after Bean read it, so Bean did not overwrite your newer text."
+        default:
+            return "Bean could not confirm that the replacement landed. Focus the original field and try again, or copy it."
+        }
     }
 
     // MARK: - Session / reporting
@@ -340,6 +458,14 @@ final class TextActionCoordinator {
             statusHUD.show(.warning, "Text changed. Copied suggestion to clipboard.")
         case .failed(let reason):
             statusHUD.show(.error, reason)
+        }
+    }
+
+    private func reportUndo(_ result: TextSelectionService.ReplacementResult) {
+        switch result {
+        case .replacedConfirmed: statusHUD.show(.success, "Last Bean change undone")
+        case .failed(let reason): statusHUD.show(.warning, reason)
+        default: statusHUD.show(.warning, "Bean could not safely undo that change")
         }
     }
 

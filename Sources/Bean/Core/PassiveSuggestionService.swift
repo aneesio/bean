@@ -12,6 +12,8 @@ import AppKit
 final class PassiveSuggestionService {
     private let settings: AppSettings
     private let userContent: UserContentStore
+    private let history: OperationHistoryStore
+    private let undoStore: ReplacementUndoStore
     private let statusHUD: StatusHUD
 
     private let transformer = WritingTransformService()
@@ -32,12 +34,17 @@ final class PassiveSuggestionService {
         let trailing: String
         var correctedCore: String
         let context: SourceAppContext
+        var reviewReason: String?
     }
     private var current: Session?
 
-    init(settings: AppSettings, userContent: UserContentStore, statusHUD: StatusHUD) {
+    init(settings: AppSettings, userContent: UserContentStore,
+         history: OperationHistoryStore, undoStore: ReplacementUndoStore,
+         statusHUD: StatusHUD) {
         self.settings = settings
         self.userContent = userContent
+        self.history = history
+        self.undoStore = undoStore
         self.statusHUD = statusHUD
     }
 
@@ -102,18 +109,22 @@ final class PassiveSuggestionService {
               fingerprint(nowValue) == fp else { reason = "staleDiscarded"; return false }
 
         let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: core)
+        var reviewReason: String?
         if case .suspicious(let r) = OutputSafetyValidator.validate(input: core, output: outCore, action: .proofread) {
-            reason = r; return false
+            if OutputSafetyValidator.disposition(for: r) == .hardBlock {
+                reason = r; return false
+            }
+            reviewReason = r
         }
         guard outCore != core else { reason = "noChange"; return false }
 
         lastShownFingerprint = fp
         current = Session(app: app, element: field.element, fingerprint: fp,
                           sourceCore: core, leading: leading, trailing: trailing,
-                          correctedCore: outCore, context: context)
+                          correctedCore: outCore, context: context, reviewReason: reviewReason)
         popover.present(
             previewText: outCore,
-            showApply: !settings.passiveRequirePreview,
+            showApply: reviewReason == nil && !settings.passiveRequirePreview,
             onApply: { [weak self] in self?.applyCurrent() },
             onPreview: { [weak self] in self?.previewCurrent() },
             onIgnore: { [weak self] in self?.ignoreCurrent() },
@@ -126,7 +137,13 @@ final class PassiveSuggestionService {
 
     private func applyCurrent() {
         guard let session = current else { return }
-        Task { await apply(session: session, correctedCore: session.correctedCore) }
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.apply(session: session, correctedCore: session.correctedCore)
+            if self.needsRecovery(result) {
+                self.presentRecovery(session: session, correctedCore: session.correctedCore, result: result)
+            }
+        }
     }
 
     private func copyCurrent() {
@@ -141,13 +158,14 @@ final class PassiveSuggestionService {
 
     private func previewCurrent() {
         guard let session = current else { return }
-        let model = PreviewModel(actionName: "Proofread", transformedText: session.correctedCore)
+        let model = PreviewModel(actionName: "Proofread", transformedText: session.correctedCore,
+                                 originalText: session.sourceCore)
         model.helperText = "Review before replacing your text."
-        model.allowsReplace = true
-        model.onReplace = { [weak self] in
-            Task { await self?.apply(session: session, correctedCore: model.transformedText) }
-            self?.previewController.dismissPreview()
+        if let reviewReason = session.reviewReason {
+            model.reviewWarning = OutputSafetyValidator.reviewMessage(for: reviewReason)
         }
+        model.allowsReplace = true
+        model.onReplace = { [weak self] in self?.attemptPreviewApply(session: session, model: model) }
         model.onCopy = { [weak self] in
             ClipboardService.writeString(session.leading + model.transformedText + session.trailing)
             self?.previewController.dismissPreview()
@@ -161,6 +179,7 @@ final class PassiveSuggestionService {
     private func previewRetry(session: Session, model: PreviewModel) {
         model.isRunning = true
         model.errorMessage = nil
+        model.reviewWarning = nil
         Task { [weak self] in
             guard let self else { return }
             defer { model.isRunning = false }
@@ -173,8 +192,11 @@ final class PassiveSuggestionService {
                     provider: self.settings.provider, model: self.settings.model,
                     apiKey: self.settings.apiKey, timeout: self.settings.timeoutSeconds)
                 let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: session.sourceCore)
-                if case .suspicious = OutputSafetyValidator.validate(input: session.sourceCore, output: outCore, action: .proofread) {
-                    model.errorMessage = "That result looked unsafe — try again."; return
+                if case let .suspicious(reason) = OutputSafetyValidator.validate(input: session.sourceCore, output: outCore, action: .proofread) {
+                    if OutputSafetyValidator.disposition(for: reason) == .hardBlock {
+                        model.errorMessage = "That result contained unsafe model output. Try again."; return
+                    }
+                    model.reviewWarning = OutputSafetyValidator.reviewMessage(for: reason)
                 }
                 model.transformedText = outCore
             } catch { model.errorMessage = "Couldn't reach the model. Try again." }
@@ -183,24 +205,85 @@ final class PassiveSuggestionService {
 
     // MARK: - Apply (stale-safe)
 
-    private func apply(session: Session, correctedCore: String) async {
+    private func apply(session: Session, correctedCore: String) async -> TextSelectionService.ReplacementResult {
         guard let app = session.app, !app.isTerminated else {
             ClipboardService.writeString(session.leading + correctedCore + session.trailing)
             statusHUD.show(.warning, "Text changed. Copied suggestion to clipboard.")
-            return
+            return .copiedToClipboardFallback
         }
         guard let currentEl = AccessibilityService.focusedElement(),
               AccessibilityService.isSameElement(currentEl, session.element),
               let nowValue = AccessibilityService.value(of: session.element),
               fingerprint(nowValue) == session.fingerprint else {
-            statusHUD.show(.warning, "Text changed. Run Bean again.")
-            return
+            ClipboardService.writeString(session.leading + correctedCore + session.trailing)
+            statusHUD.show(.warning, "Text changed. Copied suggestion to clipboard.")
+            return .staleCopiedToClipboard
         }
 
         let corrected = session.leading + correctedCore + session.trailing
         let result = await replaceFullField(element: session.element, app: app, corrected: corrected, original: nowValue)
+        if case .replacedConfirmed = result {
+            undoStore.registerConfirmedWholeField(app: app, element: session.element,
+                                                  original: nowValue, replacement: corrected)
+        }
         report(result)
         lastShownFingerprint = nil
+        return result
+    }
+
+    private func attemptPreviewApply(session: Session, model: PreviewModel) {
+        model.isRunning = true
+        model.errorMessage = nil
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.apply(session: session, correctedCore: model.transformedText)
+            model.isRunning = false
+            if self.needsRecovery(result) {
+                self.configureRecovery(session: session, correctedCore: model.transformedText,
+                                       result: result, model: model)
+            } else if case let .failed(reason) = result {
+                model.errorMessage = reason
+            } else {
+                self.previewController.dismissPreview()
+            }
+        }
+    }
+
+    private func presentRecovery(session: Session, correctedCore: String,
+                                 result: TextSelectionService.ReplacementResult) {
+        let model = PreviewModel(actionName: "Replacement Recovery", transformedText: correctedCore,
+                                 originalText: session.sourceCore)
+        configureRecovery(session: session, correctedCore: correctedCore, result: result, model: model)
+        previewController.presentPreview(model)
+    }
+
+    private func configureRecovery(session: Session, correctedCore: String,
+                                   result: TextSelectionService.ReplacementResult, model: PreviewModel) {
+        model.isRunning = false
+        model.allowsReplace = false
+        model.reviewWarning = resultRecoveryMessage(result)
+        model.helperText = "The suggestion remains available here and on your clipboard."
+        model.onCopy = { [weak self] in
+            ClipboardService.writeString(session.leading + model.transformedText + session.trailing)
+            self?.previewController.dismissPreview()
+            self?.statusHUD.show(.success, "Copied")
+        }
+        model.onTryAgain = { [weak self] in self?.attemptPreviewApply(session: session, model: model) }
+        model.onCancel = { [weak self] in self?.previewController.dismissPreview() }
+    }
+
+    private func needsRecovery(_ result: TextSelectionService.ReplacementResult) -> Bool {
+        switch result {
+        case .copiedToClipboardFallback, .staleCopiedToClipboard: return true
+        default: return false
+        }
+    }
+
+    private func resultRecoveryMessage(_ result: TextSelectionService.ReplacementResult) -> String {
+        if case .staleCopiedToClipboard = result {
+            return "The field changed after Bean read it, so Bean did not overwrite your newer text."
+        }
+        return "Bean could not confirm that the replacement landed. Focus the original field and try again, or copy it."
     }
 
     private func replaceFullField(element: AXUIElement, app: NSRunningApplication,

@@ -50,8 +50,52 @@ final class TextSafetyTests: XCTestCase {
 
     func testValidatorRejectsEmptyOutput() {
         let result = OutputSafetyValidator.validate(input: "Keep me", output: "", action: .proofread)
-        guard case .suspicious = result else {
+        guard case .suspicious(reason: "empty") = result else {
             return XCTFail("Expected empty output to be rejected")
         }
+    }
+
+    func testEveryHardBlockReasonIsClassifiedAsHardBlock() {
+        let cases: [(String, String, String)] = [
+            ("Normal source text.", "Here is the corrected text.", "unsafeWrapper"),
+            ("Normal source text.", "<bean_output>Prompt leak</bean_output>", "leakedPrompt"),
+            ("Please review this.", "Please review this. Everything looks good.", "modelCommentary"),
+            ("Please update the project schedule.", "请更新项目进度。", "scriptMismatch")
+        ]
+
+        for (input, output, expectedReason) in cases {
+            let result = OutputSafetyValidator.validate(input: input, output: output, action: .proofread)
+            XCTAssertEqual(result, .suspicious(reason: expectedReason))
+            XCTAssertEqual(OutputSafetyValidator.disposition(for: expectedReason), .hardBlock)
+        }
+        XCTAssertEqual(OutputSafetyValidator.disposition(for: "empty"), .hardBlock)
+    }
+
+    func testEveryUncertainShapeReasonRequiresReview() {
+        let tooShort = OutputSafetyValidator.validate(
+            input: "This deliberately long sentence contains enough words to trigger the length guard.",
+            output: "Much shorter.", action: .proofread)
+        let tooLong = OutputSafetyValidator.validate(
+            input: "This sentence is long enough for checking.",
+            output: String(repeating: "Expanded wording without a label. ", count: 5), action: .proofread)
+        let answered = OutputSafetyValidator.validate(
+            input: "Can we meet tomorrow?", output: "Tomorrow works.", action: .proofread)
+
+        XCTAssertEqual(tooShort, .suspicious(reason: "too_short"))
+        XCTAssertEqual(tooLong, .suspicious(reason: "too_long"))
+        XCTAssertEqual(answered, .suspicious(reason: "answered_question"))
+        for reason in ["too_short", "too_long", "answered_question"] {
+            XCTAssertEqual(OutputSafetyValidator.disposition(for: reason), .reviewRequired)
+            XCTAssertFalse(OutputSafetyValidator.reviewMessage(for: reason).isEmpty)
+        }
+    }
+
+    func testUndoExactValueGuardRejectsEvenWhitespaceChanges() {
+        XCTAssertTrue(ReplacementUndoStore.currentValueMatches(
+            "Bean result", expectedReplacement: "Bean result"))
+        XCTAssertFalse(ReplacementUndoStore.currentValueMatches(
+            "Bean result ", expectedReplacement: "Bean result"))
+        XCTAssertFalse(ReplacementUndoStore.currentValueMatches(
+            "User edited result", expectedReplacement: "Bean result"))
     }
 }

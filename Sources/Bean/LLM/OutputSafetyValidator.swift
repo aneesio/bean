@@ -12,9 +12,39 @@ import Foundation
 // (never the text) for logging.
 enum OutputSafetyValidator {
 
+    /// Hard blocks indicate output that must never be offered as replacement.
+    /// Review-required results are plausible transformations whose shape is
+    /// unusual enough that the user should make the final decision in Preview.
+    enum Disposition: Equatable {
+        case hardBlock
+        case reviewRequired
+    }
+
     enum Result: Equatable {
         case ok
         case suspicious(reason: String)
+    }
+
+    static func disposition(for reason: String) -> Disposition {
+        switch reason {
+        case "too_short", "too_long", "answered_question":
+            return .reviewRequired
+        default:
+            return .hardBlock
+        }
+    }
+
+    static func reviewMessage(for reason: String) -> String {
+        switch reason {
+        case "too_short":
+            return "This result is much shorter than the original. Review it before replacing."
+        case "too_long":
+            return "This result is much longer than the original. Review it before replacing."
+        case "answered_question":
+            return "This may answer the text instead of editing it. Review it before replacing."
+        default:
+            return "This result is unusual. Review it carefully before replacing."
+        }
     }
 
     static func validate(input: String, output: String, action: WritingAction) -> Result {

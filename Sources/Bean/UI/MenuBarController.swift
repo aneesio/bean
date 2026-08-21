@@ -8,6 +8,7 @@ import SwiftUI
 final class MenuBarController: NSObject, NSMenuDelegate {
     private let onProofreadNow: () -> Void
     private let onOpenBeanMenu: () -> Void
+    private let onUndoLastChange: () -> Void
     private let onCheckCurrentField: () -> Void
     private let onCheckPermissions: () -> Void
     private let onShowSettings: () -> Void
@@ -20,6 +21,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     init(
         onProofreadNow: @escaping () -> Void,
         onOpenBeanMenu: @escaping () -> Void,
+        onUndoLastChange: @escaping () -> Void,
         onCheckCurrentField: @escaping () -> Void,
         onCheckPermissions: @escaping () -> Void,
         onShowSettings: @escaping () -> Void,
@@ -27,6 +29,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     ) {
         self.onProofreadNow = onProofreadNow
         self.onOpenBeanMenu = onOpenBeanMenu
+        self.onUndoLastChange = onUndoLastChange
         self.onCheckCurrentField = onCheckCurrentField
         self.onCheckPermissions = onCheckPermissions
         self.onShowSettings = onShowSettings
@@ -98,6 +101,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         beanMenuItem.image = Self.icon("wand.and.stars")
         menu.addItem(beanMenuItem)
 
+        let undoItem = NSMenuItem(title: "Undo Last Bean Change", action: #selector(handleUndoLastChange), keyEquivalent: "")
+        undoItem.target = self
+        undoItem.image = Self.icon("arrow.uturn.backward")
+        menu.addItem(undoItem)
+
         menu.addItem(.separator())
 
         let fieldItem = NSMenuItem(title: "Check Current Field", action: #selector(handleCheckCurrentField), keyEquivalent: "")
@@ -143,6 +151,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func handleOpenBeanMenu() {
         onOpenBeanMenu()
+    }
+
+    @objc private func handleUndoLastChange() {
+        onUndoLastChange()
     }
 
     @objc private func handleCheckPermissions() {

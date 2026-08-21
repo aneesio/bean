@@ -9,16 +9,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let operationHistory = OperationHistoryStore()
     private let setupStatus = SetupStatusStore()
     private let statusHUD = StatusHUD()
+    private let replacementUndo = ReplacementUndoStore()
 
     private lazy var coordinator = TextActionCoordinator(
         settings: settings,
         userContent: userContent,
         history: operationHistory,
+        undoStore: replacementUndo,
         statusHUD: statusHUD
     )
 
     private lazy var passiveService = PassiveSuggestionService(
-        settings: settings, userContent: userContent, statusHUD: statusHUD
+        settings: settings, userContent: userContent, history: operationHistory,
+        undoStore: replacementUndo, statusHUD: statusHUD
     )
 
     private lazy var inlineService = InlineHighlightService(
@@ -52,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var menuBarController = MenuBarController(
         onProofreadNow: { [weak self] in self?.coordinator.fixSelectedText() },
         onOpenBeanMenu: { [weak self] in self?.coordinator.showActionMenu() },
+        onUndoLastChange: { [weak self] in self?.coordinator.undoLastChange() },
         onCheckCurrentField: { [weak self] in self?.checkCurrentField() },
         onCheckPermissions: { [weak self] in self?.coordinator.checkPermissions() },
         onShowSettings: { [weak self] in self?.windowPresenter.showSettings() },

@@ -102,21 +102,24 @@ final class PreviewModel: ObservableObject {
     @Published var transformedText: String
     @Published var isRunning: Bool = false
     @Published var errorMessage: String?
+    @Published var reviewWarning: String?
+    @Published var originalText: String?
+    @Published var allowsReplace: Bool = true
+    @Published var helperText: String = "Review before replacing your text."
 
     let actionName: String
     var styleName: String?
     var usedContext: Bool = false
-    var allowsReplace: Bool = true
-    var helperText: String = "Review before replacing your text."
 
     var onReplace: () -> Void = {}
     var onCopy: () -> Void = {}
     var onTryAgain: () -> Void = {}
     var onCancel: () -> Void = {}
 
-    init(actionName: String, transformedText: String) {
+    init(actionName: String, transformedText: String, originalText: String? = nil) {
         self.actionName = actionName
         self.transformedText = transformedText
+        self.originalText = originalText
     }
 }
 
@@ -139,25 +142,55 @@ struct RewritePreviewView: View {
                 }
             }
 
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $model.transformedText)
-                    .font(.system(size: 13))
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .frame(height: 200)
-                    .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).fill(Color(nsColor: .textBackgroundColor)))
-                    .overlay(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).stroke(BeanDesign.subtleBorder))
-                    .disabled(model.isRunning)
-                    .opacity(model.isRunning ? 0.5 : 1)
-                if model.isRunning {
-                    ProgressView().controlSize(.small)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            HStack(alignment: .top, spacing: BeanDesign.Spacing.md) {
+                if let originalText = model.originalText {
+                    VStack(alignment: .leading, spacing: BeanDesign.Spacing.xs) {
+                        Text("BEFORE")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        ScrollView {
+                            Text(originalText)
+                                .font(.system(size: 13))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                        }
+                        .frame(height: 230)
+                        .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).fill(Color(nsColor: .controlBackgroundColor)))
+                        .overlay(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).stroke(BeanDesign.subtleBorder))
+                    }
+                    .frame(maxWidth: .infinity)
                 }
+
+                VStack(alignment: .leading, spacing: BeanDesign.Spacing.xs) {
+                    Text("AFTER")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $model.transformedText)
+                            .font(.system(size: 13))
+                            .scrollContentBackground(.hidden)
+                            .padding(6)
+                            .frame(height: 230)
+                            .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).fill(Color(nsColor: .textBackgroundColor)))
+                            .overlay(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).stroke(BeanDesign.subtleBorder))
+                            .disabled(model.isRunning)
+                            .opacity(model.isRunning ? 0.5 : 1)
+                        if model.isRunning {
+                            ProgressView().controlSize(.small)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
 
             if let error = model.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(BeanDesign.Typography.caption()).foregroundColor(BeanDesign.danger)
+            } else if let warning = model.reviewWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(BeanDesign.Typography.caption()).foregroundColor(.orange)
             } else {
                 Text(model.helperText)
                     .font(BeanDesign.Typography.caption()).foregroundColor(.secondary)
@@ -178,7 +211,7 @@ struct RewritePreviewView: View {
             }
         }
         .padding(BeanDesign.Spacing.lg)
-        .frame(width: 480)
+        .frame(width: model.originalText == nil ? 480 : 720)
         .tint(BeanDesign.accent)
         .onExitCommand { model.onCancel() }
     }

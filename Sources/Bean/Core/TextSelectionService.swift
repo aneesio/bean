@@ -24,6 +24,12 @@ import AppKit
 @MainActor
 final class TextSelectionService {
 
+    private let undoStore: ReplacementUndoStore
+
+    init(undoStore: ReplacementUndoStore) {
+        self.undoStore = undoStore
+    }
+
     /// Honest, verifiable outcomes of a replacement attempt.
     enum ReplacementResult {
         case replacedConfirmed          // verified: the field now holds the corrected text
@@ -248,21 +254,43 @@ final class TextSelectionService {
         guard !trimmedCorrected.isEmpty else {
             Log.event("replace: correction was empty")
             ClipboardService.restore(pending.savedClipboard)
+            self.pending = nil
             return .failed(reason: "The model returned an empty response")
         }
 
         if trimmedCorrected == original.trimmingCharacters(in: .whitespacesAndNewlines) {
             Log.event("replace: no changes needed")
             ClipboardService.restore(pending.savedClipboard)
+            self.pending = nil
             return .noChangesNeeded
         }
 
+        let result: ReplacementResult
         switch mode {
         case .selectedText:
-            return await replaceSelection(corrected: corrected, trimmedCorrected: trimmedCorrected, pending: pending)
+            result = await replaceSelection(corrected: corrected, trimmedCorrected: trimmedCorrected, pending: pending)
         case .focusedFieldFullText:
-            return await replaceFocusedField(corrected: corrected, trimmedCorrected: trimmedCorrected, pending: pending)
+            result = await replaceFocusedField(corrected: corrected, trimmedCorrected: trimmedCorrected, pending: pending)
         }
+
+        if case .replacedConfirmed = result, mode == .focusedFieldFullText {
+            undoStore.registerConfirmedWholeField(
+                app: pending.targetApp,
+                element: pending.focusedElement,
+                original: original,
+                replacement: corrected
+            )
+        }
+
+        // A clipboard fallback can be retried safely with the original target.
+        // All other outcomes resolve the acquisition and release its text.
+        switch result {
+        case .copiedToClipboardFallback, .staleCopiedToClipboard:
+            break
+        default:
+            self.pending = nil
+        }
+        return result
     }
 
     // MARK: - Selection replacement (verified paste)
