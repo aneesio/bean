@@ -111,6 +111,18 @@ final class TextSelectionService {
             return .noSelectionOrFocusedField
         }
 
+        let category = AppCategory.from(bundleIdentifier: targetApp?.bundleIdentifier)
+        let capabilities = FieldCapabilityPolicy.evaluate(
+            bundleIdentifier: targetApp?.bundleIdentifier,
+            category: category,
+            traits: FieldTraits(field: field),
+            preferences: .manual(focusedFieldFallbackEnabled: allowFocusedFieldFallback)
+        )
+        guard capabilities.focusedFieldReplacement.level != .unsupported else {
+            Log.event("Focused-field acquisition refused: \(capabilities.focusedFieldReplacement.reason)")
+            return .noSelectionOrFocusedField
+        }
+
         let electronTextSurface = AppCategory.isElectron(targetApp?.bundleIdentifier)
             && field.isSemanticTextSurface
         if let value = field.value,

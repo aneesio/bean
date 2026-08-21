@@ -115,6 +115,8 @@ automatic versus manual provider usage.
 
 ## Phase 4 — Focused compatibility
 
+**Status:** Complete.
+
 ### Actions
 
 1. Define explicit capability profiles for TextEdit, Apple Notes, Apple Mail,

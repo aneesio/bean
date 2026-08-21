@@ -37,6 +37,11 @@ function renderStatus() {
     setStatusCell("s-enabled", settings.enabled ? "On" : "Off", settings.enabled ? "ok" : "off");
     setStatusCell("s-site", sites.length ? `${sites.length} approved` : "No sites approved", sites.length ? "ok" : "off");
     setStatusCell("s-fallback", settings.localFallback !== false ? "On" : "Off", settings.localFallback !== false ? "ok" : "warn");
+    const active = !!settings.enabled;
+    setStatusCell("s-gmail", active && sites.includes("mail.google.com") ? "Approved" : "Not approved",
+                  active && sites.includes("mail.google.com") ? "ok" : "off");
+    setStatusCell("s-slack", active && sites.includes("app.slack.com") ? "Approved" : "Not approved",
+                  active && sites.includes("app.slack.com") ? "ok" : "off");
   });
 }
 
@@ -115,6 +120,10 @@ function testBridge() {
         "warn"
       );
       return;
+    }
+    if (Number.isInteger(response.automaticCallsToday) && Number.isInteger(response.dailyAutomaticCallLimit)) {
+      setStatusCell("s-budget", `${response.automaticCallsToday} of ${response.dailyAutomaticCallLimit} automatic calls today`,
+                    response.automaticCallsToday >= response.dailyAutomaticCallLimit ? "warn" : "ok");
     }
     if (!response.providerConfigured) { setStatusCell("s-bridge", "Connected — add an API key in Bean", "warn"); return; }
     if (!response.webInlineEnabled) { setStatusCell("s-bridge", "Connected — enable Web Inline Support in Bean", "warn"); return; }

@@ -1,25 +1,6 @@
 import AppKit
 import Foundation
 
-enum CapabilityLevel: String, Codable {
-    case supported
-    case degraded
-    case unsupported
-
-    var displayName: String {
-        switch self {
-        case .supported: return "Supported"
-        case .degraded: return "Best effort"
-        case .unsupported: return "Unavailable"
-        }
-    }
-}
-
-struct CapabilityAssessment: Codable, Equatable {
-    let level: CapabilityLevel
-    let reason: String
-}
-
 /// A metadata-only view of what Bean can do in the field that was focused when
 /// the user chose Check Current Field. No AX value, selected text, title,
 /// placeholder, or window title is stored.
@@ -28,6 +9,7 @@ struct FieldInspectionReport: Codable, Equatable {
     let appName: String
     let bundleIdentifier: String?
     let appCategory: String
+    let referenceSurface: String?
     let role: String?
     let subrole: String?
     let selectedTextAction: CapabilityAssessment
@@ -48,6 +30,7 @@ struct FieldInspectionReport: Codable, Equatable {
             "fieldCheckApp: \(appName)",
             "fieldCheckBundle: \(bundleIdentifier ?? "unknown")",
             "fieldCheckCategory: \(appCategory)",
+            "fieldCheckReferenceSurface: \(referenceSurface ?? "generic")",
             "fieldCheckRole: \(role ?? "unknown")",
             "fieldCheckSubrole: \(subrole ?? "unknown")",
             "fieldCheckSelection: \(selectedTextAction.level.rawValue)(\(selectedTextAction.reason))",
@@ -81,12 +64,21 @@ final class SetupStatusStore: ObservableObject {
         let bundle = app?.bundleIdentifier
         let category = AppCategory.from(bundleIdentifier: bundle)
         let field = app.flatMap(AccessibilityService.focusedFieldMetadata(in:))
+        let hasBubbleBounds = field.map {
+            TextRangeLocator.fieldRect(for: $0.element) != nil
+                || TextRangeLocator.selectionRect(for: $0.element) != nil
+        }
+        let capabilities = FieldCapabilityPolicy.evaluate(
+            bundleIdentifier: bundle, category: category,
+            traits: field.map { FieldTraits(field: $0, hasBubbleBounds: hasBubbleBounds) },
+            preferences: settings.capabilityPreferences
+        )
         let report = Self.makeReport(
             appName: appName,
             bundleIdentifier: bundle,
             category: category,
             field: field,
-            settings: settings
+            capabilities: capabilities
         )
         latestFieldInspection = report
         if let data = try? JSONEncoder().encode(report) {
@@ -117,98 +109,17 @@ final class SetupStatusStore: ObservableObject {
         bundleIdentifier: String?,
         category: AppCategory,
         field: AccessibilityService.FocusedField?,
-        settings: AppSettings
+        capabilities: FieldCapabilities
     ) -> FieldInspectionReport {
-        guard PermissionService.isAccessibilityGranted else {
-            let unavailable = CapabilityAssessment(level: .unsupported, reason: "accessibilityPermissionRequired")
-            return FieldInspectionReport(
-                checkedAt: Date(), appName: appName, bundleIdentifier: bundleIdentifier,
-                appCategory: category.rawValue, role: field?.role, subrole: field?.subrole,
-                selectedTextAction: unavailable, focusedFieldReplacement: unavailable,
-                beanBubble: unavailable, inlineChecking: unavailable
-            )
-        }
-
-        guard let field else {
-            let unavailable = CapabilityAssessment(level: .unsupported, reason: "noFocusedField")
-            return FieldInspectionReport(
-                checkedAt: Date(), appName: appName, bundleIdentifier: bundleIdentifier,
-                appCategory: category.rawValue, role: nil, subrole: nil,
-                selectedTextAction: unavailable, focusedFieldReplacement: unavailable,
-                beanBubble: unavailable, inlineChecking: unavailable
-            )
-        }
-
-        let secure = field.isSecure
-        let selection: CapabilityAssessment
-        let focused: CapabilityAssessment
-        let bubble: CapabilityAssessment
-        let inline: CapabilityAssessment
-
-        if secure {
-            let unavailable = CapabilityAssessment(level: .unsupported, reason: "secureField")
-            selection = unavailable; focused = unavailable; bubble = unavailable; inline = unavailable
-        } else if !field.isEnabled {
-            let unavailable = CapabilityAssessment(level: .unsupported, reason: "disabledField")
-            selection = unavailable; focused = unavailable; bubble = unavailable; inline = unavailable
-        } else if !field.isSemanticTextSurface {
-            let unavailable = CapabilityAssessment(level: .unsupported, reason: "notEditableText")
-            selection = unavailable; focused = unavailable; bubble = unavailable; inline = unavailable
-        } else {
-            selection = CapabilityAssessment(level: .supported, reason: "semanticTextSurface")
-
-            if !settings.fixFocusedFieldWhenNoSelection {
-                focused = CapabilityAssessment(level: .unsupported, reason: "focusedFieldFallbackDisabled")
-            } else if field.acceptsTextInput {
-                focused = CapabilityAssessment(
-                    level: field.isValueSettable ? .supported : .degraded,
-                    reason: field.isValueSettable ? "directValueWriteAvailable" : "pasteFallbackRequired"
-                )
-            } else if AppCategory.isElectron(bundleIdentifier) {
-                focused = CapabilityAssessment(level: .degraded, reason: "electronPasteBestEffort")
-            } else {
-                focused = CapabilityAssessment(level: .unsupported, reason: "readOnlyField")
-            }
-
-            let categoryAllowed: Bool
-            switch category {
-            case .chat: categoryAllowed = settings.bubbleInChat
-            case .codeEditor: categoryAllowed = settings.bubbleInCode
-            case .mail, .docs, .unknown: categoryAllowed = settings.bubbleInMailBrowser
-            }
-            if field.isSearchLike && !settings.bubbleInSearch {
-                bubble = CapabilityAssessment(level: .unsupported, reason: "searchFieldDisabled")
-            } else if !categoryAllowed {
-                bubble = CapabilityAssessment(level: .unsupported, reason: "categoryDisabled")
-            } else if field.acceptsTextInput || AppCategory.isElectron(bundleIdentifier) {
-                bubble = CapabilityAssessment(
-                    level: settings.bubbleEnabled ? .supported : .degraded,
-                    reason: settings.bubbleEnabled ? "enabled" : "supportedButDisabled"
-                )
-            } else {
-                bubble = CapabilityAssessment(level: .unsupported, reason: "noEditableBounds")
-            }
-
-            if field.isSearchLike {
-                inline = CapabilityAssessment(level: .unsupported, reason: "searchFieldDisabled")
-            } else if category == .codeEditor {
-                inline = CapabilityAssessment(level: .unsupported, reason: "codeEditorDisabled")
-            } else if AppCategory.isBrowser(bundleIdentifier) {
-                inline = CapabilityAssessment(level: .degraded, reason: "browserExtensionRequired")
-            } else if AppCategory.isElectron(bundleIdentifier) {
-                inline = CapabilityAssessment(level: .unsupported, reason: "electronInlineUnavailable")
-            } else if field.acceptsTextInput {
-                inline = CapabilityAssessment(level: .degraded, reason: "nativeRangeCheckRequired")
-            } else {
-                inline = CapabilityAssessment(level: .unsupported, reason: "richTextUnsupported")
-            }
-        }
-
         return FieldInspectionReport(
             checkedAt: Date(), appName: appName, bundleIdentifier: bundleIdentifier,
-            appCategory: category.rawValue, role: field.role, subrole: field.subrole,
-            selectedTextAction: selection, focusedFieldReplacement: focused,
-            beanBubble: bubble, inlineChecking: inline
+            appCategory: category.rawValue,
+            referenceSurface: capabilities.referenceSurface.rawValue,
+            role: field?.role, subrole: field?.subrole,
+            selectedTextAction: capabilities.selectedTextAction,
+            focusedFieldReplacement: capabilities.focusedFieldReplacement,
+            beanBubble: capabilities.beanBubble,
+            inlineChecking: capabilities.inlineChecking
         )
     }
 }

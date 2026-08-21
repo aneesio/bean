@@ -422,4 +422,18 @@ final class AppSettings: ObservableObject {
         inlineFallbackPassive = false
         webInlineEnabled = false
     }
+
+    var capabilityPreferences: CapabilityPreferences {
+        CapabilityPreferences(
+            accessibilityGranted: PermissionService.isAccessibilityGranted,
+            focusedFieldFallbackEnabled: fixFocusedFieldWhenNoSelection,
+            bubbleEnabled: bubbleEnabled,
+            bubbleInChat: bubbleInChat,
+            bubbleInMailBrowser: bubbleInMailBrowser,
+            bubbleInCode: bubbleInCode,
+            bubbleInSearch: bubbleInSearch,
+            inlineEnabled: inlineHighlightsEnabled,
+            webInlineEnabled: webInlineEnabled
+        )
+    }
 }

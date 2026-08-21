@@ -49,14 +49,18 @@ final class BeanBubbleService {
         }
         guard !field.isSecure else { return hide("secureField") }
         let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        let electronTextSurface = AppCategory.isElectron(bundle) && field.isSemanticTextSurface
-        guard field.acceptsTextInput || electronTextSurface else {
-            if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
-            return hide("notEditableText")
+        let origin = bubbleOrigin(for: field)
+        let capabilities = FieldCapabilityPolicy.evaluate(
+            bundleIdentifier: bundle,
+            category: AppCategory.from(bundleIdentifier: bundle),
+            traits: FieldTraits(field: field, hasBubbleBounds: origin != nil),
+            preferences: settings.capabilityPreferences
+        )
+        guard capabilities.beanBubble.level != .unsupported else {
+            return hide(capabilities.beanBubble.reason)
         }
-        guard categoryAllowed(field) else { return hide("appDisabled") }
 
-        guard let origin = bubbleOrigin(for: field) else {
+        guard let origin else {
             if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
             return hide("noBounds")
         }
@@ -157,16 +161,6 @@ final class BeanBubbleService {
     private func clampedOrigin(x: CGFloat, y: CGFloat, size: CGFloat, in visible: CGRect) -> CGPoint {
         CGPoint(x: min(max(x, visible.minX + 4), visible.maxX - size - 4),
                 y: min(max(y, visible.minY + 4), visible.maxY - size - 4))
-    }
-
-    private func categoryAllowed(_ field: AccessibilityService.FocusedField) -> Bool {
-        if field.isSearchLike { return settings.bubbleInSearch }
-        switch AppCategory.from(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
-        case .codeEditor: return settings.bubbleInCode
-        case .chat: return settings.bubbleInChat
-        case .mail, .docs: return settings.bubbleInMailBrowser
-        case .unknown: return settings.bubbleInMailBrowser
-        }
     }
 
     private func diag(_ extra: [String: String]) {

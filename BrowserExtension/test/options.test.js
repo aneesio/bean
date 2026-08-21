@@ -36,7 +36,14 @@ const context = {
   setTimeout: () => {}
 };
 const source = fs.readFileSync(path.join(__dirname, "..", "options.js"), "utf8");
+const html = fs.readFileSync(path.join(__dirname, "..", "options.html"), "utf8");
 vm.runInNewContext(source, context);
+
+assert.match(html, /id="s-gmail"/);
+assert.match(html, /id="s-slack"/);
+assert.match(html, /id="s-budget"/);
+assert.match(html, /mail\.google\.com/);
+assert.match(html, /app\.slack\.com/);
 
 assert.equal(context.normalizeHost("MAIL.Google.com"), "mail.google.com");
 assert.equal(context.normalizeHost("https://app.slack.com/client"), "app.slack.com");

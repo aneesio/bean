@@ -82,7 +82,7 @@ enum NativeMessagingHost {
         case "ping":
             return encode(HostResponse(id: request.id, ok: true))
         case "getStatus":
-            return encode(HostResponse.status(id: request.id))
+            return encode(await HostResponse.status(id: request.id))
         case "detectIssues":
             return await detect(request)
         case "proofreadParagraph":
@@ -323,6 +323,9 @@ private struct HostResponse: Encodable {
     var providerConfigured: Bool? = nil
     var webInlineEnabled: Bool? = nil
     var appVersion: String? = nil
+    var dailyAutomaticCallLimit: Int? = nil
+    var automaticCallsToday: Int? = nil
+    var referenceSites: [String]? = nil
 
     struct Issue: Encodable {
         let original: String
@@ -336,11 +339,15 @@ private struct HostResponse: Encodable {
         HostResponse(id: id, ok: false, errorCode: code, message: message)
     }
 
-    static func status(id: String?) -> HostResponse {
-        HostResponse(id: id, ok: true,
+    static func status(id: String?) async -> HostResponse {
+        let calls = await MainActor.run { UsageLedgerStore().automaticCallsToday() }
+        return HostResponse(id: id, ok: true,
                      bridgeAvailable: true,
                      providerConfigured: !HostConfig.apiKey.isEmpty,
                      webInlineEnabled: HostConfig.webInlineEnabled,
-                     appVersion: AppInfo.version)
+                     appVersion: AppInfo.version,
+                     dailyAutomaticCallLimit: HostConfig.dailyAutomaticCallLimit,
+                     automaticCallsToday: calls,
+                     referenceSites: ["mail.google.com", "app.slack.com"])
     }
 }

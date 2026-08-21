@@ -60,15 +60,21 @@ clipboard fallback.
 
 ## App compatibility gate
 
-Test the current release candidate in:
+The five reference experiences are release-blocking. Record pass/fail and a
+reason code for every non-pass; do not silently mark an unavailable app as
+tested.
 
-- TextEdit: selection, focused field, bubble, and experimental native inline;
-- Notes and Mail: selection, replacement, formatting preservation;
-- Slack desktop: composer focus, Bean Bubble, manual replacement, typing pause;
-- one additional Electron app: safe fallback behavior;
-- Chrome: normal page field through the Mac app;
-- one code editor: selected prose only, no bubble/inline in code by default;
-- search, password, disabled, and read-only fields: no bubble or operation.
+| Surface | Selected text | Focused field | Bubble | Inline/fallback | Boundary check |
+| --- | --- | --- | --- | --- | --- |
+| TextEdit | Correct + verify | Correct + verify | Anchors only to editor | Native highlight or documented range fallback | Read-only view excluded |
+| Apple Notes | Correct selection | Preserve note structure | No button/control anchors | Native or passive fallback | Formatting outside target unchanged |
+| Apple Mail | Correct in composer | Preserve greeting/sign-off | Composer only | Native or passive fallback | Displayed mail excluded |
+| Slack desktop | Correct selection | Composer replacement or honest fallback | Composer/evidence only | Passive/manual; no fake native inline | Channel buttons excluded |
+| Chromium (Gmail + Slack web) | Manual path best effort | Honest AX fallback | Editable DOM field only | Extension on exact approved host | Search/email-address/buttons excluded |
+
+Also test one code editor, a search field, password field, disabled field,
+read-only field, and ordinary button. Focused-field replacement, Bubble, and
+inline UI must fail closed according to [SUPPORTED_APPS.md](SUPPORTED_APPS.md).
 
 Record macOS version, app version, acquisition path, replacement result, and any
 content-free diagnostics. Update [SUPPORTED_APPS.md](SUPPORTED_APPS.md) when a
@@ -100,6 +106,10 @@ repeatable compatibility boundary changes.
 - Provider checks require both extension bridge opt-in and Web Inline Support in
   the Bean app.
 - Applying an issue verifies the exact live substring and preserves line breaks.
+- Gmail and Slack web status rows reflect exact-host approval.
+- A review-required paragraph shows the before/after approval card and is not
+  applied until approved.
+- Test Connection reports the automatic daily-call count and limit.
 
 Use `BrowserExtension/test/fixtures/editor.html` for deterministic manual cases.
 

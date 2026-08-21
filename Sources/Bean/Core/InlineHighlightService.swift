@@ -52,34 +52,33 @@ final class InlineHighlightService {
     /// The technically-honest coverage classification for a field — drives both
     /// runtime routing and the user-facing "why" (native vs web vs fallback).
     func coverage(for field: AccessibilityService.FocusedField) -> InlineSupportResult {
-        guard PermissionService.isAccessibilityGranted else {
-            return .unsupported(reason: InlineCoverageReason.noAccessibilityPermission)
-        }
-        if field.isSecure { return .unsupported(reason: InlineCoverageReason.secureField) }
-        if field.isSearchLike { return .unsupported(reason: InlineCoverageReason.searchFieldDisabled) }
-
         let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        if AppCategory.from(bundleIdentifier: bundle) == .codeEditor {
-            return .unsupported(reason: InlineCoverageReason.codeEditorDisabled)
+        let boundsReliable = field.value.map {
+            !$0.isEmpty && $0.count <= 1500
+                && TextRangeLocator.boundsAreReliable(for: field.element, valueLength: $0.count)
         }
-        // Web fields → browser extension; Electron → future app adapter. Native
-        // AX inline isn't the right tool for either, so degrade to fallback.
-        if AppCategory.isBrowser(bundle) {
-            return .degraded(mode: .browserExtension, reason: InlineCoverageReason.webEditorRequiresExtension)
-        }
-        if AppCategory.isElectron(bundle) {
-            return .degraded(mode: .appAdapter, reason: InlineCoverageReason.electronEditorRequiresAdapter)
-        }
-
-        guard field.acceptsTextInput, let value = field.value, !value.isEmpty else {
-            return .unsupported(reason: InlineCoverageReason.richTextUnsupported)
-        }
-        guard value.count <= 1500 else { return .unsupported(reason: "textTooLong") }
-
-        if TextRangeLocator.boundsAreReliable(for: field.element, valueLength: value.count) {
+        let capabilities = FieldCapabilityPolicy.evaluate(
+            bundleIdentifier: bundle,
+            category: AppCategory.from(bundleIdentifier: bundle),
+            traits: FieldTraits(field: field, nativeRangeBoundsReliable: boundsReliable),
+            preferences: settings.capabilityPreferences
+        )
+        let assessment = capabilities.inlineChecking
+        if field.value?.count ?? 0 > 1500 { return .unsupported(reason: "textTooLong") }
+        switch assessment.level {
+        case .supported:
             return .supported(mode: .nativeAccessibility, confidence: 0.9)
+        case .unsupported:
+            return .unsupported(reason: assessment.reason)
+        case .degraded:
+            if AppCategory.isBrowser(bundle) {
+                return .degraded(mode: .browserExtension, reason: assessment.reason)
+            }
+            if AppCategory.isElectron(bundle) {
+                return .degraded(mode: .appAdapter, reason: assessment.reason)
+            }
+            return .degraded(mode: .passiveFallback, reason: assessment.reason)
         }
-        return .degraded(mode: .passiveFallback, reason: InlineCoverageReason.nativeRangeBoundsMissing)
     }
 
     func support(for field: AccessibilityService.FocusedField) -> FieldSupport {

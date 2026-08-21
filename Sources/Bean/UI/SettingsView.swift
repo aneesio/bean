@@ -197,6 +197,7 @@ struct SettingsView: View {
             if let report = setupStatus.latestFieldInspection {
                 Text(report.headline).font(.headline)
                 LabeledContent("App", value: report.appName)
+                LabeledContent("Reference profile", value: report.referenceSurface ?? "generic")
                 LabeledContent("Role", value: report.role ?? "Unknown")
                 capabilityRow("Selected-text action", report.selectedTextAction)
                 capabilityRow("Focused-field replacement", report.focusedFieldReplacement)

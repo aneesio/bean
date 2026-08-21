@@ -29,7 +29,9 @@ enum AppCategory: String, Codable, Hashable {
              "com.sublimetext.4",
              "com.jetbrains.intellij":
             return .codeEditor
-        case "notion.id",
+        case "com.apple.TextEdit",
+             "com.apple.Notes",
+             "notion.id",
              "com.atlassian.jira",
              "com.electron.confluence":
             return .docs

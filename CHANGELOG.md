@@ -11,6 +11,10 @@ once public release tags begin.
   explicit in the UI.
 - Changed the default OpenAI model for new configurations to `gpt-5-nano`.
 - Added explicit browser review for unusual whole-paragraph output.
+- Centralized field capability decisions and added executable profiles for
+  TextEdit, Notes, Mail, Slack desktop, and Chromium web editors.
+- Added Gmail/Slack web approval and automatic-budget diagnostics to extension
+  status.
 
 ## 1.2.0 — 2026-08-21 (public beta)
 
