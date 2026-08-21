@@ -51,7 +51,7 @@ ACTUAL_CATEGORIES="$(sed -n '/enum Category:/,/var id:/p' Sources/Bean/UI/Settin
     exit 1
 }
 
-UPDATE_CONSUMERS="$(rg -l 'UpdateChecker\(\)' Sources/Bean || true)"
+UPDATE_CONSUMERS="$(grep -R -l --include='*.swift' 'UpdateChecker()' Sources/Bean || true)"
 [[ "$UPDATE_CONSUMERS" == "Sources/Bean/UI/SettingsView.swift" ]] || {
     echo "error: UpdateChecker must remain user-triggered from Settings only" >&2
     exit 1
