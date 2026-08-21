@@ -23,6 +23,11 @@ enum AccessibilityService {
         "AXTextField", "AXTextArea", "AXComboBox"
     ]
     private static let searchSubrole = "AXSearchField"
+    // `kAXEditableAncestorAttribute` is missing from older macOS SDK headers
+    // even though Chromium/Electron expose the stable AX attribute at runtime.
+    // Keep the raw accessibility name so Bean still builds with the macOS 15
+    // SDK used by GitHub-hosted runners.
+    private static let editableAncestorAttribute = "AXEditableAncestor"
     private static let interactiveNonTextRoles: Set<String> = [
         "AXButton", "AXCheckBox", "AXRadioButton", "AXSlider", "AXSwitch",
         "AXLink", "AXMenuItem", "AXPopUpButton", "AXTabGroup"
@@ -257,7 +262,7 @@ enum AccessibilityService {
             // A button inside a contenteditable container is still a button.
             editableAncestor = nil
         } else {
-            editableAncestor = elementAttribute(rawElement, kAXEditableAncestorAttribute as String)
+            editableAncestor = elementAttribute(rawElement, editableAncestorAttribute)
         }
         let element = editableAncestor ?? rawElement
         let role = stringAttribute(element, kAXRoleAttribute as String)
