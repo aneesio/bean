@@ -32,7 +32,9 @@ final class BeanBubbleService {
     var isShowing: Bool { controller.isShowing }
 
     func hide(_ reason: String? = nil) {
-        if controller.isShowing, let reason { diag(["bubbleShown": "false", "bubbleHiddenReason": reason]) }
+        // Log the decision even when the bubble never became visible. This is
+        // content-free and makes unsupported Electron fields diagnosable.
+        if let reason { diag(["bubbleShown": "false", "bubbleHiddenReason": reason]) }
         controller.hide()
     }
 
@@ -43,7 +45,9 @@ final class BeanBubbleService {
         guard PermissionService.isAccessibilityGranted else { return hide("noPermission") }
         guard let field = AccessibilityService.focusedField() else { return hide("noField") }
         guard !field.isSecure else { return hide("secureField") }
-        guard field.acceptsTextInput else { return hide("notEditableText") }
+        let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let electronTextSurface = AppCategory.isElectron(bundle) && field.isSemanticTextSurface
+        guard field.acceptsTextInput || electronTextSurface else { return hide("notEditableText") }
         guard categoryAllowed(field) else { return hide("appDisabled") }
 
         guard let origin = bubbleOrigin(for: field) else { return hide("noBounds") }

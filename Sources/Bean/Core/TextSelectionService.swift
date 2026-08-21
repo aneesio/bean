@@ -58,7 +58,8 @@ final class TextSelectionService {
         let preCount = ClipboardService.changeCount
         // Pre-read the focused value now so selection-mode verification has a
         // "before" baseline (the selection lives inside this value).
-        let valueBeforeSelection = AccessibilityService.readFocusedValue()
+        let fieldBeforeSelection = AccessibilityService.focusedField()
+        let valueBeforeSelection = fieldBeforeSelection?.value
         ClipboardService.simulateCopy()
         await Task.pause(Timing.afterCopy)
 
@@ -66,7 +67,7 @@ final class TextSelectionService {
            let copied = ClipboardService.readString(),
            !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Genuine selection.
-            let field = AccessibilityService.focusedField()
+            let field = fieldBeforeSelection ?? AccessibilityService.focusedField()
             pending = Pending(
                 mode: .selectedText,
                 savedClipboard: savedClipboard,
@@ -98,9 +99,11 @@ final class TextSelectionService {
             return .noSelectionOrFocusedField
         }
 
+        let electronTextSurface = AppCategory.isElectron(targetApp?.bundleIdentifier)
+            && field.isSemanticTextSurface
         if let value = field.value,
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           field.acceptsTextInput {
+           field.acceptsTextInput || electronTextSurface {
             if value.count > EngineConfig.maxAutoFieldCharacters {
                 Log.event("Focused field exceeds length guard")
                 return .tooLong
@@ -124,7 +127,7 @@ final class TextSelectionService {
         // Only when: enabled, the focused element is clearly a text field, and
         // the app isn't a document editor where Cmd+A grabs the whole buffer.
         let cmdAAllowed = EngineConfig.allowCmdAFieldFallback
-            && field.acceptsTextInput
+            && (field.acceptsTextInput || electronTextSurface)
             && !EngineConfig.isCmdAFallbackBlocked(bundleID: targetApp?.bundleIdentifier)
 
         guard cmdAAllowed else {
@@ -220,19 +223,25 @@ final class TextSelectionService {
         // A preview/menu click gives Bean focus. Reactivate the original app
         // before checking the target; checking first made preview replacements
         // incorrectly fall back to the clipboard every time.
-        activate(pending.targetApp)
-        await Task.pause(Timing.afterActivate)
-
-        guard let current = AccessibilityService.focusedElement() else {
-            Log.event("replace(selection): no focused element after activation; clipboard fallback")
+        guard await reactivateAndConfirm(pending.targetApp) else {
+            Log.event("replace(selection): source app not frontmost; clipboard fallback")
             ClipboardService.writeString(corrected)
             return .copiedToClipboardFallback
         }
-        if let target = pending.focusedElement,
+
+        let current = pending.targetApp.flatMap { AccessibilityService.focusedField(in: $0)?.element }
+        if let target = pending.focusedElement, let current,
            !AccessibilityService.isSameElement(current, target) {
             Log.event("replace(selection): target focus not restored; clipboard fallback")
             ClipboardService.writeString(corrected)
             return .copiedToClipboardFallback
+        }
+        if current == nil {
+            // A changed clipboard proves there was an explicit selection. Some
+            // Electron/web editors (notably Slack) expose no AX-focused element
+            // after app activation; once the exact source app is confirmed
+            // frontmost, send the paste and report it as unverified.
+            Log.event("replace(selection): AX focus unavailable; sending to confirmed source app")
         }
 
         ClipboardService.writeString(corrected)
@@ -256,9 +265,13 @@ final class TextSelectionService {
 
         // Preview/menu UI can temporarily own focus. Restore the source app, let
         // it reinstate its field, and only then perform the same-element guard.
-        activate(pending.targetApp)
-        await Task.pause(Timing.afterActivate)
-        guard let current = AccessibilityService.focusedElement(),
+        guard await reactivateAndConfirm(pending.targetApp) else {
+            Log.event("replace(field): source app not frontmost; clipboard fallback")
+            ClipboardService.writeString(corrected)
+            return .copiedToClipboardFallback
+        }
+        guard let app = pending.targetApp,
+              let current = AccessibilityService.focusedField(in: app)?.element,
               AccessibilityService.isSameElement(current, target) else {
             Log.event("replace(field): target focus not restored; clipboard fallback")
             ClipboardService.writeString(corrected)
@@ -360,6 +373,20 @@ final class TextSelectionService {
         } else {
             app.activate(options: [])
         }
+    }
+
+    /// Restores the exact source app before a synthetic paste. The retry covers
+    /// Electron apps that update macOS activation state one run-loop later.
+    private func reactivateAndConfirm(_ app: NSRunningApplication?) async -> Bool {
+        guard let app, !app.isTerminated else { return false }
+        activate(app)
+        await Task.pause(Timing.afterActivate)
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+            return true
+        }
+        activate(app)
+        await Task.pause(Timing.afterActivationRetry)
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
     }
 
     /// Restores the user's clipboard after a safe delay for paths that pasted,

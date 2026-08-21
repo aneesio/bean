@@ -294,6 +294,7 @@ Enable Inline Highlights, then in TextEdit type a sentence with several issues
 | BB17 | Shortcuts intact | ⌘⇧G and ⌃⌥B | Quick Proofread and Bean menu still work | ☐ |
 | BB18 | No extra monitors | Both bubble + passive on | One shared monitor; no duplicate suggestions | ☐ |
 | BB19 | Non-text AX controls | Focus buttons, sliders, checkboxes, static/disabled text | No bubble even if the control exposes a writable AXValue | ☐ |
+| BB20 | Slack Electron editor | Focus/type in the Slack desktop composer | Bubble appears when Slack exposes a semantic text role or web editable ancestor; never on Slack buttons/links | ☐ |
 
 ## Premium UX/UI QA
 
@@ -636,6 +637,9 @@ verified.
 2. **Expected:** text replaced. HUD shows "Text fixed" (Notes, verifiable) or
    "Replacement sent" (Slack/Electron, unverifiable) — never a false "Text
    fixed".
+3. **Slack fallback:** if its system-wide AX focus is unavailable, diagnostics
+   show `AX focus unavailable; sending to confirmed source app`; the selected
+   text is still pasted only after Slack is confirmed frontmost.
    ☐
 
 ### R4 — No changes needed

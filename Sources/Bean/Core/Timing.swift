@@ -14,6 +14,10 @@ enum Timing {
     /// pasteboard) before simulating Cmd+V, so the paste lands in the right app.
     static let afterActivate: Duration = .milliseconds(120)
 
+    /// One retry window for Electron apps whose activation/focus propagation is
+    /// slower than native AppKit controls.
+    static let afterActivationRetry: Duration = .milliseconds(350)
+
     /// Wait after simulating Cmd+V before reading back the field for
     /// verification.
     static let afterPaste: Duration = .milliseconds(220)

@@ -208,7 +208,10 @@ reveals the extension folder.
 
 - **Slack:** Slack **web** can be supported through the browser extension; Slack
   **desktop** (Electron) falls back to the Bean Bubble / Passive Suggestions
-  unless macOS exposes reliable text positions.
+  unless macOS exposes reliable text positions. Bean also queries Slack's
+  application-specific Accessibility tree when the system-wide focus query is
+  unavailable. Explicit selected-text fixes use a source-app-confirmed paste and
+  honestly report "Replacement sent" when Slack cannot expose verification.
 - **Google Docs:** its canvas/custom editor isn't supported for inline; Bean
   degrades to the Bubble / Passive Suggestions / shortcuts rather than drawing
   fake underlines.

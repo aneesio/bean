@@ -23,6 +23,10 @@ enum AccessibilityService {
         "AXTextField", "AXTextArea", "AXComboBox"
     ]
     private static let searchSubrole = "AXSearchField"
+    private static let interactiveNonTextRoles: Set<String> = [
+        "AXButton", "AXCheckBox", "AXRadioButton", "AXSlider", "AXSwitch",
+        "AXLink", "AXMenuItem", "AXPopUpButton", "AXTabGroup"
+    ]
 
     // MARK: - Permission
 
@@ -42,13 +46,29 @@ enum AccessibilityService {
     /// frontmost), or nil if it can't be resolved.
     static func focusedElement() -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
+        if let element = focusedElement(from: systemWide) { return element }
+
+        // Chromium/Electron apps occasionally fail the system-wide focused-UI
+        // query while still answering it on their application AX object.
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        return focusedElement(in: app)
+    }
+
+    /// Reads focus from a specific application AX object. Callers must still
+    /// confirm that the app is frontmost before sending synthetic keystrokes.
+    static func focusedElement(in app: NSRunningApplication) -> AXUIElement? {
+        focusedElement(from: AXUIElementCreateApplication(app.processIdentifier))
+    }
+
+    private static func focusedElement(from root: AXUIElement) -> AXUIElement? {
         var focused: AnyObject?
         let result = AXUIElementCopyAttributeValue(
-            systemWide,
+            root,
             kAXFocusedUIElementAttribute as CFString,
             &focused
         )
-        guard result == .success, let element = focused else { return nil }
+        guard result == .success, let element = focused,
+              CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
         return (element as! AXUIElement)
     }
 
@@ -79,6 +99,14 @@ enum AccessibilityService {
         return value as? Bool
     }
 
+    private static func elementAttribute(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+        var value: AnyObject?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success, let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
+    }
+
     /// Reads the full text value (`kAXValueAttribute`) of a specific element.
     static func value(of element: AXUIElement) -> String? {
         stringAttribute(element, kAXValueAttribute as String)
@@ -86,8 +114,7 @@ enum AccessibilityService {
 
     /// Reads the full text value of the currently focused element.
     static func readFocusedValue() -> String? {
-        guard let element = focusedElement() else { return nil }
-        return value(of: element)
+        focusedField()?.value
     }
 
     /// Reads the current selection range of an element (kAXSelectedTextRange).
@@ -166,6 +193,7 @@ enum AccessibilityService {
         let isValueSettable: Bool
         let isSelectedTextSettable: Bool
         let isEnabled: Bool
+        let hasEditableAncestor: Bool
 
         /// True when the focused element looks like an editable text control we
         /// can safely consider for text operations. A settable value by itself is
@@ -173,14 +201,22 @@ enum AccessibilityService {
         var isTextLike: Bool {
             if let role, AccessibilityService.textRoles.contains(role) { return true }
             if let subrole, subrole == AccessibilityService.searchSubrole { return true }
-            return false
+            return hasEditableAncestor
+        }
+
+        /// The focused item has an actual text-input semantic role (or a web
+        /// editable ancestor), and is neither disabled nor secure. Electron can
+        /// expose this correctly while denying direct AX writes.
+        var isSemanticTextSurface: Bool {
+            isEnabled && !isSecure && isTextLike
         }
 
         /// Conservative editability gate shared by the bubble, passive checks,
         /// inline checks, and whole-field replacement. Read-only/disabled text
         /// and non-text controls must never qualify.
         var acceptsTextInput: Bool {
-            isEnabled && !isSecure && isTextLike && (isValueSettable || isSelectedTextSettable)
+            isSemanticTextSurface
+                && (hasEditableAncestor || isValueSettable || isSelectedTextSettable)
         }
 
         /// True when this is a small, conservative field (search box / address
@@ -204,7 +240,26 @@ enum AccessibilityService {
     /// Captures the current focused element with its role/subrole/value, or nil
     /// if nothing is focused.
     static func focusedField() -> FocusedField? {
-        guard let element = focusedElement() else { return nil }
+        guard let rawElement = focusedElement() else { return nil }
+        return focusedField(from: rawElement)
+    }
+
+    /// App-specific variant used after reactivating an Electron/browser source.
+    static func focusedField(in app: NSRunningApplication) -> FocusedField? {
+        guard let rawElement = focusedElement(in: app) else { return nil }
+        return focusedField(from: rawElement)
+    }
+
+    private static func focusedField(from rawElement: AXUIElement) -> FocusedField {
+        let rawRole = stringAttribute(rawElement, kAXRoleAttribute as String)
+        let editableAncestor: AXUIElement?
+        if let rawRole, interactiveNonTextRoles.contains(rawRole) {
+            // A button inside a contenteditable container is still a button.
+            editableAncestor = nil
+        } else {
+            editableAncestor = elementAttribute(rawElement, kAXEditableAncestorAttribute as String)
+        }
+        let element = editableAncestor ?? rawElement
         let role = stringAttribute(element, kAXRoleAttribute as String)
         let subrole = stringAttribute(element, kAXSubroleAttribute as String)
         let secure = (role?.contains("Secure") ?? false) || (subrole?.contains("Secure") ?? false)
@@ -217,7 +272,8 @@ enum AccessibilityService {
             placeholder: stringAttribute(element, kAXPlaceholderValueAttribute as String),
             isValueSettable: isValueSettable(element),
             isSelectedTextSettable: isAttributeSettable(kAXSelectedTextAttribute as String, on: element),
-            isEnabled: boolAttribute(element, kAXEnabledAttribute as String) ?? true
+            isEnabled: boolAttribute(element, kAXEnabledAttribute as String) ?? true,
+            hasEditableAncestor: editableAncestor != nil
         )
     }
 }
