@@ -1,10 +1,11 @@
 import SwiftUI
 
-// First-run onboarding — a calm, premium five-step flow. The "Try Bean" step
-// corrects a LOCAL field only (calls WritingTransformService directly; never
-// touches the clipboard or other apps).
+// First-run onboarding — a calm five-step flow whose verification step uses a
+// disposable TextEdit file to prove the real cross-app Accessibility path.
 struct OnboardingView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var history: OperationHistoryStore
+    @ObservedObject var setupStatus: SetupStatusStore
 
     /// Called when the user finishes or skips. The presenter marks onboarding
     /// complete and closes the window.
@@ -13,7 +14,7 @@ struct OnboardingView: View {
     @State private var step: Step = .welcome
 
     private enum Step: Int, CaseIterable {
-        case welcome, provider, permissions, tryBean, done
+        case welcome, provider, permissions, verify, done
     }
 
     var body: some View {
@@ -63,7 +64,8 @@ struct OnboardingView: View {
         case .permissions: stepFrame("Grant Accessibility", "Bean needs Accessibility permission to read and replace text when you ask it to.") {
             PermissionsSection(compact: true)
         }
-        case .tryBean: TryBeanSection(settings: settings)
+        case .verify:
+            CrossAppVerificationSection(settings: settings, history: history, setupStatus: setupStatus)
         case .done: doneStep
         }
     }
@@ -103,13 +105,13 @@ struct OnboardingView: View {
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: BeanDesign.Spacing.lg) {
             HStack(spacing: BeanDesign.Spacing.md) {
-                IconBadge(symbol: settings.isSetupComplete ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
-                          tint: settings.isSetupComplete ? BeanDesign.success : BeanDesign.warning, size: 40)
-                Text(settings.isSetupComplete ? "You're all set" : "Almost there")
+                IconBadge(symbol: isFullyVerified ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+                          tint: isFullyVerified ? BeanDesign.success : BeanDesign.warning, size: 40)
+                Text(isFullyVerified ? "You're all set" : "Almost there")
                     .font(BeanDesign.Typography.title())
             }
 
-            if settings.isSetupComplete {
+            if isFullyVerified {
                 Text("Bean lives in your menu bar. Use these shortcuts anywhere:")
                     .foregroundColor(.secondary)
                 BeanCard {
@@ -127,11 +129,19 @@ struct OnboardingView: View {
                     if !PermissionService.isAccessibilityGranted {
                         Label("Accessibility permission not granted — Bean can't fix text without it.", systemImage: "lock.shield")
                     }
+                    if !history.hasConfirmedExternalReplacement {
+                        Label("Cross-app replacement has not been verified yet.", systemImage: "rectangle.and.pencil.and.ellipsis")
+                    }
                     Text("You can finish now and complete these in Settings.")
                         .font(BeanDesign.Typography.caption()).foregroundColor(.secondary)
                 }
             }
         }
+    }
+
+    private var isFullyVerified: Bool {
+        settings.isSetupComplete && settings.isProviderConnectionVerified
+            && history.hasConfirmedExternalReplacement
     }
 
     private func shortcutRow(_ title: String, _ shortcut: String) -> some View {

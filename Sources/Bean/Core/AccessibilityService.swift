@@ -246,16 +246,23 @@ enum AccessibilityService {
     /// if nothing is focused.
     static func focusedField() -> FocusedField? {
         guard let rawElement = focusedElement() else { return nil }
-        return focusedField(from: rawElement)
+        return focusedField(from: rawElement, includeValue: true)
     }
 
     /// App-specific variant used after reactivating an Electron/browser source.
     static func focusedField(in app: NSRunningApplication) -> FocusedField? {
         guard let rawElement = focusedElement(in: app) else { return nil }
-        return focusedField(from: rawElement)
+        return focusedField(from: rawElement, includeValue: true)
     }
 
-    private static func focusedField(from rawElement: AXUIElement) -> FocusedField {
+    /// Metadata-only focused-field snapshot used by Setup & Status. It does not
+    /// read AXValue, selected text, labels, or placeholders.
+    static func focusedFieldMetadata(in app: NSRunningApplication) -> FocusedField? {
+        guard let rawElement = focusedElement(in: app) else { return nil }
+        return focusedField(from: rawElement, includeValue: false)
+    }
+
+    private static func focusedField(from rawElement: AXUIElement, includeValue: Bool) -> FocusedField {
         let rawRole = stringAttribute(rawElement, kAXRoleAttribute as String)
         let editableAncestor: AXUIElement?
         if let rawRole, interactiveNonTextRoles.contains(rawRole) {
@@ -272,9 +279,9 @@ enum AccessibilityService {
             element: element,
             role: role,
             subrole: subrole,
-            value: secure ? nil : value(of: element),
-            title: stringAttribute(element, kAXTitleAttribute as String),
-            placeholder: stringAttribute(element, kAXPlaceholderValueAttribute as String),
+            value: includeValue && !secure ? value(of: element) : nil,
+            title: includeValue ? stringAttribute(element, kAXTitleAttribute as String) : nil,
+            placeholder: includeValue ? stringAttribute(element, kAXPlaceholderValueAttribute as String) : nil,
             isValueSettable: isValueSettable(element),
             isSelectedTextSettable: isAttributeSettable(kAXSelectedTextAttribute as String, on: element),
             isEnabled: boolAttribute(element, kAXEnabledAttribute as String) ?? true,

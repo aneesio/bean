@@ -8,6 +8,8 @@ import AppKit
 struct Diagnostics {
     let settings: AppSettings
     let store: UserContentStore
+    let history: OperationHistoryStore
+    let setupStatus: SetupStatusStore
 
     static var appPath: String { Bundle.main.bundlePath }
     static var bundleID: String { Bundle.main.bundleIdentifier ?? "unknown (unbundled)" }
@@ -46,6 +48,8 @@ struct Diagnostics {
         lines.append("quickProofreadShortcut: \(settings.shortcut.displayString)")
         lines.append("beanMenuShortcut: \(settings.beanMenuShortcut.displayString)")
         lines.append("onboardingComplete: \(settings.onboardingComplete ? "yes" : "no")")
+        lines.append("providerConnectionVerified: \(settings.isProviderConnectionVerified ? "yes" : "no")")
+        lines.append("crossAppReplacementVerified: \(history.hasConfirmedExternalReplacement ? "yes" : "no")")
         lines.append("diagnosticsEnabled: \(settings.diagnosticsEnabled ? "yes" : "no")")
 
         // Content-free counts only — never the actual profiles/cards/terms.
@@ -88,6 +92,16 @@ struct Diagnostics {
         }
         if let warning = Self.pathWarning {
             lines.append("pathWarning: \(warning)")
+        }
+        if let report = setupStatus.latestFieldInspection {
+            lines.append("")
+            lines.append("Latest metadata-only field check")
+            lines.append(contentsOf: report.diagnosticsLines)
+        }
+        if !history.recentDiagnosticsLines.isEmpty {
+            lines.append("")
+            lines.append("Recent content-free operations (newest first)")
+            lines.append(contentsOf: history.recentDiagnosticsLines)
         }
         return lines.joined(separator: "\n")
     }

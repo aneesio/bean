@@ -15,6 +15,7 @@ import AppKit
 final class TextActionCoordinator {
     private let settings: AppSettings
     private let userContent: UserContentStore
+    private let history: OperationHistoryStore
     private let statusHUD: StatusHUD
     private let selection = TextSelectionService()
     private let transformer = WritingTransformService()
@@ -25,9 +26,11 @@ final class TextActionCoordinator {
     private var isRunning = false
     private var sessionActive = false
 
-    init(settings: AppSettings, userContent: UserContentStore, statusHUD: StatusHUD) {
+    init(settings: AppSettings, userContent: UserContentStore,
+         history: OperationHistoryStore, statusHUD: StatusHUD) {
         self.settings = settings
         self.userContent = userContent
+        self.history = history
         self.statusHUD = statusHUD
     }
 
@@ -67,8 +70,8 @@ final class TextActionCoordinator {
         Task { [weak self] in
             guard let self else { return }
             defer { self.isRunning = false }
-            guard self.ready() else { return }
-            guard let job = await self.acquire() else { return }
+            guard self.ready(requestedAction: WritingAction.proofread.rawValue) else { return }
+            guard let job = await self.acquire(requestedAction: WritingAction.proofread.rawValue) else { return }
             await self.process(job: job, action: .proofread, preview: false, explicitProfile: nil)
         }
     }
@@ -82,8 +85,8 @@ final class TextActionCoordinator {
         Task { [weak self] in
             guard let self else { return }
             defer { self.isRunning = false }
-            guard self.ready() else { return }
-            guard let job = await self.acquire() else { return }
+            guard self.ready(requestedAction: action.rawValue) else { return }
+            guard let job = await self.acquire(requestedAction: action.rawValue) else { return }
             await self.process(job: job, action: action, preview: action.requiresPreview, explicitProfile: nil)
         }
     }
@@ -95,9 +98,9 @@ final class TextActionCoordinator {
         Task { [weak self] in
             guard let self else { return }
             defer { self.isRunning = false }
-            guard self.ready() else { return }
+            guard self.ready(requestedAction: "openMenu") else { return }
             statusHUD.show(.progress, "Opening Bean…")
-            guard let job = await self.acquire() else { return }
+            guard let job = await self.acquire(requestedAction: "openMenu") else { return }
             self.sessionActive = true
             statusHUD.dismiss()
             let profiles = self.userContent.profiles.map { (id: $0.id, name: $0.name) }
@@ -116,21 +119,23 @@ final class TextActionCoordinator {
 
     // MARK: - Pipeline
 
-    private func ready() -> Bool {
+    private func ready(requestedAction: String) -> Bool {
         guard PermissionService.isAccessibilityGranted else {
+            recordPreflight(action: requestedAction, outcome: "accessibilityPermissionRequired")
             statusHUD.show(.warning, "Accessibility permission required")
             PermissionService.requestAccessibility()
             PermissionService.openAccessibilitySettings()
             return false
         }
         guard !settings.apiKey.isEmpty else {
+            recordPreflight(action: requestedAction, outcome: "missingAPIKey")
             statusHUD.show(.warning, "Add an API key in Settings")
             return false
         }
         return true
     }
 
-    private func acquire() async -> Job? {
+    private func acquire(requestedAction: String) async -> Job? {
         let acquisition = await selection.acquire(
             allowFocusedFieldFallback: settings.fixFocusedFieldWhenNoSelection
         )
@@ -139,18 +144,22 @@ final class TextActionCoordinator {
             let (leading, core, trailing) = TextNormalizer.split(text)
             return Job(original: text, leading: leading, core: core, trailing: trailing, mode: mode, context: context)
         case .noSelectionOrFocusedField:
+            recordPreflight(action: requestedAction, outcome: "noSelectionOrFocusedField")
             statusHUD.show(.warning, "No text selected or focused text field found")
             return nil
         case .tooLong:
+            recordPreflight(action: requestedAction, outcome: "inputTooLong")
             statusHUD.show(.warning, "Focused text is too long. Select a smaller section.")
             return nil
         case .failed(let reason):
+            recordPreflight(action: requestedAction, outcome: "acquisitionFailed")
             statusHUD.show(.error, reason)
             return nil
         }
     }
 
     private func process(job: Job, action: WritingAction, preview: Bool, explicitProfile: UUID?) async {
+        let operationStartedAt = Date()
         // Proofread keeps its local fast-paths (typo / short / clean single word).
         if action == .proofread {
             if TextNormalizer.isSingleWord(job.core),
@@ -159,17 +168,25 @@ final class TextActionCoordinator {
                 let result = await selection.replace(corrected: job.leading + fixedWord + job.trailing,
                                                      original: job.original, mode: job.mode)
                 report(result, mode: job.mode)
-                diagnostics(job: job, action: action, outLen: fixedWord.count, validator: "local_typo", replacement: resultCode(result))
+                diagnostics(job: job, action: action, outLen: fixedWord.count,
+                            validator: "local_typo", replacement: resultCode(result),
+                            startedAt: operationStartedAt)
                 sessionActive = false
                 return
             }
             if job.core.count < 4 {
+                diagnostics(job: job, action: action, outLen: 0, validator: "notRun",
+                            replacement: "textTooShort", startedAt: operationStartedAt)
                 endSession(restore: true, .warning, "Text too short to fix"); return
             }
             if TextNormalizer.isCleanSingleWord(job.core) {
+                diagnostics(job: job, action: action, outLen: job.core.count, validator: "localClean",
+                            replacement: "noChangesNeeded", startedAt: operationStartedAt)
                 endSession(restore: true, .info, "No changes needed"); return
             }
         } else if job.core.count < 4 {
+            diagnostics(job: job, action: action, outLen: 0, validator: "notRun",
+                        replacement: "textTooShort", startedAt: operationStartedAt)
             endSession(restore: true, .warning, "Text too short to fix"); return
         }
 
@@ -188,8 +205,12 @@ final class TextActionCoordinator {
                 apiKey: settings.apiKey, timeout: settings.timeoutSeconds
             )
         } catch let error as LLMError {
+            diagnostics(job: job, action: action, outLen: 0, validator: "providerError",
+                        replacement: providerErrorCode(error), startedAt: operationStartedAt)
             endSession(restore: true, .error, error.errorDescription ?? "Could not transform text"); return
         } catch {
+            diagnostics(job: job, action: action, outLen: 0, validator: "providerError",
+                        replacement: "unexpectedProviderError", startedAt: operationStartedAt)
             endSession(restore: true, .error, "Could not transform text: \(error.localizedDescription)"); return
         }
 
@@ -197,24 +218,29 @@ final class TextActionCoordinator {
 
         if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
             Log.event("validation: blocked (\(reason))")
-            diagnostics(job: job, action: action, outLen: outCore.count, validator: reason, replacement: "blocked")
+            diagnostics(job: job, action: action, outLen: outCore.count, validator: reason,
+                        replacement: "blocked", startedAt: operationStartedAt)
             endSession(restore: true, .warning, "Transformation looked unsafe. Original text was not changed.")
             return
         }
 
         if outCore == job.core {
-            diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok", replacement: "noChangesNeeded")
+            diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok",
+                        replacement: "noChangesNeeded", startedAt: operationStartedAt)
             endSession(restore: true, .info, "No changes needed")
             return
         }
 
         if preview {
+            diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok",
+                        replacement: "previewReady", startedAt: operationStartedAt)
             presentPreview(job: job, action: action, outCore: outCore, explicitProfile: explicitProfile, personalization: personalization)
         } else {
             let finalText = job.leading + outCore + job.trailing
             let result = await selection.replace(corrected: finalText, original: job.original, mode: job.mode)
             report(result, mode: job.mode)
-            diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok", replacement: resultCode(result))
+            diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok",
+                        replacement: resultCode(result), startedAt: operationStartedAt)
             sessionActive = false
         }
     }
@@ -229,20 +255,23 @@ final class TextActionCoordinator {
         model.usedContext = personalization.usedContext
         model.allowsReplace = action.allowsReplaceFromPreview
         model.helperText = action.previewHelperText
-        model.onReplace = { [weak self] in self?.previewReplace(job: job, model: model) }
+        model.onReplace = { [weak self] in self?.previewReplace(job: job, action: action, model: model) }
         model.onCopy = { [weak self] in self?.previewCopy(model: model) }
         model.onTryAgain = { [weak self] in self?.previewRetry(job: job, action: action, model: model, explicitProfile: explicitProfile) }
         model.onCancel = { [weak self] in self?.previewCancel() }
         actionMenu.presentPreview(model)
     }
 
-    private func previewReplace(job: Job, model: PreviewModel) {
+    private func previewReplace(job: Job, action: WritingAction, model: PreviewModel) {
+        let startedAt = Date()
         let finalText = job.leading + model.transformedText + job.trailing
         Task { [weak self] in
             guard let self else { return }
             let result = await self.selection.replace(corrected: finalText, original: job.original, mode: job.mode)
             self.report(result, mode: job.mode)
-            self.diagnostics(job: job, action: nil, outLen: model.transformedText.count, validator: "ok", replacement: self.resultCode(result))
+            self.diagnostics(job: job, action: action, outLen: model.transformedText.count,
+                             validator: "previewApproved", replacement: self.resultCode(result),
+                             startedAt: startedAt)
             self.actionMenu.dismissPreview()
             self.sessionActive = false
         }
@@ -316,7 +345,8 @@ final class TextActionCoordinator {
 
     // MARK: - Diagnostics (text-free)
 
-    private func diagnostics(job: Job, action: WritingAction?, outLen: Int, validator: String, replacement: String) {
+    private func diagnostics(job: Job, action: WritingAction?, outLen: Int, validator: String,
+                             replacement: String, startedAt: Date) {
         Log.diag([
             "provider": settings.provider.rawValue,
             "app": job.context.appName ?? "unknown",
@@ -327,6 +357,53 @@ final class TextActionCoordinator {
             "validatorResult": validator,
             "replacementResult": replacement
         ])
+        let local = validator == "local_typo" || validator == "localClean"
+        history.record(OperationRecord(
+            source: local ? .local : .manual,
+            appName: job.context.appName,
+            appBundleIdentifier: job.context.bundleIdentifier,
+            appCategory: AppCategory.from(bundleIdentifier: job.context.bundleIdentifier).rawValue,
+            action: action?.rawValue ?? "unknown",
+            inputMode: job.context.acquisitionMode.rawLabel,
+            inputLength: job.core.count,
+            outputLength: outLen,
+            provider: local ? nil : settings.provider.rawValue,
+            model: local ? nil : settings.model,
+            durationMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1_000),
+            safetyResult: validator,
+            outcome: replacement,
+            usageEstimated: true
+        ))
+    }
+
+    private func recordPreflight(action: String, outcome: String) {
+        let app = NSWorkspace.shared.frontmostApplication
+        history.record(OperationRecord(
+            source: .manual,
+            appName: app?.localizedName,
+            appBundleIdentifier: app?.bundleIdentifier,
+            appCategory: AppCategory.from(bundleIdentifier: app?.bundleIdentifier).rawValue,
+            action: action,
+            inputMode: "notAcquired",
+            inputLength: 0,
+            provider: settings.provider.rawValue,
+            model: settings.model,
+            safetyResult: "notRun",
+            outcome: outcome,
+            usageEstimated: true
+        ))
+    }
+
+    private func providerErrorCode(_ error: LLMError) -> String {
+        switch error {
+        case .missingAPIKey: return "missingAPIKey"
+        case .invalidAPIKey: return "invalidAPIKey"
+        case .network: return "networkError"
+        case .timeout: return "timeout"
+        case .emptyResponse: return "emptyResponse"
+        case .server(let status, _): return "serverError\(status)"
+        case .decoding: return "decodingError"
+        }
     }
 
     private func resultCode(_ result: TextSelectionService.ReplacementResult) -> String {

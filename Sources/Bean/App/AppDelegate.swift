@@ -6,11 +6,14 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = AppSettings()
     private let userContent = UserContentStore()
+    private let operationHistory = OperationHistoryStore()
+    private let setupStatus = SetupStatusStore()
     private let statusHUD = StatusHUD()
 
     private lazy var coordinator = TextActionCoordinator(
         settings: settings,
         userContent: userContent,
+        history: operationHistory,
         statusHUD: statusHUD
     )
 
@@ -40,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var windowPresenter = WindowPresenter(
         settings: settings,
         userContent: userContent,
+        history: operationHistory,
+        setupStatus: setupStatus,
         onCheckPermissions: { [weak self] in self?.coordinator.checkPermissions() },
         onApplyShortcut: { [weak self] slot, shortcut in self?.applyShortcut(slot, shortcut) }
     )
@@ -47,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var menuBarController = MenuBarController(
         onProofreadNow: { [weak self] in self?.coordinator.fixSelectedText() },
         onOpenBeanMenu: { [weak self] in self?.coordinator.showActionMenu() },
+        onCheckCurrentField: { [weak self] in self?.checkCurrentField() },
         onCheckPermissions: { [weak self] in self?.coordinator.checkPermissions() },
         onShowSettings: { [weak self] in self?.windowPresenter.showSettings() },
         onShowAbout: { [weak self] in self?.windowPresenter.showAbout() }
@@ -73,6 +79,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onInlineChanged = { [weak self] in self?.typingDispatcher.refresh() }
         settings.onBubbleChanged = { [weak self] in self?.typingDispatcher.refresh() }
         typingDispatcher.refresh()
+    }
+
+    private func checkCurrentField() {
+        let report = setupStatus.inspectCurrentField(settings: settings)
+        operationHistory.record(OperationRecord(
+            source: .setup,
+            appName: report.appName,
+            appBundleIdentifier: report.bundleIdentifier,
+            appCategory: report.appCategory,
+            action: "fieldCheck",
+            inputMode: "metadataOnly",
+            inputLength: 0,
+            safetyResult: "notRun",
+            outcome: report.focusedFieldReplacement.level.rawValue,
+            usageEstimated: false
+        ))
+        let style: StatusHUD.Style = report.focusedFieldReplacement.level == .unsupported ? .warning : .success
+        statusHUD.show(style, report.headline)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

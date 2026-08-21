@@ -43,6 +43,12 @@ authorized to send it to your selected provider.
   service `com.bean.apikeys`.
 - Preferences and feature flags are stored in macOS UserDefaults for the bundle
   identifier `com.bean.app`.
+- Bean keeps a bounded local history of up to 50 content-free operation records
+  in UserDefaults. A record may contain timestamp, app name/bundle/category,
+  action, input mode and length, provider/model, timing, safety/replacement
+  result codes, and token counts or estimates. It never contains source text,
+  transformed text, prompts, responses, clipboard contents, window titles,
+  field labels, or field values. You can inspect and erase it in Setup & Status.
 - Style profiles, context cards, dictionary terms, and app rules are stored in
   `~/Library/Application Support/Bean/userContent.json`.
 - Bean temporarily uses the system clipboard for text acquisition and
@@ -56,10 +62,14 @@ or provider responses.
 ## Diagnostics
 
 Bean writes a small number of content-free operational events to Apple's unified
-log. Optional diagnostics are off by default. When enabled, diagnostics may add
+log. Optional diagnostic logging is off by default. When enabled, logs may add
 app/provider names, lengths, feature states, result codes, and timing-related
 state. They do not include text, prompts, responses, API keys, or clipboard
 contents.
+
+The local operation history described above is separate from diagnostic logging
+and exists so users can understand recent failures and create useful support
+reports. Bean never uploads either source automatically.
 
 Logs remain subject to macOS log retention and controls on your device. Bean
 does not upload them.

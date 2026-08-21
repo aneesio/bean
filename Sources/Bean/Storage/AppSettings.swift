@@ -67,6 +67,9 @@ final class AppSettings: ObservableObject {
         static let fixFocusedField = "fixFocusedFieldWhenNoSelection"
         static let diagnostics = "diagnosticsEnabled"
         static let onboardingComplete = "onboardingComplete"
+        static let providerVerifiedAt = "providerVerifiedAt"
+        static let providerVerifiedKind = "providerVerifiedKind"
+        static let providerVerifiedModel = "providerVerifiedModel"
         static let shortcut = "globalShortcut"
         static let beanMenuShortcut = "beanMenuShortcut"
         // Phase 5 — Passive Suggestions
@@ -114,11 +117,15 @@ final class AppSettings: ObservableObject {
             if model.isEmpty || oldValue.ownsModelID(model) {
                 model = provider.defaultModel
             }
+            invalidateProviderVerification()
         }
     }
 
     @Published var model: String {
-        didSet { defaults.set(model, forKey: Keys.model) }
+        didSet {
+            defaults.set(model, forKey: Keys.model)
+            if model != oldValue { invalidateProviderVerification() }
+        }
     }
 
     @Published var timeoutSeconds: Double {
@@ -145,6 +152,8 @@ final class AppSettings: ObservableObject {
     @Published var onboardingComplete: Bool {
         didSet { defaults.set(onboardingComplete, forKey: Keys.onboardingComplete) }
     }
+
+    @Published private(set) var providerConnectionVerifiedAt: Date?
 
     /// A content-free persistence error shown beside the API-key field.
     @Published private(set) var keychainError: String?
@@ -268,6 +277,9 @@ final class AppSettings: ObservableObject {
 
         self.diagnosticsEnabled = defaults.bool(forKey: Keys.diagnostics) // default false
         self.onboardingComplete = defaults.bool(forKey: Keys.onboardingComplete) // default false
+        let verifiedTimestamp = defaults.double(forKey: Keys.providerVerifiedAt)
+        self.providerConnectionVerifiedAt = verifiedTimestamp > 0
+            ? Date(timeIntervalSince1970: verifiedTimestamp) : nil
         self.keychainError = nil
 
         // Passive Suggestions — off by default; sensible defaults otherwise.
@@ -343,9 +355,11 @@ final class AppSettings: ObservableObject {
     }
 
     private func persistAPIKey(_ value: String, for provider: ProviderKind) {
+        let previousValue = KeychainService.get(account: provider.keychainAccount) ?? ""
         let status = KeychainService.set(value, account: provider.keychainAccount)
         if status == errSecSuccess {
             keychainError = nil
+            if previousValue != value { invalidateProviderVerification() }
         } else {
             keychainError = "Couldn't save the API key: \(KeychainService.errorMessage(for: status))"
             Log.event("keychain: write failed status=\(status)")
@@ -353,6 +367,28 @@ final class AppSettings: ObservableObject {
     }
 
     var hasAPIKey: Bool { !apiKey.isEmpty }
+
+    var isProviderConnectionVerified: Bool {
+        guard hasAPIKey, providerConnectionVerifiedAt != nil else { return false }
+        return defaults.string(forKey: Keys.providerVerifiedKind) == provider.rawValue
+            && defaults.string(forKey: Keys.providerVerifiedModel) == model
+    }
+
+    func markProviderConnectionVerified(provider: ProviderKind, model: String) {
+        guard provider == self.provider, model == self.model, hasAPIKey else { return }
+        let now = Date()
+        providerConnectionVerifiedAt = now
+        defaults.set(now.timeIntervalSince1970, forKey: Keys.providerVerifiedAt)
+        defaults.set(provider.rawValue, forKey: Keys.providerVerifiedKind)
+        defaults.set(model, forKey: Keys.providerVerifiedModel)
+    }
+
+    func invalidateProviderVerification() {
+        providerConnectionVerifiedAt = nil
+        defaults.removeObject(forKey: Keys.providerVerifiedAt)
+        defaults.removeObject(forKey: Keys.providerVerifiedKind)
+        defaults.removeObject(forKey: Keys.providerVerifiedModel)
+    }
 
     /// True when merely pausing after typing can spend provider tokens. The Bean
     /// Bubble and explicit shortcuts are intentionally not included.

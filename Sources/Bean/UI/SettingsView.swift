@@ -17,15 +17,18 @@ struct SettingsActions {
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UserContentStore
+    @ObservedObject var history: OperationHistoryStore
+    @ObservedObject var setupStatus: SetupStatusStore
     let actions: SettingsActions
 
-    @State private var selection: Category? = .general
+    @State private var selection: Category? = .status
     @State private var loginEnabled: Bool = LoginItemService.isEnabled
     @State private var loginError: String?
     @State private var proofreadError: String?
     @State private var beanMenuError: String?
 
     enum Category: String, CaseIterable, Identifiable {
+        case status = "Setup & Status"
         case general = "General"
         case provider = "AI Provider"
         case shortcuts = "Shortcuts"
@@ -38,6 +41,7 @@ struct SettingsView: View {
         var id: String { rawValue }
         var symbol: String {
             switch self {
+            case .status: return "checklist"
             case .general: return "gearshape"
             case .provider: return "cpu"
             case .shortcuts: return "command"
@@ -75,6 +79,8 @@ struct SettingsView: View {
             Label(category.rawValue, systemImage: category.symbol)
             Spacer()
             switch category {
+            case .status where !isFullyVerified:
+                StatusPill(text: "Action", kind: .warning, showsIcon: false)
             case .provider where !settings.hasAPIKey:
                 StatusPill(text: "Set up", kind: .warning, showsIcon: false)
             case .general where !PermissionService.isAccessibilityGranted:
@@ -90,6 +96,10 @@ struct SettingsView: View {
     @ViewBuilder
     private var detailSections: some View {
         switch selection ?? .general {
+        case .status:
+            Section("Readiness") { readinessSection }
+            Section("Current field") { fieldInspectionSection }
+            Section("Recent operations (content-free)") { recentOperationsSection }
         case .general:
             if !settings.isSetupComplete { Section { setupWarning } }
             Section("General") { generalSection }
@@ -119,6 +129,125 @@ struct SettingsView: View {
             Section("Data") { DataSection(store: store) }
         case .troubleshooting:
             Section("Troubleshooting") { troubleshootingSection }
+        }
+    }
+
+    private var isFullyVerified: Bool {
+        settings.isSetupComplete && settings.isProviderConnectionVerified
+            && history.hasConfirmedExternalReplacement
+    }
+
+    private var readinessSection: some View {
+        Group {
+            setupCheckRow(
+                "Installed in Applications",
+                ready: Diagnostics.pathWarning == nil,
+                detail: Diagnostics.pathWarning == nil ? "/Applications/Bean.app" : "Move Bean to /Applications"
+            )
+            setupCheckRow(
+                "API key saved",
+                ready: settings.hasAPIKey,
+                detail: settings.hasAPIKey ? settings.provider.displayName : "Add a key in AI Provider"
+            )
+            setupCheckRow(
+                "Provider connection verified",
+                ready: settings.isProviderConnectionVerified,
+                detail: settings.isProviderConnectionVerified ? settings.model : "Use Test API key in AI Provider"
+            )
+            setupCheckRow(
+                "Accessibility",
+                ready: PermissionService.isAccessibilityGranted,
+                detail: PermissionService.isAccessibilityGranted ? "Allowed" : "Permission required"
+            )
+            setupCheckRow(
+                "Cross-app replacement",
+                ready: history.hasConfirmedExternalReplacement,
+                detail: history.hasConfirmedExternalReplacement ? "Verified" : "Run the TextEdit verification"
+            )
+            Button("Open TextEdit verification") {
+                try? setupStatus.openTextEditVerificationFile()
+            }
+            .disabled(!settings.hasAPIKey || !PermissionService.isAccessibilityGranted)
+            Text("In TextEdit, click the synthetic sentence and press \(settings.shortcut.displayString). A confirmed replacement completes this check.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func setupCheckRow(_ title: String, ready: Bool, detail: String) -> some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                Text(detail).foregroundColor(.secondary)
+                StatusPill(text: ready ? "Ready" : "Needed",
+                           kind: ready ? .success : .warning, showsIcon: false)
+            }
+        } label: {
+            Label(title, systemImage: ready ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(ready ? BeanDesign.success : .primary)
+        }
+    }
+
+    private var fieldInspectionSection: some View {
+        Group {
+            if let report = setupStatus.latestFieldInspection {
+                Text(report.headline).font(.headline)
+                LabeledContent("App", value: report.appName)
+                LabeledContent("Role", value: report.role ?? "Unknown")
+                capabilityRow("Selected-text action", report.selectedTextAction)
+                capabilityRow("Focused-field replacement", report.focusedFieldReplacement)
+                capabilityRow("Bean Bubble", report.beanBubble)
+                capabilityRow("Inline checking", report.inlineChecking)
+                Text("Checked \(report.checkedAt.formatted(date: .abbreviated, time: .shortened)).")
+                    .font(.caption).foregroundColor(.secondary)
+            } else {
+                Text("No field has been inspected yet.")
+                    .foregroundColor(.secondary)
+            }
+            Text("Focus a field in another app, then choose Bean → Check Current Field from the menu bar. Bean records metadata only and does not read the field's text for this check.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func capabilityRow(_ title: String, _ assessment: CapabilityAssessment) -> some View {
+        LabeledContent(title) {
+            VStack(alignment: .trailing, spacing: 2) {
+                StatusPill(
+                    text: assessment.level.displayName,
+                    kind: assessment.level == .supported ? .success
+                        : assessment.level == .degraded ? .warning : .neutral,
+                    showsIcon: false
+                )
+                Text(assessment.reason).font(.caption2).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var recentOperationsSection: some View {
+        Group {
+            if history.records.isEmpty {
+                Text("No operations recorded yet.").foregroundColor(.secondary)
+            } else {
+                ForEach(Array(history.records.prefix(8))) { record in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(record.action).font(.callout).fontWeight(.medium)
+                            Spacer()
+                            StatusPill(
+                                text: record.outcome,
+                                kind: record.outcome == "replacedConfirmed" ? .success
+                                    : record.outcome.contains("fallback") ? .warning : .neutral,
+                                showsIcon: false
+                            )
+                        }
+                        Text("\(record.appName ?? record.appCategory) · \(record.source.displayName) · \(record.timestamp.formatted(date: .omitted, time: .shortened))")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                Button("Clear operation history", role: .destructive) { history.clear() }
+            }
+            Text("This bounded history contains operational metadata only—never text, prompts, responses, clipboard contents, or field labels.")
+                .font(.caption2).foregroundColor(.secondary)
         }
     }
 
@@ -414,6 +543,7 @@ struct SettingsView: View {
     // MARK: - Troubleshooting
 
     @State private var copiedDiagnostics = false
+    @State private var reportError: String?
 
     private var troubleshootingSection: some View {
         Group {
@@ -427,6 +557,10 @@ struct SettingsView: View {
             Button("Open Console (logs)") { openConsole() }
             Button(copiedDiagnostics ? "Diagnostics copied ✓" : "Copy Diagnostics Summary") {
                 copyDiagnostics()
+            }
+            Button("Copy report and open GitHub issue") { reportIssue() }
+            if let reportError {
+                Text(reportError).font(.caption).foregroundColor(.red)
             }
             HStack {
                 Button("Open README") { actions.openReadme() }
@@ -449,9 +583,19 @@ struct SettingsView: View {
     }
 
     private func copyDiagnostics() {
-        let text = Diagnostics(settings: settings, store: store).summaryText
+        let text = Diagnostics(settings: settings, store: store, history: history, setupStatus: setupStatus).summaryText
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         copiedDiagnostics = true
+    }
+
+    private func reportIssue() {
+        copyDiagnostics()
+        guard let url = URL(string: "https://github.com/aneesio/bean/issues/new?template=bug.yml"),
+              NSWorkspace.shared.open(url) else {
+            reportError = "Couldn't open GitHub. The diagnostics summary is still on your clipboard."
+            return
+        }
+        reportError = nil
     }
 }

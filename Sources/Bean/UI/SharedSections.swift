@@ -102,11 +102,20 @@ struct ProviderSetupSection: View {
         Task {
             do {
                 try await transformer.testConnection(provider: provider, model: model, apiKey: key, timeout: timeout)
-                await MainActor.run { testState = .success }
+                await MainActor.run {
+                    settings.markProviderConnectionVerified(provider: provider, model: model)
+                    testState = .success
+                }
             } catch let error as LLMError {
-                await MainActor.run { testState = .failure(error.errorDescription ?? "Failed") }
+                await MainActor.run {
+                    settings.invalidateProviderVerification()
+                    testState = .failure(error.errorDescription ?? "Failed")
+                }
             } catch {
-                await MainActor.run { testState = .failure(error.localizedDescription) }
+                await MainActor.run {
+                    settings.invalidateProviderVerification()
+                    testState = .failure(error.localizedDescription)
+                }
             }
         }
     }
@@ -148,100 +157,55 @@ struct PermissionsSection: View {
     }
 }
 
-// MARK: - Local "Try Bean" test (no clipboard, no other apps)
+// MARK: - Real cross-app verification
 
-struct TryBeanSection: View {
+struct CrossAppVerificationSection: View {
     @ObservedObject var settings: AppSettings
-
-    @State private var input: String = "i has a apple"
-    @State private var status: Status = .idle
-
-    private let transformer = WritingTransformService()
-
-    enum Status: Equatable {
-        case idle, fixing, fixed, noChanges
-        case error(String)
-    }
+    @ObservedObject var history: OperationHistoryStore
+    @ObservedObject var setupStatus: SetupStatusStore
+    @State private var openError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Try Bean")
+            Text("Verify Bean in another app")
                 .font(.title2).bold()
-            Text("This runs the real correction on the text below. It only changes this field — your clipboard and other apps are untouched.")
+            Text("This checks the part that matters: Accessibility, the global shortcut, focus restoration, and replacement in another app.")
                 .font(.callout)
                 .foregroundColor(.secondary)
 
-            TextEditor(text: $input)
-                .font(.body)
-                .frame(height: 90)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-
-            HStack(spacing: 10) {
-                Button("Test Fix") { runFix() }
-                    .disabled(status == .fixing || !settings.hasAPIKey)
-                statusView
+            if history.hasConfirmedExternalReplacement {
+                Label("Cross-app replacement verified", systemImage: "checkmark.seal.fill")
+                    .foregroundColor(BeanDesign.success)
+            } else {
+                Label("Cross-app replacement not verified yet", systemImage: "circle.dashed")
+                    .foregroundColor(.secondary)
             }
 
-            if !settings.hasAPIKey {
-                Text("Add an API key first (previous step) to try this.")
-                    .font(.caption).foregroundColor(.secondary)
+            BeanCard {
+                Text("1. Open the synthetic TextEdit test file.")
+                Text("2. Click in the sentence and press \(settings.shortcut.displayString).")
+                Text("3. Return here after Bean reports Field fixed or Text fixed.")
             }
-        }
-    }
+            .font(BeanDesign.Typography.caption())
 
-    @ViewBuilder
-    private var statusView: some View {
-        switch status {
-        case .idle: EmptyView()
-        case .fixing:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("Fixing…").font(.caption).foregroundColor(.secondary)
-            }
-        case .fixed:
-            Label("Fixed", systemImage: "checkmark.circle.fill").font(.caption).foregroundColor(.green)
-        case .noChanges:
-            Label("No changes needed", systemImage: "equal.circle.fill").font(.caption).foregroundColor(.blue)
-        case .error(let message):
-            Label(message, systemImage: "xmark.circle.fill").font(.caption).foregroundColor(.red).lineLimit(2)
-        }
-    }
-
-    private func runFix() {
-        let (leading, core, trailing) = TextNormalizer.split(input)
-        guard !core.isEmpty else { return }
-        status = .fixing
-
-        // Local-only context; this never touches the clipboard or other apps.
-        let context = SourceAppContext(
-            appName: AppInfo.name, bundleIdentifier: nil, processIdentifier: nil,
-            focusedRole: nil, focusedSubrole: nil,
-            acquisitionMode: .selectedText, isSearchLikeField: false
-        )
-        let provider = settings.provider
-        let model = settings.model
-        let key = settings.apiKey
-        let timeout = settings.timeoutSeconds
-
-        Task {
-            do {
-                let raw = try await transformer.transform(
-                    text: core, action: .proofread, context: context,
-                    provider: provider, model: model, apiKey: key, timeout: timeout
-                )
-                let corrected = TextNormalizer.sanitizeModelOutput(raw, originalCore: core)
-                await MainActor.run {
-                    if corrected == core {
-                        status = .noChanges
-                    } else {
-                        input = leading + corrected + trailing
-                        status = .fixed
-                    }
+            Button("Open TextEdit verification") {
+                do {
+                    try setupStatus.openTextEditVerificationFile()
+                    openError = nil
+                } catch {
+                    openError = "Couldn't open the TextEdit test: \(error.localizedDescription)"
                 }
-            } catch let error as LLMError {
-                await MainActor.run { status = .error(error.errorDescription ?? "Provider error") }
-            } catch {
-                await MainActor.run { status = .error(error.localizedDescription) }
+            }
+            .disabled(!settings.hasAPIKey || !PermissionService.isAccessibilityGranted)
+
+            if let openError {
+                Label(openError, systemImage: "xmark.circle.fill")
+                    .font(.caption).foregroundColor(.red)
+            }
+
+            if !settings.hasAPIKey || !PermissionService.isAccessibilityGranted {
+                Text("Complete the provider and Accessibility steps first.")
+                    .font(.caption).foregroundColor(.secondary)
             }
         }
     }

@@ -8,6 +8,7 @@ import SwiftUI
 final class MenuBarController: NSObject, NSMenuDelegate {
     private let onProofreadNow: () -> Void
     private let onOpenBeanMenu: () -> Void
+    private let onCheckCurrentField: () -> Void
     private let onCheckPermissions: () -> Void
     private let onShowSettings: () -> Void
     private let onShowAbout: () -> Void
@@ -19,12 +20,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     init(
         onProofreadNow: @escaping () -> Void,
         onOpenBeanMenu: @escaping () -> Void,
+        onCheckCurrentField: @escaping () -> Void,
         onCheckPermissions: @escaping () -> Void,
         onShowSettings: @escaping () -> Void,
         onShowAbout: @escaping () -> Void
     ) {
         self.onProofreadNow = onProofreadNow
         self.onOpenBeanMenu = onOpenBeanMenu
+        self.onCheckCurrentField = onCheckCurrentField
         self.onCheckPermissions = onCheckPermissions
         self.onShowSettings = onShowSettings
         self.onShowAbout = onShowAbout
@@ -97,6 +100,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let fieldItem = NSMenuItem(title: "Check Current Field", action: #selector(handleCheckCurrentField), keyEquivalent: "")
+        fieldItem.target = self
+        fieldItem.image = Self.icon("scope")
+        menu.addItem(fieldItem)
+
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(handleSettings), keyEquivalent: ",")
         settingsItem.target = self
         settingsItem.image = Self.icon("gearshape")
@@ -139,6 +147,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func handleCheckPermissions() {
         onCheckPermissions()
+    }
+
+    @objc private func handleCheckCurrentField() {
+        onCheckCurrentField()
     }
 
     @objc private func handleSettings() {

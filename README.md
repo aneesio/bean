@@ -68,11 +68,17 @@ Developer ID-signed and notarized artifacts, if introduced later, will omit the
 2. Grant Bean Accessibility permission when macOS asks.
 3. In another app, select text and press **⌘⇧G** to proofread it.
 4. Press **⌃⌥B** to open the full writing-action menu.
-5. Keep automatic AI checks off for manual-only API usage.
+5. Use Setup & Status → **Open TextEdit verification** to confirm the complete
+   cross-app path.
+6. Keep automatic AI checks off for manual-only API usage.
 
 If no text is selected, Bean can optionally operate on the focused editable
 field. Search fields, secure fields, code editors, and unusually large fields
 are restricted or excluded.
+
+If a field behaves unexpectedly, focus it and choose **Bean → Check Current
+Field**. The resulting capability report uses metadata only and is included in
+the content-free support summary.
 
 ## Cost controls
 

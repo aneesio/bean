@@ -8,6 +8,8 @@ import SwiftUI
 final class WindowPresenter: NSObject, NSWindowDelegate {
     private let settings: AppSettings
     private let userContent: UserContentStore
+    private let history: OperationHistoryStore
+    private let setupStatus: SetupStatusStore
     private let onCheckPermissions: () -> Void
     private let onApplyShortcut: (ShortcutSlot, GlobalShortcut) -> String?
 
@@ -18,11 +20,15 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
     init(
         settings: AppSettings,
         userContent: UserContentStore,
+        history: OperationHistoryStore,
+        setupStatus: SetupStatusStore,
         onCheckPermissions: @escaping () -> Void,
         onApplyShortcut: @escaping (ShortcutSlot, GlobalShortcut) -> String?
     ) {
         self.settings = settings
         self.userContent = userContent
+        self.history = history
+        self.setupStatus = setupStatus
         self.onCheckPermissions = onCheckPermissions
         self.onApplyShortcut = onApplyShortcut
         super.init()
@@ -40,7 +46,7 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
             present(onboardingWindow)
             return
         }
-        let root = OnboardingView(settings: settings) { [weak self] in
+        let root = OnboardingView(settings: settings, history: history, setupStatus: setupStatus) { [weak self] in
             self?.finishOnboarding()
         }
         let window = makeWindow(title: "Welcome to Bean", root: root, resizable: false)
@@ -70,7 +76,13 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
                 self?.onApplyShortcut(slot, shortcut) ?? "Bean isn't ready to set a shortcut yet."
             }
         )
-        let root = SettingsView(settings: settings, store: userContent, actions: actions)
+        let root = SettingsView(
+            settings: settings,
+            store: userContent,
+            history: history,
+            setupStatus: setupStatus,
+            actions: actions
+        )
         let window = makeWindow(title: "Bean Settings", root: root, resizable: true)
         settingsWindow = window
         present(window)
