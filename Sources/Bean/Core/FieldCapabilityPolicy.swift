@@ -224,9 +224,9 @@ enum FieldCapabilityPolicy {
             return .init(level: .degraded, reason: "supportedButDisabled")
         }
         switch traits.nativeRangeBoundsReliable {
-        case true: return .init(level: .supported, reason: "nativeRangeBoundsAvailable")
-        case false: return .init(level: .degraded, reason: "nativeRangeBoundsMissing")
-        case nil: return .init(level: .degraded, reason: "nativeRangeCheckRequired")
+        case .some(true): return .init(level: .supported, reason: "nativeRangeBoundsAvailable")
+        case .some(false): return .init(level: .degraded, reason: "nativeRangeBoundsMissing")
+        case .none: return .init(level: .degraded, reason: "nativeRangeCheckRequired")
         }
     }
 
