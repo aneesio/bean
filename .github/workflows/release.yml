@@ -1,0 +1,46 @@
+name: Public beta release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run automated checks
+        run: ./scripts/run_all_tests.sh
+
+      - name: Package unnotarized beta
+        env:
+          BEAN_ALLOW_ADHOC_RELEASE: "1"
+        run: ./scripts/package_release.sh
+
+      - name: Verify universal artifacts
+        run: |
+          lipo release/Bean-*-unnotarized/Bean.app/Contents/MacOS/Bean -verify_arch arm64 x86_64
+          cd release
+          shasum -a 256 -c Bean-*-unnotarized.sha256
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/Bean-*-unnotarized.zip \
+            release/Bean-*-unnotarized.dmg \
+            release/Bean-*-unnotarized.sha256 \
+            --verify-tag \
+            --generate-notes \
+            --prerelease \
+            --title "Bean $GITHUB_REF_NAME public beta (unnotarized)"

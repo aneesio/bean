@@ -6,12 +6,12 @@ import Foundation
 enum AppInfo {
     static let name = "Bean"
     static let tagline = "A small writing helper for your menu bar."
-    static let copyright = "© 2026 Bean"
+    static let copyright = "© 2026 Anees Afzal and Bean contributors"
 
-    static var version: String { string("CFBundleShortVersionString") ?? "1.1.0" }
-    static var build: String { string("CFBundleVersion") ?? "1" }
+    static var version: String { string("CFBundleShortVersionString") ?? "1.2.0" }
+    static var build: String { string("CFBundleVersion") ?? "3" }
 
-    /// e.g. "Version 1.0.0 (1)"
+    /// e.g. "Version 1.2.0 (3)"
     static var versionDisplay: String { "Version \(version) (\(build))" }
 
     private static func string(_ key: String) -> String? {

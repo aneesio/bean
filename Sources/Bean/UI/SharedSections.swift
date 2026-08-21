@@ -45,6 +45,11 @@ struct ProviderSetupSection: View {
                     settings.apiKey = apiKeyField
                     testState = .idle
                 }
+            if let keychainError = settings.keychainError {
+                Label(keychainError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
 
             Text("Model").font(.subheadline)
             HStack {

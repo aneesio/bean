@@ -365,10 +365,13 @@ struct SettingsView: View {
             }
             Button(copiedInstall ? "Install command copied ✓" : "Copy Native Host Install Command") {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString("./scripts/install_native_messaging_host.sh <extension-id>", forType: .string)
+                NSPasteboard.general.setString(
+                    #""/Applications/Bean.app/Contents/Resources/NativeMessaging/install_native_messaging_host.sh" <extension-id> "/Applications/Bean.app""#,
+                    forType: .string
+                )
                 copiedInstall = true
             }
-            Text("Setup: load BrowserExtension/ unpacked in Chrome (Developer mode), copy its extension ID, then run the install command above with that ID. Test the connection from the extension's Options.")
+            Text("Setup: keep Bean in /Applications, load BrowserExtension/ unpacked in Chrome (Developer mode), copy its extension ID, replace <extension-id> in the copied command, and run it in Terminal. Then test the connection in extension Options.")
                 .font(.caption2).foregroundColor(.secondary)
         }
     }
@@ -386,12 +389,25 @@ struct SettingsView: View {
 
     private var privacySection: some View {
         Group {
-            Label("Bean only sends text when you trigger it.", systemImage: "hand.raised")
+            Label("Manual actions send text only when you trigger them.", systemImage: "hand.raised")
+            Label("Optional automatic checks may send focused-field text after a typing pause.", systemImage: "clock.arrow.circlepath")
             Label("Bean does not store your text.", systemImage: "nosign")
             Label("API keys are stored in macOS Keychain.", systemImage: "key")
             Toggle("Diagnostics logging (no text)", isOn: $settings.diagnosticsEnabled)
             Text("Diagnostics record operational metrics only — lengths and result codes. Never your text, prompts, or clipboard.")
                 .font(.caption).foregroundColor(.secondary)
+            HStack {
+                Button("Open Privacy Policy") { openBundledDocument("PRIVACY") }
+                Button("Open License") { openBundledDocument("LICENSE") }
+            }
+        }
+    }
+
+    private func openBundledDocument(_ name: String) {
+        if let url = Bundle.main.url(forResource: name, withExtension: "md") {
+            NSWorkspace.shared.open(url)
+        } else {
+            actions.openReadme()
         }
     }
 

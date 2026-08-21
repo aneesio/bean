@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Security
 
 // The set of LLM providers Bean supports. Adding a new provider is a matter of
 // adding a case here and a corresponding LLMProvider implementation.
@@ -145,6 +146,9 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(onboardingComplete, forKey: Keys.onboardingComplete) }
     }
 
+    /// A content-free persistence error shown beside the API-key field.
+    @Published private(set) var keychainError: String?
+
     /// The global shortcut that triggers a fix. Persisted as JSON in
     /// UserDefaults. Defaults to ⌘⇧G.
     @Published var shortcut: GlobalShortcut {
@@ -264,6 +268,7 @@ final class AppSettings: ObservableObject {
 
         self.diagnosticsEnabled = defaults.bool(forKey: Keys.diagnostics) // default false
         self.onboardingComplete = defaults.bool(forKey: Keys.onboardingComplete) // default false
+        self.keychainError = nil
 
         // Passive Suggestions — off by default; sensible defaults otherwise.
         self.passiveEnabled = defaults.bool(forKey: Keys.passiveEnabled)
@@ -326,7 +331,7 @@ final class AppSettings: ObservableObject {
     /// The API key for the currently selected provider.
     var apiKey: String {
         get { KeychainService.get(account: provider.keychainAccount) ?? "" }
-        set { KeychainService.set(newValue, account: provider.keychainAccount) }
+        set { persistAPIKey(newValue, for: provider) }
     }
 
     func apiKey(for provider: ProviderKind) -> String {
@@ -334,7 +339,17 @@ final class AppSettings: ObservableObject {
     }
 
     func setAPIKey(_ value: String, for provider: ProviderKind) {
-        KeychainService.set(value, account: provider.keychainAccount)
+        persistAPIKey(value, for: provider)
+    }
+
+    private func persistAPIKey(_ value: String, for provider: ProviderKind) {
+        let status = KeychainService.set(value, account: provider.keychainAccount)
+        if status == errSecSuccess {
+            keychainError = nil
+        } else {
+            keychainError = "Couldn't save the API key: \(KeychainService.errorMessage(for: status))"
+            Log.event("keychain: write failed status=\(status)")
+        }
     }
 
     var hasAPIKey: Bool { !apiKey.isEmpty }

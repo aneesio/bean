@@ -311,6 +311,11 @@ struct DataSection: View {
     @State private var confirmReset = false
 
     var body: some View {
+        if let persistenceError = store.persistenceError {
+            Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundColor(.red)
+        }
         Text("Backup includes style profiles, context cards, dictionary, and app defaults. It never includes API keys, logs, or your text.")
             .font(.caption).foregroundColor(.secondary)
         HStack {

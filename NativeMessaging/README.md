@@ -1,65 +1,53 @@
-# Bean Native Messaging Bridge (implemented)
+# Bean Native Messaging Bridge
 
-This is the path for the browser extension to get high-quality suggestions:
-instead of the extension holding an API key, it asks the **Bean Mac app** (which
-already has the provider, key in Keychain, dictionary, and the safety validator)
-to generate issue candidates.
+The Chromium extension can ask the local Bean app for provider-backed issue
+candidates and whole-paragraph proofreading. The host is the Bean app binary
+running in `--native-messaging` mode; it does not launch the GUI.
 
-Status: **implemented.** The host name is `com.bean.nativehost` and the host *is*
-the Bean app binary run in a stdin/stdout native-messaging mode. The extension
-falls back to its offline local detector when the bridge is unavailable.
-
-## Architecture
-
-```
-Browser extension (background.js)
-        │  chrome.runtime.sendNativeMessage("com.bean.nativehost", req)
-        ▼
-Bean.app/Contents/MacOS/Bean  (launched by Chrome with the extension origin →
-        │                       routes to NativeMessagingHost.run(), no GUI)
-        │  4-byte LE length-prefixed JSON over stdin/stdout
-        ▼
-IssueDetector + provider (shared Keychain/UserDefaults/dictionary by identity)
-        →  JSON issue candidates
+```text
+approved page → extension content script → extension service worker
+              → Chrome Native Messaging → local Bean binary
+              → the user's selected OpenAI or Anthropic provider
 ```
 
-### Message contract
+## Install
 
-Request (extension → host):
-```json
-{ "type": "detectIssues", "fieldType": "textarea", "pageHost": "mail.google.com",
-  "text": "i has a apple" }
+Build or install Bean first, load the extension unpacked, and copy its 32-letter
+ID from `chrome://extensions`. Then run:
+
+```bash
+./scripts/install_native_messaging_host.sh <extension-id> /Applications/Bean.app
 ```
 
-Response (host → extension):
-```json
-{ "issues": [
-  { "original": "i has", "suggestion": "I have", "type": "grammar",
-    "explanation": "Subject-verb agreement.", "confidence": 0.9 }
-] }
+The script writes `com.bean.nativehost.json` only for browsers already installed
+for the current macOS user. Its `allowed_origins` contains exactly the supplied
+extension ID and its `path` points to the absolute Bean executable.
+
+Uninstall with:
+
+```bash
+./scripts/uninstall_native_messaging_host.sh
 ```
 
-Rules: text is inert; the host never logs/stores it; candidates are mapped by
-exact substring in the extension; ambiguous/missing are dropped.
+Reinstall after moving Bean.app or if the unpacked extension ID changes.
 
-## Files (to add when implementing)
+## Protocol
 
-- `com.bean.host.json` — Chrome Native Messaging manifest template (host name,
-  path to the host binary, and `allowed_origins` with the extension ID).
-- A host binary or a `--native-messaging` mode of the Bean executable that reads
-  length-prefixed messages on stdin and writes responses on stdout.
+Messages use Chrome's four-byte little-endian length prefix followed by JSON.
+The host accepts only `ping`, `getStatus`, `detectIssues`, and
+`proofreadParagraph`. Frames are capped at 1 MB, field text at 8,000 characters,
+paragraphs at 2,000 characters, and returned issues at eight.
 
-## Install / uninstall (placeholders)
+The host performs no command execution and exposes no generic file access. It
+shares provider settings, Keychain keys, and dictionary data with the GUI app.
+Request and response text is neither logged nor persisted.
 
-- `../scripts/install_native_messaging_host.sh` — writes `com.bean.host.json`
-  into Chrome's `NativeMessagingHosts` directory pointing at the host binary.
-- `../scripts/uninstall_native_messaging_host.sh` — removes it.
+## Security review checklist
 
-Both scripts currently **print guidance and explain that the host isn't built
-yet** rather than installing a manifest that points at a missing binary.
-
-## Privacy
-
-Only the focused field's text is sent, only when the user enabled web inline
-support, and only to the local Bean app over native messaging (never to a
-server by this bridge). No text history, no logging.
+- Keep the host name synchronized as `com.bean.nativehost` in the app,
+  extension, installer, uninstaller, and template.
+- Never broaden `allowed_origins` beyond the intended extension ID.
+- Keep input/output caps and the known-message allowlist.
+- Treat site hostname and text as untrusted prompt data.
+- Preserve exact-range mapping and output validation before page replacement.
+- Update [PRIVACY.md](../PRIVACY.md) for any new message or data flow.

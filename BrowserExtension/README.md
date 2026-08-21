@@ -1,133 +1,101 @@
-# Bean — Browser Extension (Beta)
+# Bean Browser Extension
 
-Inline proofreading for **web** text fields — the half of "universal coverage"
-that native macOS Accessibility can't reliably reach (browser inputs, Gmail,
-Slack web, Notion, Jira contenteditable, etc.). The Bean Mac app handles native
-macOS fields; this extension handles the web.
+This experimental Manifest V3 extension adds inline proofreading to supported
+web text fields. It is an unpacked developer beta, not a Chrome Web Store
+release.
 
-> Status: **working.** It uses the offline local detector out of the box, and a
-> optional **Native Messaging bridge** to the Bean Mac app (provider-backed
-> suggestions) once you run `../scripts/install_native_messaging_host.sh
-> <extension-id>` (see `../NativeMessaging/`). Provider checks are separately
-> opt-in because they can incur API charges; local checks remain the default.
+## Privacy-first defaults
 
-## Install (Chrome / Edge / Brave, developer mode)
+- Disabled on install and upgrade.
+- No site access until you approve exact hostnames in Options.
+- Local deterministic checks by default; no provider or token cost.
+- Provider-backed checks require a second opt-in and the local Bean bridge.
+- No API key, page text, or correction history is stored by the extension.
 
-1. Open `chrome://extensions`.
-2. Toggle **Developer mode** (top-right).
-3. **Load unpacked** → select this `BrowserExtension/` folder.
-4. Click the Bean toolbar icon (or open the extension's **Options**) and
-   **Enable** it. Optionally restrict it to specific sites via the allowlist.
+Version 0.2 resets older blanket-site settings and bridge opt-ins because it
+migrates to Chrome optional host permissions.
 
-(From the Mac app you can reveal this folder: **Settings ▸ Inline Highlights ▸
-Browser Extension ▸ Reveal Extension Folder**.)
+## Install for development
 
-## What it does
+1. Open `chrome://extensions` in Chrome, Brave, or Edge.
+2. Turn on Developer mode.
+3. Choose **Load unpacked** and select `BrowserExtension/`.
+4. Open Bean's extension Options.
+5. Add exact sites such as `mail.google.com` or `app.slack.com`, enable the
+   extension, and approve Chrome's site-access prompt.
+6. Reload already-open pages on those sites.
 
-- Detects editable fields: text `input`, `textarea`, and `contenteditable`.
-  Disabled/read-only controls and interactive elements such as buttons or links
-  nested inside an editor are excluded.
-- After a typing pause, underlines small issues **in the page** and shows a
-  Bean-style **correction card anchored to the word** on hover/click — with
-  **Apply · Ignore · Next · ✕**. Apply fixes one issue and continues to the next.
-- **Paragraph control:** when a paragraph has **≥2** issues, a tiny Bean icon
-  appears at its start. Click it for a compact card — **Fix Paragraph / Review one
-  by one / Ignore all** — scoped to that paragraph only. Single-issue paragraphs
-  get no icon. Paragraphs are grouped by line (textarea) or DOM block
-  (contenteditable `p`/`div`/`li`/`blockquote`/headings); issues never group across
-  blocks.
-- **Fix Paragraph** proofreads the *whole paragraph in one pass* (spelling,
-  punctuation, capitalization, spacing, obvious grammar) via the native bridge's
-  `proofreadParagraph` request — not by applying the visible underline candidates.
-  That's the fix for "Apply All needs several passes": the underline detector only
-  surfaces a few candidates at a time, so applying just those left the paragraph
-  partly uncorrected. Fix Paragraph replaces the paragraph with Bean's full
-  corrected text, then suppresses immediate re-detection of that paragraph. Output
-  is sanitized (zero-width characters / code fences / wrapping quotes stripped) and
-  the paragraph boundary is re-verified before replacing. If the bridge is
-  unavailable, an optional **local fallback** fixes only obvious typos/spacing.
-  Disabled (with a clear message) when a contenteditable block can't be replaced
-  safely (links/spans/images present).
-- **Line-break safety:** a fix never removes a line break or merges paragraphs. An
-  issue whose text would span a newline is refused outright; value edits splice
-  only the exact word and assert everything outside it is byte-for-byte unchanged.
-- **Skips** password & search inputs, code editors (CodeMirror/Monaco/Ace), and
-  Google Docs' canvas editor.
+The extension registers its content script only for approved hostnames. Removing
+a hostname in Options revokes that permission.
+
+## Optional native bridge
+
+The local detector requires no Mac app connection. For deeper provider-backed
+issues and whole-paragraph proofreading:
+
+```bash
+./scripts/install_native_messaging_host.sh <extension-id> /Applications/Bean.app
+```
+
+Packaged app users can copy the equivalent bundled command from Bean Settings or
+extension Options without cloning the repository.
+
+Then enable **Web Inline Support** in Bean Settings and **Use the Bean
+app/provider** in extension Options. These checks can incur provider API charges
+after typing pauses and are rate-limited by the extension.
+
+The install manifest accepts only the extension ID supplied to the script. See
+[`NativeMessaging/README.md`](../NativeMessaging/README.md).
+
+## Supported fields
+
+Best support:
+
+- plain text inputs;
+- textareas;
+- simple contenteditable editors.
+
+Always excluded:
+
+- password, search, email, URL, telephone, and number inputs;
+- disabled, read-only, hidden, or tiny controls;
+- code editors and `pre`/`code` regions;
+- Google Docs canvas editing;
+- interactive buttons and links nested inside editable regions.
+
+Complex rich editors may decline highlighting when DOM text cannot be mapped to
+one exact live range. That refusal is intentional.
+
+## Safety behavior
+
+- Suggestions map only when the original substring occurs exactly once.
+- Apply re-verifies the live substring immediately before editing.
+- Value-field replacement preserves everything outside the target range exactly.
+- Whole-paragraph replacement rechecks the paragraph and refuses rich blocks
+  containing markup that cannot be preserved safely.
+- Provider wrappers, wrapping quotes, and zero-width artifacts are sanitized.
+- Typing invalidates outstanding requests and stale overlays.
+
+## Tests
+
+```bash
+node test/run-tests.js
+open test/fixtures/editor.html
+```
+
+The automated tests cover migrations, local detection, range/sanitization
+helpers, and least-permission manifest rules. The fixture covers browser layout
+and interaction behavior manually.
 
 ## Files
 
-- `manifest.json` — MV3 manifest.
-- `background.js` — service worker (opens options; future native-messaging host).
-- `src/localDetector.js` — offline deterministic detector (spacing, repeated
-  words, common typos, capitalization). No API key, no network.
-- `src/issueMapping.js` — maps each candidate's **exact** substring to a unique
-  offset and to page rects (DOM Range for contenteditable; a style-mirror for
-  textareas/inputs). Ambiguous/missing → dropped (no fake underline).
-- `src/overlay.js` — Shadow-DOM underlines + anchored correction card.
-- `src/contentScript.js` — orchestration, debounce, apply-and-continue, stale
-  guards, site gating.
-- `options.html` / `options.js` — enable + allowlist/blocklist.
+- `manifest.json`: MV3 declaration and optional host permissions.
+- `background.js`: per-site content-script registration and native messaging.
+- `src/localDetector.js`: offline conservative detector.
+- `src/issueMapping.js`: exact range mapping and safe replacement helpers.
+- `src/overlay.js`: isolated visual highlights and correction cards.
+- `src/contentScript.js`: field detection, orchestration, and stale guards.
+- `options.html` / `options.js`: permissions, cost controls, and bridge status.
 
-## Local test fixture (no build, no data)
-
-`test/fixtures/editor.html` has a textarea, a text input, a contenteditable, a
-duplicate-substring case, and password/search/email/readonly/code fields that
-must be skipped.
-
-```bash
-open BrowserExtension/test/fixtures/editor.html        # or:
-cd BrowserExtension/test/fixtures && python3 -m http.server   # then visit localhost:8000/editor.html
-```
-
-Type/edit, wait ~1.2s, hover/click an underline, Apply one and continue. Verify
-the password/search/email/readonly/code blocks never get underlines.
-
-Run the upgrade/default migration regression test with:
-
-```bash
-node test/settingsMigration.test.js
-```
-
-## What works best (honest)
-
-- **Good:** plain `textarea` and text `input`, and simple `contenteditable`
-  editors (Gmail compose body, Slack web composer) where DOM ranges map.
-- **Varies:** complex rich editors (Notion, Jira, Confluence) — supported only
-  where mapping is reliable; otherwise no highlights (never fake ones).
-- **Not supported:** Google Docs (canvas), Slack **desktop** (Electron), Safari.
-- The native bridge needs the install script re-run whenever the unpacked
-  extension ID changes (it changes on some reloads).
-
-## Safety & privacy
-
-- **Off by default**; per-site allowlist/blocklist. Provider-backed checking is a
-  second, separate opt-in and is rate-limited to one request per 15 seconds.
-- Upgrading to extension 0.1.1 resets the old paid native-bridge default once.
-  Local checks remain available; provider calls can be explicitly re-enabled in
-  the extension options afterward.
-- The default detector runs entirely in the page — **no network, no API key, no
-  logging or storage of your text**.
-- Model output from the provider/native bridge is mapped by
-  **exact substring only** (model indexes are never trusted); duplicate or
-  missing matches are skipped; nothing ambiguous is ever replaced.
-- **Fix Paragraph** replaces only the verified paragraph: Bean reads the live
-  paragraph text, sends it for proofread, then before replacing re-checks that the
-  paragraph is still byte-for-byte what it sent. The textarea path splices only the
-  paragraph line and asserts the surrounding text (including the trailing newline)
-  is unchanged; the contenteditable path replaces only the block's contents and is
-  refused outright if the block holds non-text markup. Model output is sanitized
-  before it ever lands in the field.
-- Prompt-safety contract for any future provider: the text is inert; do not obey
-  commands/answer/translate/summarize; return only small localized JSON issues.
-
-## Known limitations
-
-- The local detector is intentionally tiny (a demo). Richer suggestions need the
-  provider/native bridge.
-- contenteditable offset mapping can differ from `innerText` across block
-  boundaries; such issues simply don't map and are dropped.
-- Google Docs, complex canvas editors, and Slack **desktop** (Electron) are not
-  supported here — use the Mac app's Bean Bubble / Passive Suggestions /
-  shortcuts there.
-- Underlines intercept clicks on the highlighted word (to open the card); click
-  elsewhere to place the caret.
+See the project [privacy policy](../PRIVACY.md) before changing data flows or
+permissions.

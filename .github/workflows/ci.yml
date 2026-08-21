@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run automated checks
+        run: ./scripts/run_all_tests.sh
+
+      - name: Assemble release app
+        run: ./scripts/build_app.sh release
+
+      - name: Verify app bundle
+        run: |
+          plutil -lint build/Bean.app/Contents/Info.plist
+          codesign --verify --deep --strict --verbose=2 build/Bean.app
+          test -x build/Bean.app/Contents/MacOS/Bean
+          test -f build/Bean.app/Contents/Resources/PRIVACY.md
+          test -f build/Bean.app/Contents/Resources/LICENSE.md
+          test -x build/Bean.app/Contents/Resources/NativeMessaging/install_native_messaging_host.sh

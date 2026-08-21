@@ -7,9 +7,10 @@ import Foundation
 // system instruction; the text rides only in the user message inside
 // <text_to_correct> delimiters. The single task is the selected WritingAction.
 //
-// Privacy: user text is only passed here on explicit trigger and is never
-// logged or persisted. The <context> block carries app identity, field type,
-// and (Phase 3) user-configured style/terminology — never user content.
+// Privacy: user text reaches this service after an explicit action or after a
+// typing pause when the user has opted into an automatic provider-backed
+// feature. It is never logged or persisted. The <context> block carries app
+// identity, field type, and user-configured style/terminology.
 struct WritingTransformService {
 
     // The trusted base instruction shared by all actions. Carries every safety

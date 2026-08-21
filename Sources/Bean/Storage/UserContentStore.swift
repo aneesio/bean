@@ -22,6 +22,7 @@ final class UserContentStore: ObservableObject {
     @Published var dictionary: [DictionaryTerm]
     @Published var appRules: [AppRule]
     @Published var defaultProfileID: UUID?
+    @Published private(set) var persistenceError: String?
 
     private let fileURL: URL
     private var loading = false
@@ -32,7 +33,6 @@ final class UserContentStore: ObservableObject {
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = support.appendingPathComponent("Bean", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("userContent.json")
 
         // Seed defaults first, then overlay any saved data.
@@ -42,6 +42,19 @@ final class UserContentStore: ObservableObject {
         self.dictionary = []
         self.appRules = Self.builtInAppRules(profiles: builtIns)
         self.defaultProfileID = builtIns.first?.id
+        self.persistenceError = nil
+
+        do {
+            try FileManager.default.createDirectory(
+                at: dir,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        } catch {
+            self.persistenceError = "Bean couldn't prepare its private data folder. Changes may not be saved."
+            Log.event("userContent: data directory unavailable")
+        }
 
         load()
     }
@@ -62,6 +75,7 @@ final class UserContentStore: ObservableObject {
         guard let decoded = try? JSONDecoder().decode(Persisted.self, from: data) else {
             // Corrupt file: keep the seeded defaults rather than crashing.
             Log.event("userContent: stored file unreadable; using defaults")
+            persistenceError = "Bean couldn't read its saved personalization data. Defaults are in use; the original file was not overwritten."
             return
         }
         loading = true
@@ -77,8 +91,14 @@ final class UserContentStore: ObservableObject {
         guard !loading else { return }
         let persisted = Persisted(profiles: profiles, cards: cards, dictionary: dictionary,
                                   appRules: appRules, defaultProfileID: defaultProfileID)
-        if let data = try? JSONEncoder().encode(persisted) {
-            try? data.write(to: fileURL, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(persisted)
+            try data.write(to: fileURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            persistenceError = nil
+        } catch {
+            persistenceError = "Bean couldn't save personalization data. Your latest changes may be temporary."
+            Log.event("userContent: save failed")
         }
     }
 

@@ -10,26 +10,27 @@
 (function () {
   const DEBOUNCE_MS = 1200;
   const BRIDGE_MIN_INTERVAL_MS = 15000;
-  const SETTINGS_SCHEMA_VERSION = 2;
+  if (window.__beanInlineContentScriptLoaded) return;
+  window.__beanInlineContentScriptLoaded = true;
+
+  const SETTINGS_SCHEMA_VERSION = 3;
   const state = { active: null, entries: [], selectedId: null, fingerprint: 0, shownFingerprint: 0,
                   ignored: new Set(), reqGen: 0, groups: [], selectedGroupId: null,
                   correctedFps: new Set(), fixingGroup: false,
-                  enabled: false, allowlist: [], blocklist: [], useBridge: false, localFallback: true };
+                  enabled: false, allowedSites: [], useBridge: false, localFallback: true };
   let debounce = null, scrollThrottle = null;
   let lastBridgeAt = 0;
 
   // --- Settings -------------------------------------------------------------
-  function host() { return location.host; }
+  function host() { return location.hostname.toLowerCase(); }
   function siteAllowed() {
     if (!state.enabled) return false;
-    if (state.blocklist.includes(host())) return false;
-    return state.allowlist.length === 0 || state.allowlist.includes(host());
+    return state.allowedSites.includes(host());
   }
   function loadSettings(cb) {
-    chrome.storage.local.get(["enabled", "allowlist", "blocklist", "useBridge", "localFallback", "settingsSchemaVersion"], (s) => {
+    chrome.storage.local.get(["enabled", "allowedSites", "useBridge", "localFallback", "settingsSchemaVersion"], (s) => {
       state.enabled = !!s.enabled;
-      state.allowlist = s.allowlist || [];
-      state.blocklist = s.blocklist || [];
+      state.allowedSites = s.allowedSites || [];
       // Requiring the current schema makes an old persisted `useBridge: true`
       // harmless even if this content script starts before migration completes.
       state.useBridge = s.settingsSchemaVersion >= SETTINGS_SCHEMA_VERSION && !!s.useBridge;

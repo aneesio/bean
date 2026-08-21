@@ -11,10 +11,10 @@ enum KeychainService {
 
     /// Saves (or updates) the secret for the given account. Passing an empty
     /// string deletes the entry.
-    static func set(_ value: String, account: String) {
+    @discardableResult
+    static func set(_ value: String, account: String) -> OSStatus {
         guard !value.isEmpty else {
-            delete(account: account)
-            return
+            return delete(account: account)
         }
 
         let data = Data(value.utf8)
@@ -32,8 +32,9 @@ enum KeychainService {
             var addQuery = query
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            SecItemAdd(addQuery as CFDictionary, nil)
+            return SecItemAdd(addQuery as CFDictionary, nil)
         }
+        return status
     }
 
     /// Returns the stored secret for the account, or nil if none exists.
@@ -56,12 +57,18 @@ enum KeychainService {
         return string
     }
 
-    static func delete(account: String) {
+    @discardableResult
+    static func delete(account: String) -> OSStatus {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecItemNotFound ? errSecSuccess : status
+    }
+
+    static func errorMessage(for status: OSStatus) -> String {
+        (SecCopyErrorMessageString(status, nil) as String?) ?? "Keychain error \(status)"
     }
 }

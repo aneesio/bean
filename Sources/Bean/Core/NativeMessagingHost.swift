@@ -30,11 +30,27 @@ enum NativeMessagingHost {
 
     private static func readMessage() -> Data? {
         let input = FileHandle.standardInput
-        guard let lengthData = try? input.read(upToCount: 4), lengthData.count == 4 else { return nil }
-        let length = lengthData.withUnsafeBytes { UInt32(littleEndian: $0.load(as: UInt32.self)) }
+        guard let lengthData = readExactly(4, from: input) else { return nil }
+        let bytes = [UInt8](lengthData)
+        let length = UInt32(bytes[0])
+            | (UInt32(bytes[1]) << 8)
+            | (UInt32(bytes[2]) << 16)
+            | (UInt32(bytes[3]) << 24)
         guard length > 0, length <= maxMessageBytes else { return nil }
-        guard let body = try? input.read(upToCount: Int(length)), body.count == Int(length) else { return nil }
-        return body
+        return readExactly(Int(length), from: input)
+    }
+
+    /// Pipe reads are allowed to return fewer bytes than requested. Accumulate
+    /// until the complete native-messaging frame arrives or stdin reaches EOF.
+    private static func readExactly(_ count: Int, from input: FileHandle) -> Data? {
+        var data = Data()
+        data.reserveCapacity(count)
+        while data.count < count {
+            guard let chunk = try? input.read(upToCount: count - data.count),
+                  !chunk.isEmpty else { return nil }
+            data.append(chunk)
+        }
+        return data
     }
 
     private static func writeMessage(_ data: Data) {

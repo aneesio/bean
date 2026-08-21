@@ -11,17 +11,24 @@ function runMigration(initial) {
   const chrome = {
     runtime: {
       onInstalled: { addListener: (listener) => { installedListener = listener; } },
+      onStartup: { addListener: () => {} },
       onMessage: { addListener: () => {} },
       openOptionsPage: () => {},
-      sendNativeMessage: () => {}
+      sendNativeMessage: () => {},
+      lastError: null
     },
     storage: {
       local: {
         get: (_keys, callback) => callback(initial),
-        set: (value) => { update = value; }
+        set: (value, callback) => { update = value; if (callback) callback(); }
       }
     },
-    action: { onClicked: { addListener: () => {} } }
+    action: { onClicked: { addListener: () => {} } },
+    permissions: { onRemoved: { addListener: () => {} } },
+    scripting: {
+      unregisterContentScripts: (_filter, callback) => callback(),
+      registerContentScripts: (_scripts, callback) => callback()
+    }
   };
 
   vm.runInNewContext(source, { chrome, Object });
@@ -33,13 +40,19 @@ function runMigration(initial) {
 }
 
 assert.deepEqual(
-  runMigration({ enabled: true, useBridge: true }),
-  { useBridge: false, settingsSchemaVersion: 2 },
-  "an old paid bridge preference is disabled exactly once"
+  runMigration({ enabled: true, useBridge: true, localFallback: true }),
+  {
+    enabled: false,
+    allowedSites: [],
+    useBridge: false,
+    localFallback: true,
+    settingsSchemaVersion: 3
+  },
+  "an old blanket-site and paid bridge preference is disabled exactly once"
 );
 
 assert.equal(
-  runMigration({ enabled: true, useBridge: true, settingsSchemaVersion: 2 }),
+  runMigration({ enabled: true, allowedSites: ["mail.google.com"], useBridge: true, settingsSchemaVersion: 3 }),
   null,
   "a deliberate opt-in made after migration is preserved"
 );
@@ -48,11 +61,10 @@ assert.deepEqual(
   runMigration({}),
   {
     enabled: false,
-    allowlist: [],
-    blocklist: [],
+    allowedSites: [],
     localFallback: true,
     useBridge: false,
-    settingsSchemaVersion: 2
+    settingsSchemaVersion: 3
   },
   "a fresh installation starts with only local checks available"
 );

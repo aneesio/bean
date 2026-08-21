@@ -1,55 +1,104 @@
-// Bean extension service worker. Bridges the content script to the Bean Mac app
-// via Chrome Native Messaging (the Bean binary runs as the host). Content
-// scripts can't use nativeMessaging directly, so they message the background.
-//
-// Stores no text. Forwards request text to the local Bean host only.
+// Bean extension service worker. Registers the content script only for sites
+// the user explicitly grants, and forwards optional provider requests to the
+// local Bean native-messaging host. It never stores request text.
 const HOST = "com.bean.nativehost";
-const SETTINGS_SCHEMA_VERSION = 2;
+const SETTINGS_SCHEMA_VERSION = 3;
+const SCRIPT_ID = "bean-inline";
+const SCRIPT_FILES = [
+  "src/localDetector.js",
+  "src/issueMapping.js",
+  "src/overlay.js",
+  "src/contentScript.js"
+];
+
+function patternsForHosts(hosts) {
+  return [...new Set((hosts || []).flatMap((host) => [
+    `http://${host}/*`,
+    `https://${host}/*`
+  ]))];
+}
+
+function syncRegisteredContentScript(done = () => {}) {
+  chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] }, () => {
+    // A missing previous registration sets runtime.lastError; reading it keeps
+    // Chrome from reporting an unchecked error.
+    void chrome.runtime.lastError;
+    chrome.storage.local.get(["enabled", "allowedSites"], (settings) => {
+      const matches = settings.enabled ? patternsForHosts(settings.allowedSites) : [];
+      if (!matches.length) { done(); return; }
+      chrome.scripting.registerContentScripts([{
+        id: SCRIPT_ID,
+        matches,
+        js: SCRIPT_FILES,
+        runAt: "document_idle",
+        persistAcrossSessions: true
+      }], () => {
+        void chrome.runtime.lastError;
+        done();
+      });
+    });
+  });
+}
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(["enabled", "settingsSchemaVersion"], (s) => {
-    const update = {};
-    if (s.enabled === undefined) {
-      // Provider-backed checks are opt-in separately because they can create an
-      // API call after each typing pause. The offline detector remains available.
-      Object.assign(update, { enabled: false, allowlist: [], blocklist: [], localFallback: true });
+  chrome.storage.local.get(
+    ["enabled", "useBridge", "localFallback", "settingsSchemaVersion"],
+    (settings) => {
+      const update = {};
+      if ((settings.settingsSchemaVersion || 0) < SETTINGS_SCHEMA_VERSION) {
+        // Version 0.2 switches from blanket page injection to explicit site
+        // grants. Do not carry an old "all sites" state across that boundary.
+        Object.assign(update, {
+          enabled: false,
+          allowedSites: [],
+          useBridge: false,
+          localFallback: settings.localFallback !== false,
+          settingsSchemaVersion: SETTINGS_SCHEMA_VERSION
+        });
+      }
+      const finish = () => syncRegisteredContentScript();
+      if (Object.keys(update).length) chrome.storage.local.set(update, finish);
+      else finish();
     }
-    // Old extension versions defaulted the paid native bridge on. Disable it
-    // once on upgrade; a later explicit opt-in is preserved by this version key.
-    if ((s.settingsSchemaVersion || 0) < SETTINGS_SCHEMA_VERSION) {
-      update.useBridge = false;
-      update.settingsSchemaVersion = SETTINGS_SCHEMA_VERSION;
-    }
-    if (Object.keys(update).length) chrome.storage.local.set(update);
-  });
+  );
 });
 
+chrome.runtime.onStartup.addListener(() => syncRegisteredContentScript());
+chrome.permissions.onRemoved.addListener(() => syncRegisteredContentScript());
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 
 function sendNative(message, sendResponse, notInstalledCode) {
   try {
-    chrome.runtime.sendNativeMessage(HOST, message, (resp) => {
-      if (chrome.runtime.lastError || !resp) {
-        sendResponse({ ok: false, errorCode: notInstalledCode, message: (chrome.runtime.lastError || {}).message || "" });
+    chrome.runtime.sendNativeMessage(HOST, message, (response) => {
+      if (chrome.runtime.lastError || !response) {
+        sendResponse({
+          ok: false,
+          errorCode: notInstalledCode,
+          message: (chrome.runtime.lastError || {}).message || ""
+        });
         return;
       }
-      sendResponse(resp);
+      sendResponse(response);
     });
-  } catch (e) {
-    sendResponse({ ok: false, errorCode: notInstalledCode, message: String(e) });
+  } catch (error) {
+    sendResponse({ ok: false, errorCode: notInstalledCode, message: String(error) });
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg && msg.type === "detectIssues") {
-    sendNative(msg.request, sendResponse, "bridgeUnavailable");
-    return true; // async
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message && message.type === "refreshRegistration") {
+    syncRegisteredContentScript(() => sendResponse({ ok: true }));
+    return true;
   }
-  if (msg && msg.type === "proofreadParagraph") {
-    sendNative(msg.request, sendResponse, "bridgeUnavailable");
-    return true; // async
+  if (message && message.type === "detectIssues") {
+    sendNative(message.request, sendResponse, "bridgeUnavailable");
+    return true;
   }
-  if (msg && msg.type === "getStatus") {
+  if (message && message.type === "proofreadParagraph") {
+    sendNative(message.request, sendResponse, "bridgeUnavailable");
+    return true;
+  }
+  if (message && message.type === "getStatus") {
     sendNative({ id: "status", type: "getStatus" }, sendResponse, "notInstalled");
     return true;
   }

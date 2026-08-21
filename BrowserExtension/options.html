@@ -28,7 +28,7 @@
 </head>
 <body>
   <h1><span style="color:var(--accent)">●</span> Bean — Web Inline <span class="pill">Beta</span></h1>
-  <p class="muted">Inline proofreading for web text fields. Off by default. Bean checks text only in editable fields where you enable it, and never stores your text.</p>
+  <p class="muted">Inline proofreading for web text fields. Off by default. Bean requests access only to the exact sites you approve and never stores your text.</p>
 
   <div class="card">
     <strong>Status</strong>
@@ -41,8 +41,8 @@
     <p style="margin-top:10px"><button class="primary" id="test">Test Connection</button></p>
     <details>
       <summary>Details &amp; install command</summary>
-      <p class="muted">If the bridge says "Not installed": load this folder unpacked, copy the extension ID from <code>chrome://extensions</code>, then run:</p>
-      <p><code>scripts/install_native_messaging_host.sh &lt;extension-id&gt;</code> <button id="copyCmd">Copy</button></p>
+      <p class="muted">If the bridge says "Not installed": keep Bean in <code>/Applications</code>, copy the extension ID from <code>chrome://extensions</code>, replace the placeholder below, and run the command in Terminal:</p>
+      <p><code>"/Applications/Bean.app/Contents/Resources/NativeMessaging/install_native_messaging_host.sh" &lt;extension-id&gt; "/Applications/Bean.app"</code> <button id="copyCmd">Copy</button></p>
       <p class="muted">Re-run after the extension ID changes or you move/rebuild Bean.app.</p>
     </details>
   </div>
@@ -60,12 +60,9 @@
   </div>
 
   <div class="card">
-    <strong>Sites</strong>
-    <p class="muted">Leave the allowlist empty to run on all sites, or list specific hosts (one per line, e.g. <code>mail.google.com</code>).</p>
-    <label>Allowlist</label>
-    <textarea id="allowlist" placeholder="mail.google.com&#10;app.slack.com"></textarea>
-    <label>Blocklist</label>
-    <textarea id="blocklist" placeholder="docs.google.com"></textarea>
+    <strong>Approved sites</strong>
+    <p class="muted">Enter exact hostnames, one per line. Saving asks Chrome for access to only these sites. Removing a hostname revokes its permission.</p>
+    <textarea id="sites" placeholder="mail.google.com&#10;app.slack.com"></textarea>
   </div>
 
   <p><button id="save" class="primary">Save</button> <span id="status" class="muted"></span></p>
