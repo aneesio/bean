@@ -5,9 +5,9 @@ import AppKit
 // global monitors anywhere in the app.
 //
 // Typing pause routes to ONE of: Inline → (fallback) Passive → Passive → nothing.
-// The Bean Bubble is the LOWEST-priority helper: it's considered only on
-// focus/selection (mouse-up / app switch), after a delay, and only when no
-// richer Bean UI is active.
+// The Bean Bubble is the LOWEST-priority helper: it's considered on
+// focus/selection and after a typing pause, but only when no richer Bean UI is
+// active.
 //
 // Priority: Inline > Passive > Action/Preview (busy) > Bubble > nothing.
 @MainActor
@@ -23,6 +23,7 @@ final class TypingPauseDispatcher {
     private var workspaceObserver: NSObjectProtocol?
     private var pendingDispatch: DispatchWorkItem?
     private var pendingBubble: DispatchWorkItem?
+    private var permissionRetry: DispatchWorkItem?
     private var generation = 0
 
     init(settings: AppSettings, passive: PassiveSuggestionService, inline: InlineHighlightService,
@@ -44,15 +45,18 @@ final class TypingPauseDispatcher {
         // inline highlights when the user clicks elsewhere in the field.
         if settings.bubbleEnabled || settings.inlineHighlightsEnabled { installMouseMonitor() } else { removeMouseMonitor() }
         settings.monitorActive = (keyMonitor != nil)
+        if wantsMonitor, keyMonitor == nil { schedulePermissionRetry() }
+        else { permissionRetry?.cancel(); permissionRetry = nil }
     }
 
     private func start() {
         guard PermissionService.isAccessibilityGranted else { return }
         if keyMonitor == nil {
-            Log.event("dispatcher: monitoring started")
-            keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] _ in
+            let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] _ in
                 Task { @MainActor in self?.handleTyping() }
             }
+            keyMonitor = monitor
+            if monitor != nil { Log.event("dispatcher: monitoring started") }
         }
         if workspaceObserver == nil {
             workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -77,9 +81,25 @@ final class TypingPauseDispatcher {
         if let workspaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver); self.workspaceObserver = nil }
         pendingDispatch?.cancel(); pendingDispatch = nil
         pendingBubble?.cancel(); pendingBubble = nil
+        permissionRetry?.cancel(); permissionRetry = nil
         generation += 1
         hideAll()
         Log.event("dispatcher: monitoring stopped")
+    }
+
+    /// Accessibility can briefly report false after an ad-hoc development build
+    /// is replaced at the same path. Retry quietly so granting/re-granting the
+    /// permission does not require another app restart or settings toggle.
+    private func schedulePermissionRetry() {
+        guard permissionRetry == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.permissionRetry = nil
+            guard self.wantsMonitor, self.keyMonitor == nil else { return }
+            self.refresh()
+        }
+        permissionRetry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
     private func hideAll() {
@@ -133,9 +153,16 @@ final class TypingPauseDispatcher {
     // MARK: - Typing-pause routing (passive / inline)
 
     private func dispatch(generation gen: Int) async {
-        guard gen == generation, (settings.passiveActive || settings.inlineHighlightsEnabled), !coordinatorIsBusy() else { return }
+        guard gen == generation, !coordinatorIsBusy() else { return }
+        guard settings.passiveActive || settings.inlineHighlightsEnabled else {
+            considerBubble(generation: gen)
+            return
+        }
         guard PermissionService.isAccessibilityGranted else { return }
-        guard let field = AccessibilityService.focusedField() else { setStatus("skipped", "noField"); return }
+        guard let field = AccessibilityService.focusedField() else {
+            finishPause("skipped", "noField", generation: gen, richerUIShown: false)
+            return
+        }
 
         let app = NSWorkspace.shared.frontmostApplication
         let context = SourceAppContext.current(app: app, field: field, mode: .focusedFieldFullText)
@@ -146,15 +173,19 @@ final class TypingPauseDispatcher {
             switch inline.support(for: field) {
             case .supported:
                 let shown = await inline.run(field: field, app: app, context: context, isCurrent: isCurrent, reason: &reason)
-                setStatus(shown ? "inline" : "skipped", shown ? "inlineHandled" : reason)
+                finishPause(shown ? "inline" : "skipped", shown ? "inlineHandled" : reason,
+                            generation: gen, richerUIShown: shown)
                 return
             case .degradedUsePopover(let r), .unsupported(let r):
                 if settings.inlineFallbackPassive {
                     let shown = await passive.run(field: field, app: app, context: context,
                                                   isCurrent: isCurrent, forced: true, reason: &reason)
-                    setStatus(shown ? "passive" : "skipped", shown ? "inlineUnsupportedFallbackPassive" : reason)
+                    finishPause(shown ? "passive" : "skipped",
+                                shown ? "inlineUnsupportedFallbackPassive" : reason,
+                                generation: gen, richerUIShown: shown)
                 } else {
-                    setStatus("skipped", "inlineUnsupportedNoFallback(\(r))")
+                    finishPause("skipped", "inlineUnsupportedNoFallback(\(r))",
+                                generation: gen, richerUIShown: false)
                 }
                 return
             }
@@ -163,8 +194,15 @@ final class TypingPauseDispatcher {
         if settings.passiveActive {
             let shown = await passive.run(field: field, app: app, context: context,
                                           isCurrent: isCurrent, forced: false, reason: &reason)
-            setStatus(shown ? "passive" : "skipped", shown ? "passiveHandled" : reason)
+            finishPause(shown ? "passive" : "skipped", shown ? "passiveHandled" : reason,
+                        generation: gen, richerUIShown: shown)
         }
+    }
+
+    private func finishPause(_ handler: String, _ reason: String, generation gen: Int,
+                             richerUIShown: Bool) {
+        setStatus(handler, reason)
+        if !richerUIShown { considerBubble(generation: gen) }
     }
 
     private func setStatus(_ handler: String, _ reason: String) {

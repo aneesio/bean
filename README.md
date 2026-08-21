@@ -156,7 +156,8 @@ without remembering the shortcuts — which still work exactly as before.
 
 - **Optional & subtle.** Off by default; enable in **Settings ▸ General ▸ Bean
   Bubble (Beta)**. The bubble fades in near the field, is hidden while you type,
-  and disappears on focus/app change, Esc, or when you click away.
+  returns after a typing pause when no richer UI can be shown, and disappears on
+  focus/app change, Esc, or when you click away.
 - **Appears only where it's safe & reliable.** Shown when Accessibility gives a
   reliable selection or field position, and the field is editable and
   non-secure. Never in **password/secure** fields; **search/address bars** and
