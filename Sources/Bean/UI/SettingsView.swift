@@ -27,30 +27,27 @@ struct SettingsView: View {
     @State private var loginError: String?
     @State private var proofreadError: String?
     @State private var beanMenuError: String?
+    @StateObject private var updateChecker = UpdateChecker()
 
     enum Category: String, CaseIterable, Identifiable {
-        case status = "Setup & Status"
-        case general = "General"
-        case provider = "AI Provider"
+        case status = "Setup"
+        case provider = "Provider & Usage"
         case shortcuts = "Shortcuts"
         case style = "Actions & Style"
         case context = "Context"
-        case passive = "Passive Suggestions"
-        case inline = "Inline Highlights"
-        case privacy = "Privacy & Diagnostics"
+        case privacy = "Privacy"
+        case labs = "Labs"
         case troubleshooting = "Troubleshooting"
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .status: return "checklist"
-            case .general: return "gearshape"
             case .provider: return "cpu"
             case .shortcuts: return "command"
             case .style: return "wand.and.stars"
             case .context: return "doc.text"
-            case .passive: return "bubble.left.and.text.bubble.right"
-            case .inline: return "highlighter"
             case .privacy: return "lock.shield"
+            case .labs: return "flask"
             case .troubleshooting: return "wrench.and.screwdriver"
             }
         }
@@ -88,9 +85,7 @@ struct SettingsView: View {
                 StatusPill(text: "Action", kind: .warning, showsIcon: false)
             case .provider where !settings.hasAPIKey:
                 StatusPill(text: "Set up", kind: .warning, showsIcon: false)
-            case .general where !PermissionService.isAccessibilityGranted:
-                StatusPill(text: "!", kind: .warning, showsIcon: false)
-            case .inline:
+            case .labs:
                 StatusPill(text: "Beta", kind: .experimental, showsIcon: false)
             default:
                 EmptyView()
@@ -100,16 +95,15 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var detailSections: some View {
-        switch selection ?? .general {
+        switch selection ?? .status {
         case .status:
+            if !settings.isSetupComplete { Section { setupWarning } }
             Section("Readiness") { readinessSection }
+            Section("General") { generalSection }
+            Section("Permissions") { PermissionsSection(compact: true) }
+            Section("Updates") { updateSection }
             Section("Current field") { fieldInspectionSection }
             Section("Recent operations (content-free)") { recentOperationsSection }
-        case .general:
-            if !settings.isSetupComplete { Section { setupWarning } }
-            Section("General") { generalSection }
-            Section("Bean Bubble") { bubbleSection }
-            Section("Permissions") { PermissionsSection(compact: true) }
         case .provider:
             Section("AI Provider") {
                 ProviderSetupSection(settings: settings, usageLedger: usageLedger, compact: true)
@@ -124,9 +118,13 @@ struct SettingsView: View {
         case .context:
             Section("Context Cards") { ContextCardsSection(store: store) }
             Section("Personal Dictionary") { DictionarySection(store: store) }
-        case .passive:
+        case .labs:
+            Section("About Labs") {
+                Text("Labs contains optional beta features with narrower app compatibility. Every feature starts off; enable only the ones you want to test.")
+                    .foregroundColor(.secondary)
+            }
+            Section("Bean Bubble") { bubbleSection }
             Section("Passive Suggestions") { passiveSection }
-        case .inline:
             Section("Inline Highlights (experimental)") { inlineSection }
             Section("Browser Extension (Beta)") { browserExtensionSection }
         case .privacy:
@@ -152,12 +150,12 @@ struct SettingsView: View {
             setupCheckRow(
                 "API key saved",
                 ready: settings.hasAPIKey,
-                detail: settings.hasAPIKey ? settings.provider.displayName : "Add a key in AI Provider"
+                detail: settings.hasAPIKey ? settings.provider.displayName : "Add a key in Provider & Usage"
             )
             setupCheckRow(
                 "Provider connection verified",
                 ready: settings.isProviderConnectionVerified,
-                detail: settings.isProviderConnectionVerified ? settings.model : "Use Test API key in AI Provider"
+                detail: settings.isProviderConnectionVerified ? settings.model : "Use Test API key in Provider & Usage"
             )
             setupCheckRow(
                 "Accessibility",
@@ -304,6 +302,60 @@ struct SettingsView: View {
             loginError = "Couldn't update login item: \(error.localizedDescription)"
             loginEnabled = LoginItemService.isEnabled
         }
+    }
+
+    // MARK: - Updates
+
+    private var updateSection: some View {
+        Group {
+            LabeledContent("Installed", value: AppInfo.versionDisplay)
+
+            switch updateChecker.state {
+            case .idle:
+                Text("Bean checks GitHub only when you click the button. It never downloads or installs an update.")
+                    .font(.caption).foregroundColor(.secondary)
+            case .checking:
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Checking GitHub Releases…").foregroundColor(.secondary)
+                }
+            case .upToDate(let release):
+                updateResult(release, available: false)
+            case .updateAvailable(let release):
+                updateResult(release, available: true)
+            case .failure(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                    .font(.callout)
+            }
+
+            Button(updateChecker.state == .checking ? "Checking…" : "Check for Updates") {
+                updateChecker.check()
+            }
+            .disabled(updateChecker.state == .checking)
+        }
+    }
+
+    @ViewBuilder
+    private func updateResult(_ release: GitHubRelease, available: Bool) -> some View {
+        LabeledContent("Latest release") {
+            HStack(spacing: 8) {
+                Text(release.tagName).monospacedDigit()
+                if release.isPrerelease {
+                    StatusPill(text: "Prerelease", kind: .experimental, showsIcon: false)
+                }
+            }
+        }
+        Label(
+            available ? "A newer Bean release is available." : "This Bean version is up to date.",
+            systemImage: available ? "arrow.down.circle.fill" : "checkmark.circle.fill"
+        )
+        .foregroundColor(available ? BeanDesign.accent : BeanDesign.success)
+        if let url = release.verifiedPageURL {
+            Button("Open Verified GitHub Release") { NSWorkspace.shared.open(url) }
+        }
+        Text("The release page opens in your browser. Bean does not download or install anything.")
+            .font(.caption2).foregroundColor(.secondary)
     }
 
     private var timeoutRow: some View {

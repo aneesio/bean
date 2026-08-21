@@ -12,8 +12,8 @@ release.
 - Provider-backed checks require a second opt-in and the local Bean bridge.
 - No API key, page text, or correction history is stored by the extension.
 
-Version 0.2 resets older blanket-site settings and bridge opt-ins because it
-migrates to Chrome optional host permissions.
+Version 0.2 and later reset older blanket-site settings and bridge opt-ins once
+because the extension migrated to Chrome optional host permissions.
 
 ## Install for development
 
@@ -40,7 +40,7 @@ issues and whole-paragraph proofreading:
 Packaged app users can copy the equivalent bundled command from Bean Settings or
 extension Options without cloning the repository.
 
-Then enable **Web Inline Support** in Bean Settings and **Use the Bean
+Then enable **Web Inline Support** in Bean Settings → Labs and **Use the Bean
 app/provider** in extension Options. These checks can incur provider API charges
 after typing pauses, are rate-limited by the extension, contribute to Bean's
 content-free Web Inline usage total, and stop at Bean's daily automatic-call

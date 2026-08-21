@@ -69,7 +69,7 @@ Developer ID-signed and notarized artifacts, if introduced later, will omit the
 2. Grant Bean Accessibility permission when macOS asks.
 3. In another app, select text and press **⌘⇧G** to proofread it.
 4. Press **⌃⌥B** to open the full writing-action menu.
-5. Use Setup & Status → **Open TextEdit verification** to confirm the complete
+5. Use Settings → Setup → **Open TextEdit verification** to confirm the complete
    cross-app path.
 6. Keep automatic AI checks off for manual-only API usage.
 
@@ -90,7 +90,7 @@ Bean ships with paid background paths disabled:
 - Web Inline Support: off
 - Native inline checking: local-only when enabled
 
-Settings → AI Provider shows whether any automatic provider checks are active
+Settings → Provider & Usage shows whether any automatic provider checks are active
 and provides **Disable automatic AI checks**. It also shows today/30-day usage,
 provider-reported or conservatively estimated token counts, an estimated USD
 cost, a daily automatic-call cap, and a configurable 30-day warning. Explicit
@@ -109,6 +109,13 @@ can differ.
 browsers. Its local detector has no token cost; deeper provider checks use the
 local native-messaging bridge and remain separately opt-in. It is not yet a
 Chrome Web Store release. See [BrowserExtension/README.md](BrowserExtension/README.md).
+
+## Updates
+
+Settings → Setup includes a manual **Check for Updates** button. It contacts the
+public GitHub Releases API only after you click it, shows the installed/latest
+versions and prerelease status, and can open a verified `aneesio/bean` release
+page. Bean does not poll in the background or download or install updates.
 
 ## Privacy and security
 

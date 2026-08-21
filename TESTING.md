@@ -82,6 +82,7 @@ repeatable compatibility boundary changes.
 
 ## Cost and privacy gate
 
+- Fresh preferences show every Labs feature and diagnostics: Off.
 - Fresh preferences show Automatic provider checks: Off.
 - Pausing after typing makes no provider request with defaults.
 - “Disable automatic AI checks” turns off passive, provider inline, fallback,
@@ -113,6 +114,21 @@ repeatable compatibility boundary changes.
 
 Use `BrowserExtension/test/fixtures/editor.html` for deterministic manual cases.
 
+## Update and navigation gate
+
+- Settings has exactly eight primary destinations: Setup, Provider & Usage,
+  Shortcuts, Actions & Style, Context, Privacy, Labs, and Troubleshooting.
+- Bean Bubble, Passive Suggestions, Inline Highlights, and Browser Extension
+  appear only in Labs; each starts off with clean preferences.
+- Launching and leaving Bean idle makes no GitHub update request.
+- Clicking **Check for Updates** shows the installed version and newest
+  non-draft GitHub release, including its prerelease status.
+- Offline, rate-limited, malformed, and empty responses produce an actionable
+  error and leave the rest of Settings usable.
+- The release button is offered only for an HTTPS URL below
+  `github.com/aneesio/bean/releases/` and opens the browser without downloading
+  or installing an asset.
+
 ## Release artifact gate
 
 Create an explicitly unnotarized public-beta artifact with:
@@ -129,6 +145,10 @@ Verify:
 - the app contains current README, PRIVACY, LICENSE, and extension resources;
 - the repository remains clean except for intended source changes;
 - installation from the DMG preserves shortcuts, Keychain access, and settings.
+- app/build/changelog/tag versions match, and the extension version was
+  incremented when extension code changed;
+- README, Privacy, DMG, and release notes consistently identify the artifact as
+  an unnotarized prerelease and describe Labs/provider-cost behavior.
 
 Developer ID releases must additionally pass notarization, stapling, and
 Gatekeeper assessment. The packaging script fails closed when those credentials

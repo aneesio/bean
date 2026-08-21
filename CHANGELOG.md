@@ -15,6 +15,12 @@ once public release tags begin.
   TextEdit, Notes, Mail, Slack desktop, and Chromium web editors.
 - Added Gmail/Slack web approval and automatic-budget diagnostics to extension
   status.
+- Simplified Settings to eight primary categories and grouped the Bean Bubble,
+  Passive Suggestions, Inline Highlights, and browser extension under Labs.
+- Added a manual-only GitHub Releases update check with verified release links,
+  prerelease labeling, and no download or install behavior.
+- Documented separate open-source, unnotarized GitHub, Apple-notarized, unpacked
+  extension, and Chrome Web Store distribution gates.
 
 ## 1.2.0 — 2026-08-21 (public beta)
 

@@ -31,6 +31,9 @@ for script in "$ROOT"/scripts/*.sh; do
     bash -n "$script"
 done
 
+echo "==> Release metadata…"
+"$ROOT/scripts/verify_release_metadata.sh"
+
 echo "==> Repository audit…"
 "$ROOT/scripts/audit_repository.sh"
 

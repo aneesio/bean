@@ -142,6 +142,8 @@ automatic versus manual provider usage.
 
 ## Phase 5 — Simplification and sustainable distribution
 
+**Status:** Complete.
+
 ### Actions
 
 1. Consolidate Bean Bubble, Passive Suggestions, Inline Highlights, and the

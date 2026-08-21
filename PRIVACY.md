@@ -48,12 +48,12 @@ authorized to send it to your selected provider.
   action, input mode and length, provider/model, timing, safety/replacement
   result codes, and token counts or estimates. It never contains source text,
   transformed text, prompts, responses, clipboard contents, window titles,
-  field labels, or field values. You can inspect and erase it in Setup & Status.
+  field labels, or field values. You can inspect and erase it in Settings → Setup.
 - Bean also keeps up to 120 days of daily usage aggregates in UserDefaults so
   the Usage & Cost dashboard remains accurate after the 50-record detail history
   rolls over. Each aggregate contains only date, provider/model, manual or
   automatic source, token totals, call count, and whether counts were estimated.
-  It contains no text or field metadata and can be erased from AI Provider.
+  It contains no text or field metadata and can be erased from Provider & Usage.
 - Style profiles, context cards, dictionary terms, and app rules are stored in
   `~/Library/Application Support/Bean/userContent.json`.
 - Bean temporarily uses the system clipboard for text acquisition and
@@ -79,6 +79,16 @@ reports. Bean never uploads either source automatically.
 Logs remain subject to macOS log retention and controls on your device. Bean
 does not upload them.
 
+## Manual update check
+
+Bean makes no background update requests. When you click **Check for Updates**,
+Bean requests public release metadata from GitHub's API using an ephemeral
+network session. The request identifies the installed Bean version in its user
+agent; it contains no writing, prompt, API key, settings, operation history, or
+stable Bean identifier. The result is not persisted. Bean accepts release-page
+links only under `https://github.com/aneesio/bean/releases/` and never downloads
+or installs an update.
+
 ## Browser extension
 
 The extension's default detector runs locally in the web page and does not store
@@ -94,7 +104,7 @@ call totals to the same local usage ledger.
 ## Deleting your data
 
 You can remove an individual API key by clearing it in Bean Settings. You can
-reset style and context data from Settings → Privacy & Diagnostics → Data.
+reset style and context data from Settings → Privacy → Data.
 
 For a complete manual removal after quitting Bean:
 

@@ -109,7 +109,7 @@ final class AppSettings: ObservableObject {
         static let monthlyTokenWarningThreshold = "monthlyTokenWarningThreshold"
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
     @Published var provider: ProviderKind {
         didSet {
@@ -257,7 +257,8 @@ final class AppSettings: ObservableObject {
     @Published var lastPauseHandler: String = "none"
     @Published var lastSupportReason: String = ""
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         // Versions before this migration allowed previously stored automatic-AI
         // settings to survive the new cost-safe defaults. Reset those paid
         // background paths once on upgrade; users can deliberately re-enable
