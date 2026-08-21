@@ -3,8 +3,13 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
-## Unreleased
+## 1.3.0 — 2026-08-21 (public beta)
 
+- Added a Setup dashboard, metadata-only field inspection, guided TextEdit
+  verification, and a bounded content-free operation history.
+- Split unsafe output into hard-block and review-required paths; added compact
+  comparisons, persistent replacement recovery, retry/copy controls, and safe
+  in-memory undo for confirmed whole-field changes.
 - Added provider-reported token accounting, a 30-day usage/cost dashboard,
   per-source totals, automatic-call limits, and a configurable token warning.
 - Added a provider-free Local Quick Check and made provider-backed actions
