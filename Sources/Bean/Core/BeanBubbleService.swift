@@ -57,6 +57,7 @@ final class BeanBubbleService {
             preferences: settings.capabilityPreferences
         )
         guard capabilities.beanBubble.level != .unsupported else {
+            if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
             return hide(capabilities.beanBubble.reason)
         }
 

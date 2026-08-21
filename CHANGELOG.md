@@ -3,6 +3,22 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.3.1 — 2026-08-21 (public beta)
+
+- Fixed a native-host main-actor deadlock that left the browser extension's
+  connection check stuck on “Checking…” with no response.
+- Added bounded bridge timeouts and actionable recovery messages in both the
+  extension service worker and Options page.
+- Replaced the Terminal-based native-host setup with in-app extension
+  discovery and one-click Install/Repair for Chrome, Brave, Edge, and Chromium.
+- Added a guided, optional browser step to first-run onboarding and a numbered
+  setup flow in both Bean Settings and extension Options.
+- Preserved guarded Slack composer typing evidence while Bean's menu is used,
+  and applied that fallback consistently to field inspection, the Bean Bubble,
+  and whole-composer manual replacement.
+- Replaced internal field-policy reason codes in Settings with plain-language
+  capability explanations and added content-free browser-bridge diagnostics.
+
 ## 1.3.0 — 2026-08-21 (public beta)
 
 - Added a Setup dashboard, metadata-only field inspection, guided TextEdit

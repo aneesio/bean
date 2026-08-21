@@ -17,6 +17,36 @@ enum CapabilityLevel: String, Codable {
 struct CapabilityAssessment: Codable, Equatable {
     let level: CapabilityLevel
     let reason: String
+
+    var userFacingReason: String {
+        switch reason {
+        case "semanticTextSurface": return "Bean can work with an explicit text surface."
+        case "directValueWriteAvailable": return "Bean can replace and verify this field directly."
+        case "verifiedPasteFallback": return "Bean can use a guarded paste fallback."
+        case "electronPasteBestEffort": return "Desktop Slack uses a guarded best-effort paste."
+        case "editableBoundsAvailable": return "Bean can position the Bubble in this field."
+        case "electronTypingEvidenceFallback": return "Bean uses recent composer typing to place the Bubble safely."
+        case "electronEditorRequiresAdapter": return "Desktop Slack cannot provide reliable native underline positions; use the Bubble, shortcut, or Slack web extension."
+        case "browserExtensionEnabled": return "Web inline support uses the Bean browser extension."
+        case "browserExtensionRequired": return "Install and enable the Bean browser extension for web inline support."
+        case "nativeRangeBoundsAvailable": return "Bean can map issue ranges to this native field."
+        case "nativeRangeBoundsMissing", "nativeRangeCheckRequired": return "Native underline positioning is best effort in this field."
+        case "supportedButDisabled": return "This capability is available but currently turned off."
+        case "accessibilityPermissionRequired": return "Allow Accessibility access in System Settings."
+        case "noFocusedField": return "Bean could not see a focused field."
+        case "secureField": return "Secure fields are always excluded."
+        case "disabledField": return "This field is disabled."
+        case "notEditableText": return "This control is not an editable text field."
+        case "readOnlyField", "richTextUnsupported": return "This field does not expose safe editing support."
+        case "focusedFieldFallbackDisabled": return "Focused-field replacement is turned off."
+        case "searchFieldDisabled": return "Search and address fields are excluded."
+        case "codeEditorDisabled": return "Code editors are excluded."
+        case "categoryDisabled": return "This app category is turned off for the feature."
+        case "boundsCheckRequired": return "Bean must confirm editable field bounds at runtime."
+        case "noEditableBounds": return "Bean could not position UI inside this field."
+        default: return reason
+        }
+    }
 }
 
 enum ReferenceSurface: String, Codable, CaseIterable {

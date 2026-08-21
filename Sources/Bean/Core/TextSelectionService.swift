@@ -119,6 +119,10 @@ final class TextSelectionService {
             preferences: .manual(focusedFieldFallbackEnabled: allowFocusedFieldFallback)
         )
         guard capabilities.focusedFieldReplacement.level != .unsupported else {
+            if ElectronTextFocusEvidence.hasValidTypingEvidence(for: targetApp) {
+                return await acquireSlackFieldWithoutAX(targetApp: targetApp,
+                                                        savedClipboard: savedClipboard)
+            }
             Log.event("Focused-field acquisition refused: \(capabilities.focusedFieldReplacement.reason)")
             return .noSelectionOrFocusedField
         }

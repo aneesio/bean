@@ -108,7 +108,9 @@ can differ.
 `BrowserExtension/` is an experimental Manifest V3 extension for Chromium-based
 browsers. Its local detector has no token cost; deeper provider checks use the
 local native-messaging bridge and remain separately opt-in. It is not yet a
-Chrome Web Store release. See [BrowserExtension/README.md](BrowserExtension/README.md).
+Chrome Web Store release. Bean Settings → Labs → Browser Extension now guides
+the unpacked-extension steps, detects its ID, and installs or repairs the local
+bridge without Terminal. See [BrowserExtension/README.md](BrowserExtension/README.md).
 
 ## Updates
 

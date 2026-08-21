@@ -83,6 +83,10 @@ struct Diagnostics {
         lines.append("inlineHighlightsEnabled: \(settings.inlineHighlightsEnabled ? "yes" : "no")")
         lines.append("webInlineEnabled: \(settings.webInlineEnabled ? "yes" : "no")")
         lines.append("nativeHostBinary: \(Bundle.main.executablePath ?? "unknown")")
+        let browserBridge = BrowserBridgeInstaller().inspect()
+        lines.append("browserBridgeStatus: \(browserBridge.diagnosticsName)")
+        lines.append("browserBridgeExtensionsDetected: \(browserBridge.extensionIDs.count)")
+        lines.append("browserBridgeConfiguredBrowsers: \(browserBridge.configuredBrowserNames.count)/\(browserBridge.browserNames.count)")
         lines.append("beanBubbleEnabled: \(settings.bubbleEnabled ? "yes" : "no")")
         lines.append("typingMonitorActive: \(settings.monitorActive ? "yes" : "no")")
         lines.append("lastPauseHandler: \(settings.lastPauseHandler)")
@@ -113,4 +117,16 @@ struct Diagnostics {
 
     /// The log-stream command users can run to watch Bean's operational logs.
     static let logStreamCommand = #"log stream --predicate 'subsystem == "com.bean.app"' --info"#
+}
+
+private extension BrowserBridgeStatus {
+    var diagnosticsName: String {
+        switch state {
+        case .extensionNotFound: return "extensionNotFound"
+        case .readyToInstall: return "readyToInstall"
+        case .installed: return "installed"
+        case .needsRepair: return "needsRepair"
+        case .unavailable: return "browserUnavailable"
+        }
+    }
 }

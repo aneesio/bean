@@ -3,6 +3,7 @@
 // local Bean native-messaging host. It never stores request text.
 const HOST = "com.bean.nativehost";
 const SETTINGS_SCHEMA_VERSION = 3;
+const NATIVE_MESSAGE_TIMEOUT_MS = 5000;
 const SCRIPT_ID = "bean-inline";
 const SCRIPT_FILES = [
   "src/localDetector.js",
@@ -68,20 +69,34 @@ chrome.permissions.onRemoved.addListener(() => syncRegisteredContentScript());
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 
 function sendNative(message, sendResponse, notInstalledCode) {
+  let finished = false;
+  const finish = (response) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    sendResponse(response);
+  };
+  const timer = setTimeout(() => {
+    finish({
+      ok: false,
+      errorCode: "bridgeTimeout",
+      message: "Bean did not respond in time."
+    });
+  }, NATIVE_MESSAGE_TIMEOUT_MS);
   try {
     chrome.runtime.sendNativeMessage(HOST, message, (response) => {
       if (chrome.runtime.lastError || !response) {
-        sendResponse({
+        finish({
           ok: false,
           errorCode: notInstalledCode,
           message: (chrome.runtime.lastError || {}).message || ""
         });
         return;
       }
-      sendResponse(response);
+      finish(response);
     });
   } catch (error) {
-    sendResponse({ ok: false, errorCode: notInstalledCode, message: String(error) });
+    finish({ ok: false, errorCode: notInstalledCode, message: String(error) });
   }
 }
 

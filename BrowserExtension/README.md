@@ -15,15 +15,18 @@ release.
 Version 0.2 and later reset older blanket-site settings and bridge opt-ins once
 because the extension migrated to Chrome optional host permissions.
 
-## Install for development
+## Install from a GitHub Bean release
 
-1. Open `chrome://extensions` in Chrome, Brave, or Edge.
-2. Turn on Developer mode.
-3. Choose **Load unpacked** and select `BrowserExtension/`.
-4. Open Bean's extension Options.
-5. Add exact sites such as `mail.google.com` or `app.slack.com`, enable the
+1. Keep Bean in `/Applications`, open it, and go to **Settings → Labs → Browser
+   Extension**.
+2. Click **Reveal Bean Extension** and **Open Browser Extensions**.
+3. Turn on Developer mode, choose **Load unpacked**, and select the revealed
+   `BrowserExtension` folder.
+4. Back in Bean, click **Detect and Install**. No Terminal command is required.
+5. Reload the extension once and open its Options.
+6. Add exact sites such as `mail.google.com` or `app.slack.com`, enable the
    extension, and approve Chrome's site-access prompt.
-6. Reload already-open pages on those sites.
+7. Reload already-open pages on those sites.
 
 The extension registers its content script only for approved hostnames. Removing
 a hostname in Options revokes that permission.
@@ -31,22 +34,18 @@ a hostname in Options revokes that permission.
 ## Optional native bridge
 
 The local detector requires no Mac app connection. For deeper provider-backed
-issues and whole-paragraph proofreading:
+issues and whole-paragraph proofreading, use **Detect and Install** in Bean
+Settings. Bean reads only Chromium extension ID/path metadata, validates that
+the loaded extension is Bean, and restricts the native host to the detected ID.
+The command-line installer remains available only as a developer/recovery tool.
 
-```bash
-./scripts/install_native_messaging_host.sh <extension-id> /Applications/Bean.app
-```
-
-Packaged app users can copy the equivalent bundled command from Bean Settings or
-extension Options without cloning the repository.
-
-Then enable **Web Inline Support** in Bean Settings → Labs and **Use the Bean
+Enable **Web Inline Support** in Bean Settings → Labs and **Use the Bean
 app/provider** in extension Options. These checks can incur provider API charges
 after typing pauses, are rate-limited by the extension, contribute to Bean's
 content-free Web Inline usage total, and stop at Bean's daily automatic-call
 limit.
 
-The install manifest accepts only the extension ID supplied to the script. See
+The install manifest accepts only validated Bean extension IDs. See
 [`NativeMessaging/README.md`](../NativeMessaging/README.md).
 
 ## Supported fields

@@ -18,10 +18,15 @@ enum ElectronTextFocusEvidence {
 
     static func recordClick(app: NSRunningApplication?, point: CGPoint,
                             focusedElementIsKnownNonText: Bool) {
-        guard app?.bundleIdentifier == slackBundleID, !focusedElementIsKnownNonText else {
+        guard app?.bundleIdentifier == slackBundleID else {
             clear()
             return
         }
+        // A menu-bar item can be clicked while Slack remains the frontmost app.
+        // Accept only clicks geometrically inside a real Slack window, so using
+        // Bean's menu does not erase or replace valid composer evidence.
+        guard clickIsInsideAppWindow(point, processIdentifier: app?.processIdentifier) else { return }
+        guard !focusedElementIsKnownNonText else { clear(); return }
         processIdentifier = app?.processIdentifier
         clickPoint = point
         clickedAt = Date()
@@ -47,6 +52,10 @@ enum ElectronTextFocusEvidence {
         return clickPoint
     }
 
+    static func hasValidTypingEvidence(for app: NSRunningApplication?) -> Bool {
+        validAnchor(for: app) != nil
+    }
+
     static func clear() {
         processIdentifier = nil
         clickPoint = nil
@@ -62,6 +71,35 @@ enum ElectronTextFocusEvidence {
               !characters.isEmpty else { return false }
         return characters.unicodeScalars.contains { scalar in
             !CharacterSet.controlCharacters.contains(scalar)
+        }
+    }
+
+    private static func clickIsInsideAppWindow(_ appKitPoint: CGPoint,
+                                               processIdentifier: pid_t?) -> Bool {
+        guard let processIdentifier,
+              let screen = NSScreen.screens.first(where: { $0.frame.contains(appKitPoint) }),
+              let displayNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return false
+        }
+        let displayBounds = CGDisplayBounds(CGDirectDisplayID(displayNumber.uint32Value))
+        let quartzPoint = CGPoint(
+            x: displayBounds.minX + (appKitPoint.x - screen.frame.minX),
+            y: displayBounds.minY + (screen.frame.maxY - appKitPoint.y)
+        )
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return false }
+        return windows.contains { window in
+            guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processIdentifier,
+                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let rawBounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let x = rawBounds["X"] as? NSNumber,
+                  let y = rawBounds["Y"] as? NSNumber,
+                  let width = rawBounds["Width"] as? NSNumber,
+                  let height = rawBounds["Height"] as? NSNumber else { return false }
+            let bounds = CGRect(x: x.doubleValue, y: y.doubleValue,
+                                width: width.doubleValue, height: height.doubleValue)
+            return bounds.contains(quartzPoint)
         }
     }
 }

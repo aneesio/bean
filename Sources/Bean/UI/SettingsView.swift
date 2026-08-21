@@ -197,6 +197,9 @@ struct SettingsView: View {
                 LabeledContent("App", value: report.appName)
                 LabeledContent("Reference profile", value: report.referenceSurface ?? "generic")
                 LabeledContent("Role", value: report.role ?? "Unknown")
+                if report.fallbackEvidence == "slackRecentTyping" {
+                    LabeledContent("Fallback", value: "Recent Slack composer typing detected")
+                }
                 capabilityRow("Selected-text action", report.selectedTextAction)
                 capabilityRow("Focused-field replacement", report.focusedFieldReplacement)
                 capabilityRow("Bean Bubble", report.beanBubble)
@@ -222,7 +225,7 @@ struct SettingsView: View {
                         : assessment.level == .degraded ? .warning : .neutral,
                     showsIcon: false
                 )
-                Text(assessment.reason).font(.caption2).foregroundColor(.secondary)
+                Text(assessment.userFacingReason).font(.caption2).foregroundColor(.secondary)
             }
         }
     }
@@ -589,47 +592,8 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Browser Extension
-
-    @State private var copiedInstall = false
-
     private var browserExtensionSection: some View {
-        Group {
-            HStack {
-                Toggle("Enable Web Inline Support", isOn: $settings.webInlineEnabled)
-                Spacer()
-                StatusPill(text: "Beta", kind: .experimental, showsIcon: false)
-            }
-            Text("Native Inline Highlights work where macOS exposes reliable text positions. Web apps (Gmail, Slack web, Notion, Jira) need the Bean browser extension. Unsupported editors fall back to Passive Suggestions or the Bean Bubble.")
-                .font(.caption).foregroundColor(.secondary)
-
-            Text("When enabled, browser text is sent to Bean locally through Chrome Native Messaging so Bean can generate suggestions using your configured AI provider. Bean does not store this text.")
-                .font(.caption2).foregroundColor(.secondary)
-
-            HStack {
-                Button("Reveal Extension Folder") { revealExtensionFolder() }
-                Button("Setup Guide") { actions.openReadme() }
-            }
-            Button(copiedInstall ? "Install command copied ✓" : "Copy Native Host Install Command") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(
-                    #""/Applications/Bean.app/Contents/Resources/NativeMessaging/install_native_messaging_host.sh" <extension-id> "/Applications/Bean.app""#,
-                    forType: .string
-                )
-                copiedInstall = true
-            }
-            Text("Setup: keep Bean in /Applications, load BrowserExtension/ unpacked in Chrome (Developer mode), copy its extension ID, replace <extension-id> in the copied command, and run it in Terminal. Then test the connection in extension Options.")
-                .font(.caption2).foregroundColor(.secondary)
-        }
-    }
-
-    private func revealExtensionFolder() {
-        if let url = Bundle.main.resourceURL?.appendingPathComponent("BrowserExtension"),
-           FileManager.default.fileExists(atPath: url.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } else {
-            actions.openReadme()
-        }
+        BrowserExtensionSetupSection(settings: settings)
     }
 
     // MARK: - Privacy

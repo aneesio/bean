@@ -15,7 +15,7 @@ struct OnboardingView: View {
     @State private var step: Step = .welcome
 
     private enum Step: Int, CaseIterable {
-        case welcome, provider, permissions, verify, done
+        case welcome, provider, permissions, verify, browser, done
     }
 
     var body: some View {
@@ -67,6 +67,9 @@ struct OnboardingView: View {
         }
         case .verify:
             CrossAppVerificationSection(settings: settings, history: history, setupStatus: setupStatus)
+        case .browser: stepFrame("Optional browser setup", "Add inline help to supported web text fields. You can skip this and set it up later.") {
+            BrowserExtensionSetupSection(settings: settings)
+        }
         case .done: doneStep
         }
     }

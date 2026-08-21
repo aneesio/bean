@@ -1,6 +1,7 @@
 // Bean options page. Stores settings and exact hostnames only; it never reads
 // or stores page text. Site permissions are requested from this user gesture.
 const SETTINGS_SCHEMA_VERSION = 3;
+const STATUS_TIMEOUT_MS = 7000;
 
 function normalizeHost(value) {
   const raw = value.trim().toLowerCase();
@@ -46,6 +47,7 @@ function renderStatus() {
 }
 
 function load() {
+  document.getElementById("extensionID").textContent = chrome.runtime.id || "Unavailable";
   chrome.storage.local.get(
     ["enabled", "allowedSites", "useBridge", "localFallback", "settingsSchemaVersion"],
     (settings) => {
@@ -108,16 +110,34 @@ function save() {
 }
 
 function testBridge() {
+  const button = document.getElementById("test");
+  button.disabled = true;
   setStatusCell("s-bridge", "Checking…", "off");
-  chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
+  let finished = false;
+  let timer;
+
+  const finish = (response, runtimeMessage = "") => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    button.disabled = false;
     if (!response || !response.ok) {
       const code = response && response.errorCode;
+      const timedOut = code === "bridgeTimeout";
       setStatusCell(
         "s-bridge",
-        !response || code === "notInstalled" || code === "bridgeUnavailable"
-          ? "Not installed — see setup guide"
+        timedOut
+          ? "No response — repair in the Bean app"
+          : !response || code === "notInstalled" || code === "bridgeUnavailable"
+          ? "Not connected — finish setup in the Bean app"
           : `Error (${code || "unknown"})`,
         "warn"
+      );
+      showMessage(
+        timedOut
+          ? "Bean did not respond. Open Bean → Settings → Labs → Browser Extension, click Install or Repair, then reload this extension."
+          : `Connection failed. Open Bean → Settings → Labs → Browser Extension and click Install or Repair.${runtimeMessage ? ` (${runtimeMessage})` : ""}`,
+        true
       );
       return;
     }
@@ -125,15 +145,27 @@ function testBridge() {
       setStatusCell("s-budget", `${response.automaticCallsToday} of ${response.dailyAutomaticCallLimit} automatic calls today`,
                     response.automaticCallsToday >= response.dailyAutomaticCallLimit ? "warn" : "ok");
     }
+    showMessage("Bean is connected. Save your site choices below.");
     if (!response.providerConfigured) { setStatusCell("s-bridge", "Connected — add an API key in Bean", "warn"); return; }
     if (!response.webInlineEnabled) { setStatusCell("s-bridge", "Connected — enable Web Inline Support in Bean", "warn"); return; }
     setStatusCell("s-bridge", `Connected to Bean ${response.appVersion || ""}`, "ok");
+  };
+
+  timer = setTimeout(() => {
+    finish({ ok: false, errorCode: "bridgeTimeout" });
+  }, STATUS_TIMEOUT_MS);
+
+  chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
+    const runtimeMessage = (chrome.runtime.lastError || {}).message || "";
+    finish(response, runtimeMessage);
   });
 }
 
 document.getElementById("save").addEventListener("click", save);
 document.getElementById("test").addEventListener("click", testBridge);
-document.getElementById("copyCmd").addEventListener("click", () => {
-  navigator.clipboard.writeText('\"/Applications/Bean.app/Contents/Resources/NativeMessaging/install_native_messaging_host.sh\" <extension-id> \"/Applications/Bean.app\"');
+document.getElementById("copyID").addEventListener("click", () => {
+  navigator.clipboard.writeText(chrome.runtime.id || "");
+  showMessage("Extension ID copied.");
 });
 load();
+setTimeout(testBridge, 150);

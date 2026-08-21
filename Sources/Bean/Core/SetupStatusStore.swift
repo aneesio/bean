@@ -12,12 +12,16 @@ struct FieldInspectionReport: Codable, Equatable {
     let referenceSurface: String?
     let role: String?
     let subrole: String?
+    let fallbackEvidence: String?
     let selectedTextAction: CapabilityAssessment
     let focusedFieldReplacement: CapabilityAssessment
     let beanBubble: CapabilityAssessment
     let inlineChecking: CapabilityAssessment
 
     var headline: String {
+        if fallbackEvidence == "slackRecentTyping" {
+            return "Bean detected a Slack composer (best effort)"
+        }
         let key = [selectedTextAction, focusedFieldReplacement, beanBubble]
         if key.contains(where: { $0.level == .supported }) { return "Bean found a usable text surface" }
         if key.contains(where: { $0.level == .degraded }) { return "Bean found a best-effort text surface" }
@@ -33,6 +37,7 @@ struct FieldInspectionReport: Codable, Equatable {
             "fieldCheckReferenceSurface: \(referenceSurface ?? "generic")",
             "fieldCheckRole: \(role ?? "unknown")",
             "fieldCheckSubrole: \(subrole ?? "unknown")",
+            "fieldCheckEvidence: \(fallbackEvidence ?? "none")",
             "fieldCheckSelection: \(selectedTextAction.level.rawValue)(\(selectedTextAction.reason))",
             "fieldCheckFocusedReplacement: \(focusedFieldReplacement.level.rawValue)(\(focusedFieldReplacement.reason))",
             "fieldCheckBubble: \(beanBubble.level.rawValue)(\(beanBubble.reason))",
@@ -64,13 +69,31 @@ final class SetupStatusStore: ObservableObject {
         let bundle = app?.bundleIdentifier
         let category = AppCategory.from(bundleIdentifier: bundle)
         let field = app.flatMap(AccessibilityService.focusedFieldMetadata(in:))
+        let usesSlackTypingEvidence = app.map {
+            ElectronTextFocusEvidence.hasValidTypingEvidence(for: $0)
+        } ?? false
         let hasBubbleBounds = field.map {
             TextRangeLocator.fieldRect(for: $0.element) != nil
                 || TextRangeLocator.selectionRect(for: $0.element) != nil
         }
+        let traits: FieldTraits?
+        if let field, field.isSemanticTextSurface {
+            traits = FieldTraits(field: field, hasBubbleBounds: hasBubbleBounds)
+        } else if usesSlackTypingEvidence {
+            // No AX value/role is invented. This says only that the guarded,
+            // content-free Slack click+typing fallback is currently available.
+            traits = FieldTraits(
+                role: nil, subrole: nil, isSecure: false, isEnabled: true,
+                isSemanticTextSurface: true, acceptsTextInput: false,
+                isValueSettable: false, isSearchLike: false,
+                hasBubbleBounds: true, nativeRangeBoundsReliable: false
+            )
+        } else {
+            traits = field.map { FieldTraits(field: $0, hasBubbleBounds: hasBubbleBounds) }
+        }
         let capabilities = FieldCapabilityPolicy.evaluate(
             bundleIdentifier: bundle, category: category,
-            traits: field.map { FieldTraits(field: $0, hasBubbleBounds: hasBubbleBounds) },
+            traits: traits,
             preferences: settings.capabilityPreferences
         )
         let report = Self.makeReport(
@@ -78,6 +101,7 @@ final class SetupStatusStore: ObservableObject {
             bundleIdentifier: bundle,
             category: category,
             field: field,
+            fallbackEvidence: usesSlackTypingEvidence ? "slackRecentTyping" : nil,
             capabilities: capabilities
         )
         latestFieldInspection = report
@@ -109,6 +133,7 @@ final class SetupStatusStore: ObservableObject {
         bundleIdentifier: String?,
         category: AppCategory,
         field: AccessibilityService.FocusedField?,
+        fallbackEvidence: String?,
         capabilities: FieldCapabilities
     ) -> FieldInspectionReport {
         return FieldInspectionReport(
@@ -116,6 +141,7 @@ final class SetupStatusStore: ObservableObject {
             appCategory: category.rawValue,
             referenceSurface: capabilities.referenceSurface.rawValue,
             role: field?.role, subrole: field?.subrole,
+            fallbackEvidence: fallbackEvidence,
             selectedTextAction: capabilities.selectedTextAction,
             focusedFieldReplacement: capabilities.focusedFieldReplacement,
             beanBubble: capabilities.beanBubble,

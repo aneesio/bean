@@ -10,10 +10,15 @@ approved page → extension content script → extension service worker
               → the user's selected OpenAI or Anthropic provider
 ```
 
-## Install
+## Install (normal users)
 
-Build or install Bean first, load the extension unpacked, and copy its 32-letter
-ID from `chrome://extensions`. Then run:
+Use **Bean Settings → Labs → Browser Extension → Detect and Install**. Bean
+discovers the loaded extension from Chromium's extension metadata and writes
+the per-user host manifest itself. No Terminal command is required.
+
+## Command-line fallback (development/recovery)
+
+Build or install Bean first, load the extension unpacked, and then run:
 
 ```bash
 ./scripts/install_native_messaging_host.sh <extension-id> /Applications/Bean.app
@@ -29,7 +34,8 @@ Uninstall with:
 ./scripts/uninstall_native_messaging_host.sh
 ```
 
-Reinstall after moving Bean.app or if the unpacked extension ID changes.
+Normal users can use **Repair Browser Connection** after moving Bean.app or if
+the unpacked extension ID changes.
 
 ## Protocol
 

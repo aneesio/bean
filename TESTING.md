@@ -111,6 +111,13 @@ repeatable compatibility boundary changes.
 - A review-required paragraph shows the before/after approval card and is not
   applied until approved.
 - Test Connection reports the automatic daily-call count and limit.
+- Test Connection reaches a final Connected/Error state within seven seconds;
+  it never remains on Checking indefinitely.
+- Settings discovers a loaded Bean extension and Install/Repair writes an exact
+  per-user host manifest without Terminal.
+- In Slack desktop, click the composer and type at least two characters before
+  choosing Bean → Check Current Field. The report should identify the guarded
+  Slack typing fallback; clicking Bean's menu must not erase that evidence.
 
 Use `BrowserExtension/test/fixtures/editor.html` for deterministic manual cases.
 

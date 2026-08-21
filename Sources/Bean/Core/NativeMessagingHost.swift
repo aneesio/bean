@@ -14,6 +14,23 @@ import Foundation
 // execution from messages, and NO logging or persistence of request text.
 enum NativeMessagingHost {
 
+    private final class ResultBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func store(_ value: Data) {
+            lock.lock()
+            data = value
+            lock.unlock()
+        }
+
+        func load() -> Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return data
+        }
+    }
+
     private static let maxMessageBytes = 1_000_000   // 1 MB frame cap
     private static let maxTextChars = 8_000
     private static let maxIssuesCap = 8
@@ -63,15 +80,19 @@ enum NativeMessagingHost {
 
     // MARK: - Dispatch (async bridged to the serial loop)
 
-    private static func processSync(_ payload: Data) -> Data {
+    static func processSync(_ payload: Data) -> Data {
         let semaphore = DispatchSemaphore(value: 0)
-        var result = Data()
-        Task {
-            result = await process(payload)
+        let result = ResultBox()
+        // Never inherit a caller's actor here. The native host is a synchronous
+        // pipe protocol, while parts of status/usage storage are MainActor
+        // isolated. Inheriting MainActor and then waiting caused the bridge to
+        // remain stuck at “Checking…” forever.
+        Task.detached {
+            result.store(await process(payload))
             semaphore.signal()
         }
         semaphore.wait()
-        return result
+        return result.load()
     }
 
     private static func process(_ payload: Data) async -> Data {

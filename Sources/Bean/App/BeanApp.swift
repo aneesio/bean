@@ -16,8 +16,15 @@ struct BeanApp {
         // case run the stdin/stdout host loop and never start the GUI.
         let args = CommandLine.arguments.dropFirst()
         if args.contains(where: { $0.hasPrefix("chrome-extension://") }) || args.contains("--native-messaging-host") {
-            NativeMessagingHost.run()
-            return
+            // The native host performs blocking stdin reads. Running that loop
+            // on the main actor deadlocks status requests, because usage and
+            // preferences intentionally hop back to MainActor. Keep the main
+            // queue alive for those hops and own the pipe loop on a worker.
+            DispatchQueue.global(qos: .userInitiated).async {
+                NativeMessagingHost.run()
+                exit(EXIT_SUCCESS)
+            }
+            dispatchMain()
         }
 
         let app = NSApplication.shared

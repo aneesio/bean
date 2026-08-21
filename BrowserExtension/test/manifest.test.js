@@ -5,7 +5,7 @@ const path = require("node:path");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
 
 assert.equal(manifest.manifest_version, 3);
-assert.equal(manifest.version, "0.3.0");
+assert.equal(manifest.version, "0.4.0");
 assert.equal(manifest.name.includes("Beta"), true);
 assert.equal(manifest.host_permissions, undefined, "blanket required host permissions are forbidden");
 assert.equal(manifest.content_scripts, undefined, "scripts must be registered only for approved sites");

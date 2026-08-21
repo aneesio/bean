@@ -25,7 +25,16 @@ const chrome = {
     request: (_permissions, callback) => callback(true),
     remove: (_permissions, callback) => callback(true)
   },
-  runtime: { sendMessage: (_message, callback) => callback && callback({ ok: true }), lastError: null }
+  runtime: {
+    id: "abcdefghijklmnopabcdefghijklmnop",
+    sendMessage: (_message, callback) => callback && callback({
+      ok: true,
+      providerConfigured: true,
+      webInlineEnabled: true,
+      appVersion: "test"
+    }),
+    lastError: null
+  }
 };
 
 const context = {
@@ -33,7 +42,8 @@ const context = {
   document: { getElementById: element },
   navigator: { clipboard: { writeText: () => Promise.resolve() } },
   URL,
-  setTimeout: () => {}
+  setTimeout: (callback, delay) => { if (delay === 150) callback(); return 1; },
+  clearTimeout: () => {}
 };
 const source = fs.readFileSync(path.join(__dirname, "..", "options.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "..", "options.html"), "utf8");
@@ -44,6 +54,9 @@ assert.match(html, /id="s-slack"/);
 assert.match(html, /id="s-budget"/);
 assert.match(html, /mail\.google\.com/);
 assert.match(html, /app\.slack\.com/);
+assert.doesNotMatch(html, /Terminal|install_native_messaging_host/);
+assert.equal(element("extensionID").textContent, chrome.runtime.id);
+assert.notEqual(element("s-bridge").textContent, "Checking…");
 
 assert.equal(context.normalizeHost("MAIL.Google.com"), "mail.google.com");
 assert.equal(context.normalizeHost("https://app.slack.com/client"), "app.slack.com");

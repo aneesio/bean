@@ -31,6 +31,18 @@
   <p class="muted">Inline proofreading for web text fields. Off by default. Bean requests access only to the exact sites you approve and never stores your text.</p>
 
   <div class="card">
+    <strong>Setup</strong>
+    <ol class="muted" style="padding-left:20px;line-height:1.6">
+      <li>Keep the Bean app in Applications and open it.</li>
+      <li>In Bean, open Settings → Labs → Browser Extension.</li>
+      <li>Click <strong>Detect and Install</strong>, then reload this extension once.</li>
+      <li>Return here, approve your sites below, and save.</li>
+    </ol>
+    <p class="muted">Bean normally detects this extension automatically. If it asks for the ID, copy it here:</p>
+    <p><code id="extensionID">—</code> <button id="copyID">Copy ID</button></p>
+  </div>
+
+  <div class="card">
     <strong>Status</strong>
     <div class="status" style="margin-top:8px">
       <span class="k">Extension</span><span id="s-enabled">—</span>
@@ -42,17 +54,12 @@
       <span class="k">AI budget</span><span id="s-budget">Check connection</span>
     </div>
     <p style="margin-top:10px"><button class="primary" id="test">Test Connection</button></p>
-    <details>
-      <summary>Details &amp; install command</summary>
-      <p class="muted">If the bridge says "Not installed": keep Bean in <code>/Applications</code>, copy the extension ID from <code>chrome://extensions</code>, replace the placeholder below, and run the command in Terminal:</p>
-      <p><code>"/Applications/Bean.app/Contents/Resources/NativeMessaging/install_native_messaging_host.sh" &lt;extension-id&gt; "/Applications/Bean.app"</code> <button id="copyCmd">Copy</button></p>
-      <p class="muted">Re-run after the extension ID changes or you move/rebuild Bean.app.</p>
-    </details>
+    <p class="muted">If this does not connect, use <strong>Install or Repair</strong> in Bean Settings. The check always finishes within a few seconds.</p>
   </div>
 
   <div class="card">
     <label class="row"><input type="checkbox" id="enabled" /> <strong>Enable Bean inline proofreading</strong></label>
-    <p class="muted">Reference sites: Gmail at <code>mail.google.com</code> and Slack web at <code>app.slack.com</code>. Bean supports their ordinary message composers when the exact site is approved. Password, search, email-address, code, disabled, and read-only fields are skipped; Google Docs canvas and Slack desktop require different paths.</p>
+    <p class="muted">Reference sites: Gmail at <code>mail.google.com</code> and Slack web at <code>app.slack.com</code>. Bean supports their ordinary message composers when the exact site is approved. Password, search, email-address, code, disabled, and read-only fields are skipped; Google Docs canvas and Slack desktop use the Mac app instead.</p>
   </div>
 
   <div class="card">

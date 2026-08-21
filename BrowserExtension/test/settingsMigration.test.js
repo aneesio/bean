@@ -31,7 +31,7 @@ function runMigration(initial) {
     }
   };
 
-  vm.runInNewContext(source, { chrome, Object });
+  vm.runInNewContext(source, { chrome, Object, setTimeout: () => 1, clearTimeout: () => {} });
   assert.ok(installedListener, "background registered an install listener");
   installedListener();
   // Values created by the VM have a different object prototype; serialize them
