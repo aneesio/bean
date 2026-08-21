@@ -6,6 +6,7 @@
   const ACCENT = "#bd7f3c";
   let hostEl = null, shadow = null, underlineLayer = null, cardEl = null, hoverTimer = null;
   let groupLayer = null, groupCardEl = null;
+  let paragraphReviewEl = null, paragraphReviewResolve = null;
 
   function ensureHost() {
     if (hostEl) return;
@@ -43,6 +44,12 @@
               box-shadow:0 1px 4px rgba(0,0,0,0.25); display:flex; align-items:center; justify-content:center;
               font:600 10px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; box-sizing:border-box; }
       .gactions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+      .review { width:560px; }
+      .compare { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
+      .compare label { display:block; font-size:10px; font-weight:600; color:#6b6b70; margin-bottom:4px; }
+      .compare pre { box-sizing:border-box; height:150px; overflow:auto; white-space:pre-wrap;
+                     margin:0; padding:8px; border-radius:7px; background:rgba(0,0,0,0.04);
+                     border:1px solid rgba(0,0,0,0.08); font:12px ui-monospace,monospace; }
       @media (prefers-color-scheme: dark) {
         .card { background:rgba(40,40,42,0.98); color:#f2f2f5; }
         button.b { background:#3a3a3c; color:#f2f2f5; border-color:rgba(255,255,255,0.12); }
@@ -64,6 +71,10 @@
     if (cardEl) { cardEl.remove(); cardEl = null; }
     if (groupLayer) groupLayer.innerHTML = "";
     if (groupCardEl) { groupCardEl.remove(); groupCardEl = null; }
+    if (paragraphReviewEl) { paragraphReviewEl.remove(); paragraphReviewEl = null; }
+    if (paragraphReviewResolve) {
+      const resolve = paragraphReviewResolve; paragraphReviewResolve = null; resolve(false);
+    }
   }
 
   function render(entries, selectedId, position, handlers) {
@@ -138,7 +149,7 @@
   }
 
   function anchor(card, rect) {
-    const w = 300, h = card.offsetHeight || 120, gap = 8;
+    const w = card.offsetWidth || 300, h = card.offsetHeight || 120, gap = 8;
     let x = rect.x + rect.w / 2 - w / 2;
     x = Math.max(window.scrollX + 8, Math.min(x, window.scrollX + window.innerWidth - w - 8));
     let y = rect.y - h - gap; // above
@@ -212,6 +223,46 @@
     anchor(card, { x: group.anchor.x, y: group.anchor.y, w: 18, h: group.anchor.h || 18 });
   }
 
+  // Review-required whole-paragraph output is never applied automatically.
+  // Show a before/after card and resolve only after an explicit user choice.
+  function reviewParagraph(pageRect, before, after, message) {
+    ensureHost();
+    if (paragraphReviewResolve) paragraphReviewResolve(false);
+    if (paragraphReviewEl) paragraphReviewEl.remove();
+    return new Promise((resolve) => {
+      paragraphReviewResolve = resolve;
+      const card = document.createElement("div");
+      card.className = "card review";
+      card.dataset.beanParagraphReview = "";
+      card.innerHTML = `
+        <div class="row"><strong>Review unusual result</strong><span class="spacer"></span></div>
+        <div class="expl"></div>
+        <div class="compare">
+          <div><label>BEFORE</label><pre data-part="before"></pre></div>
+          <div><label>AFTER</label><pre data-part="after"></pre></div>
+        </div>
+        <div class="actions"><button class="b" data-act="cancel">Cancel</button>
+          <span class="spacer"></span><button class="b primary" data-act="apply">Apply reviewed result</button></div>`;
+      card.querySelector(".expl").textContent = message || "Review this result before changing the paragraph.";
+      card.querySelector('[data-part="before"]').textContent = before;
+      card.querySelector('[data-part="after"]').textContent = after;
+      card.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+      const finish = (approved) => {
+        if (paragraphReviewEl) paragraphReviewEl.remove();
+        paragraphReviewEl = null; paragraphReviewResolve = null; resolve(approved);
+      };
+      card.querySelector('[data-act="cancel"]').addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation(); finish(false);
+      });
+      card.querySelector('[data-act="apply"]').addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation(); finish(true);
+      });
+      shadow.appendChild(card);
+      paragraphReviewEl = card;
+      anchor(card, pageRect || { x: window.scrollX + window.innerWidth / 2, y: window.scrollY + 120, w: 1, h: 1 });
+    });
+  }
+
   // A small, self-removing status toast (e.g. "Paragraph fixed"). It lives in its
   // OWN element on the page — not the cleared overlay host — so the field's input
   // event (which tears the overlay down) doesn't wipe it mid-message.
@@ -240,5 +291,5 @@
     }, ms || 1500);
   }
 
-  window.BeanOverlay = { render, renderGroups, clear, flash };
+  window.BeanOverlay = { render, renderGroups, clear, flash, reviewParagraph };
 })();

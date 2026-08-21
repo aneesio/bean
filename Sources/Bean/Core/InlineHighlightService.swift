@@ -11,6 +11,8 @@ import ApplicationServices
 final class InlineHighlightService {
     private let settings: AppSettings
     private let userContent: UserContentStore
+    private let history: OperationHistoryStore
+    private let usageLedger: UsageLedgerStore
     private let statusHUD: StatusHUD
 
     private let detector = IssueDetector()
@@ -29,9 +31,13 @@ final class InlineHighlightService {
     private var entries: [HighlightOverlayController.Entry] = []
     private var selectedID: UUID?
 
-    init(settings: AppSettings, userContent: UserContentStore, statusHUD: StatusHUD) {
+    init(settings: AppSettings, userContent: UserContentStore,
+         history: OperationHistoryStore, usageLedger: UsageLedgerStore,
+         statusHUD: StatusHUD) {
         self.settings = settings
         self.userContent = userContent
+        self.history = history
+        self.usageLedger = usageLedger
         self.statusHUD = statusHUD
         overlay.onActivateIssue = { [weak self] id in self?.activate(id) }
         overlay.onApply = { [weak self] id in self?.apply(id) }
@@ -104,13 +110,40 @@ final class InlineHighlightService {
         let llmCooldownElapsed = lastCallTime.map {
             Date().timeIntervalSince($0) >= EngineConfig.automaticLLMCooldown
         } ?? true
-        if wantsLLM, llmCooldownElapsed {
+        let automaticAllowed = usageLedger.allowsAutomaticCall(
+            dailyLimit: settings.dailyAutomaticCallLimit)
+        if wantsLLM, !automaticAllowed, issues.isEmpty {
+            reason = "automaticDailyLimit"; return false
+        } else if wantsLLM, !automaticAllowed {
+            // Keep free local findings, but do not make a provider request.
+        } else if wantsLLM, llmCooldownElapsed {
             lastCallTime = Date()
             let llm = await detector.llmIssues(in: value, context: context, dictionary: userContent.dictionary,
                                                provider: settings.provider, model: settings.model,
                                                apiKey: settings.apiKey, timeout: settings.timeoutSeconds)
-            llmCount = llm.count
-            issues += llm
+            llmCount = llm.issues.count
+            issues += llm.issues
+            if let usage = llm.usage {
+                usageLedger.record(usage, source: .nativeInline,
+                                   provider: settings.provider.rawValue, model: settings.model)
+                history.record(OperationRecord(
+                    source: .nativeInline,
+                    appName: context.appName,
+                    appBundleIdentifier: context.bundleIdentifier,
+                    appCategory: AppCategory.from(bundleIdentifier: context.bundleIdentifier).rawValue,
+                    action: "detectIssues",
+                    inputMode: context.acquisitionMode.rawLabel,
+                    inputLength: value.count,
+                    outputLength: llm.issues.reduce(0) { $0 + $1.suggestion.count },
+                    provider: settings.provider.rawValue,
+                    model: settings.model,
+                    safetyResult: "structuredIssueMapping",
+                    outcome: llm.issues.isEmpty ? "noIssues" : "issuesShown",
+                    inputTokens: usage.inputTokens,
+                    outputTokens: usage.outputTokens,
+                    usageEstimated: usage.isEstimated
+                ))
+            }
         } else if wantsLLM, !llmCooldownElapsed, issues.isEmpty {
             reason = "rateLimited"; return false
         }

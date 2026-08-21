@@ -31,6 +31,7 @@ enum ActionCategory {
 // generative drafts of a *response* and are copy-first (no direct replace).
 enum WritingAction: String, CaseIterable, Identifiable {
     // Improve Text
+    case localQuickCheck
     case proofread
     case makeClearer
     case makeConcise
@@ -51,7 +52,7 @@ enum WritingAction: String, CaseIterable, Identifiable {
 
     var category: ActionCategory {
         switch self {
-        case .proofread: return .proofread
+        case .localQuickCheck, .proofread: return .proofread
         case .makeClearer, .makeConcise, .makeProfessional, .makeCasual: return .rewrite
         case .draftReply, .askClarification, .politeNo, .confirmNextSteps, .thankThem, .pushBackProfessionally: return .reply
         case .composeMessage, .statusUpdate: return .compose
@@ -60,7 +61,8 @@ enum WritingAction: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .proofread: return "Proofread"
+        case .localQuickCheck: return "Local Quick Check"
+        case .proofread: return "AI Proofread"
         case .makeClearer: return "Make Clearer"
         case .makeConcise: return "Make Concise"
         case .makeProfessional: return "Make Professional"
@@ -78,7 +80,8 @@ enum WritingAction: String, CaseIterable, Identifiable {
 
     var shortDescription: String {
         switch self {
-        case .proofread: return "Fix grammar, spelling, and punctuation"
+        case .localQuickCheck: return "Obvious typos and spacing · offline"
+        case .proofread: return "Thorough grammar and spelling · uses AI"
         case .makeClearer: return "Improve clarity, keep the meaning"
         case .makeConcise: return "Shorten without losing key points"
         case .makeProfessional: return "Polished, business-appropriate tone"
@@ -96,6 +99,7 @@ enum WritingAction: String, CaseIterable, Identifiable {
 
     var symbolName: String {
         switch self {
+        case .localQuickCheck: return "bolt.shield"
         case .proofread: return "checkmark.circle"
         case .makeClearer: return "sparkles"
         case .makeConcise: return "scissors"
@@ -115,6 +119,7 @@ enum WritingAction: String, CaseIterable, Identifiable {
     /// Proofread replaces directly; everything else previews first.
     var requiresPreview: Bool { category != .proofread }
     var allowsDirectReplace: Bool { category == .proofread }
+    var usesProvider: Bool { self != .localQuickCheck }
 
     /// Whether the preview offers a Replace button. Reply actions are copy-first
     /// — they draft a *response*, so replacing the source message is never the
@@ -140,6 +145,8 @@ enum WritingAction: String, CaseIterable, Identifiable {
 
     var taskInstruction: String {
         switch self {
+        case .localQuickCheck:
+            return "Local-only proofreading; this instruction is never sent to a provider."
         case .proofread:
             return """
             Your task: Proofread the text. Fix grammar, spelling, punctuation, \

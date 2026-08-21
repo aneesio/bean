@@ -18,6 +18,7 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UserContentStore
     @ObservedObject var history: OperationHistoryStore
+    @ObservedObject var usageLedger: UsageLedgerStore
     @ObservedObject var setupStatus: SetupStatusStore
     let actions: SettingsActions
 
@@ -71,6 +72,10 @@ struct SettingsView: View {
         }
         .frame(width: 760, height: 580)
         .tint(BeanDesign.accent)
+        .onAppear {
+            history.refresh()
+            usageLedger.refresh()
+        }
     }
 
     @ViewBuilder
@@ -107,7 +112,7 @@ struct SettingsView: View {
             Section("Permissions") { PermissionsSection(compact: true) }
         case .provider:
             Section("AI Provider") {
-                ProviderSetupSection(settings: settings, compact: true)
+                ProviderSetupSection(settings: settings, usageLedger: usageLedger, compact: true)
                 timeoutRow
             }
             Section("Usage & Cost") { usageCostSection }
@@ -138,7 +143,7 @@ struct SettingsView: View {
     }
 
     private var readinessSection: some View {
-        Group {
+        return Group {
             setupCheckRow(
                 "Installed in Applications",
                 ready: Diagnostics.pathWarning == nil,
@@ -311,7 +316,52 @@ struct SettingsView: View {
     }
 
     private var usageCostSection: some View {
-        Group {
+        let today = usageLedger.summary(days: 1)
+        let month = usageLedger.summary(days: 30)
+        return Group {
+            LabeledContent("Today") {
+                Text("\(today.totalTokens.formatted()) tokens · \(today.operationCount) calls")
+                    .monospacedDigit()
+            }
+            LabeledContent("Last 30 days") {
+                Text("\(month.totalTokens.formatted()) tokens · \(month.operationCount) calls")
+                    .monospacedDigit()
+            }
+            LabeledContent("30-day input / output",
+                           value: "\(month.inputTokens.formatted()) / \(month.outputTokens.formatted())")
+            LabeledContent("Average per call", value: "\(month.averageTokensPerOperation.formatted()) tokens")
+            LabeledContent("Estimated provider cost") {
+                Text(month.estimatedCostUSD < 1
+                     ? String(format: "US$ %.4f", month.estimatedCostUSD)
+                     : String(format: "US$ %.2f", month.estimatedCostUSD))
+                    .monospacedDigit()
+            }
+            ForEach([OperationSource.manual, .passive, .nativeInline, .webInline], id: \.rawValue) { source in
+                let sourceUsage = usageLedger.summary(days: 30, source: source)
+                if sourceUsage.operationCount > 0 {
+                    LabeledContent(source.displayName) {
+                        Text("\(sourceUsage.totalTokens.formatted()) tokens · \(sourceUsage.operationCount) calls")
+                            .monospacedDigit()
+                    }
+                }
+            }
+            if month.estimatedOperationCount > 0 {
+                Label("\(month.estimatedOperationCount) calls used conservative token estimates because the provider did not report usage.",
+                      systemImage: "info.circle")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            if month.unpricedOperationCount > 0 {
+                Label("Cost excludes \(month.unpricedOperationCount) calls using custom or unpriced model IDs.",
+                      systemImage: "info.circle")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            if month.totalTokens >= settings.monthlyTokenWarningThreshold {
+                Label("Your 30-day token total has reached the warning threshold.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+            }
+
+            Divider()
             LabeledContent("Automatic provider checks") {
                 StatusPill(text: settings.automaticAIChecksEnabled ? "On" : "Off",
                            kind: settings.automaticAIChecksEnabled ? .warning : .success,
@@ -319,9 +369,24 @@ struct SettingsView: View {
             }
             Text("Passive Suggestions, provider-backed Inline Highlights, and Web Inline Support can call the API after typing pauses. Manual shortcuts and the Bean Bubble call it only when you choose an action.")
                 .font(.caption).foregroundColor(.secondary)
+            Stepper("Daily automatic-call limit: \(settings.dailyAutomaticCallLimit)",
+                    value: $settings.dailyAutomaticCallLimit, in: 1...200)
+            Stepper("30-day warning: \(settings.monthlyTokenWarningThreshold.formatted()) tokens",
+                    value: $settings.monthlyTokenWarningThreshold,
+                    in: 25_000...5_000_000, step: 25_000)
+            Text("Automatic calls today: \(today.automaticOperationCount) of \(settings.dailyAutomaticCallLimit). The limit never disables manual AI actions or Local Quick Check.")
+                .font(.caption).foregroundColor(.secondary)
             Button("Disable automatic AI checks") { settings.disableAutomaticAIChecks() }
                 .disabled(!settings.automaticAIChecksEnabled)
-            Text("This keeps explicit actions available and leaves native inline checking in local-only mode. For lower per-token cost, OpenAI's gpt-4.1-nano is Bean's default OpenAI model; switching providers requires an OpenAI API key.")
+            Text("Local Quick Check is free and offline. At the pricing snapshot, OpenAI gpt-5-nano is $0.05/M input and $0.40/M output tokens; Claude Haiku 4.5 is $1/M input and $5/M output. Switching providers requires that provider's API key.")
+                .font(.caption2).foregroundColor(.secondary)
+            Text("Estimated USD cost uses public list prices captured \(UsageCostEstimator.pricingSnapshot); actual billing, caching, tiers, taxes, and future price changes may differ.")
+                .font(.caption2).foregroundColor(.secondary)
+            Button("Clear usage and operation history", role: .destructive) {
+                usageLedger.clear()
+                history.clear()
+            }
+            Text("Clearing usage removes only content-free local counters and operation metadata. It does not remove API keys or preferences.")
                 .font(.caption2).foregroundColor(.secondary)
         }
     }
@@ -331,7 +396,7 @@ struct SettingsView: View {
     private var shortcutSection: some View {
         Group {
             shortcutRow(
-                title: "Quick Proofread",
+                title: "AI Quick Proofread",
                 shortcut: settings.shortcut,
                 error: $proofreadError,
                 slot: .quickProofread,
@@ -583,7 +648,8 @@ struct SettingsView: View {
     }
 
     private func copyDiagnostics() {
-        let text = Diagnostics(settings: settings, store: store, history: history, setupStatus: setupStatus).summaryText
+        let text = Diagnostics(settings: settings, store: store, history: history,
+                               usageLedger: usageLedger, setupStatus: setupStatus).summaryText
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         copiedDiagnostics = true

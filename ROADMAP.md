@@ -88,6 +88,8 @@ automatic versus manual provider usage.
 
 ## Phase 3 — Cost visibility and controls
 
+**Status:** Complete.
+
 ### Actions
 
 1. Capture provider-reported input/output token counts from OpenAI and Anthropic,

@@ -81,10 +81,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // real keyEquivalent (renders right-aligned); otherwise append to title.
         let proofreadItem: NSMenuItem
         if let keyEquivalent = proofreadShortcut.menuKeyEquivalent {
-            proofreadItem = NSMenuItem(title: "Proofread Now", action: #selector(handleProofread), keyEquivalent: keyEquivalent)
+            proofreadItem = NSMenuItem(title: "AI Proofread Now", action: #selector(handleProofread), keyEquivalent: keyEquivalent)
             proofreadItem.keyEquivalentModifierMask = proofreadShortcut.nsModifierFlags
         } else {
-            proofreadItem = NSMenuItem(title: "Proofread Now (\(proofreadShortcut.displayString))", action: #selector(handleProofread), keyEquivalent: "")
+            proofreadItem = NSMenuItem(title: "AI Proofread Now (\(proofreadShortcut.displayString))", action: #selector(handleProofread), keyEquivalent: "")
         }
         proofreadItem.target = self
         proofreadItem.image = Self.icon("checkmark.circle")

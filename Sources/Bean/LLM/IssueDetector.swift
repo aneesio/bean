@@ -9,6 +9,11 @@ import AppKit
 //      indexes are unreliable). Ambiguous/missing/whole-paragraph candidates are
 //      skipped. Falls back to [] on any parse/safety problem.
 struct IssueDetector {
+    struct LLMResult {
+        let issues: [TextIssue]
+        let usage: LLMUsage?
+    }
+
     var maxIssues = 8
     var maxIssueLength = 200
 
@@ -70,8 +75,9 @@ struct IssueDetector {
     // MARK: - LLM layer
 
     func llmIssues(in text: String, context: SourceAppContext?, dictionary: [DictionaryTerm],
-                   provider kind: ProviderKind, model: String, apiKey: String, timeout: TimeInterval) async -> [TextIssue] {
-        guard !apiKey.isEmpty else { return [] }
+                   provider kind: ProviderKind, model: String, apiKey: String,
+                   timeout: TimeInterval) async -> LLMResult {
+        guard !apiKey.isEmpty else { return LLMResult(issues: [], usage: nil) }
         let provider = LLMProviderFactory.make(kind)
         let request = LLMRequest(
             systemPrompt: Self.systemPrompt,
@@ -79,9 +85,11 @@ struct IssueDetector {
             model: model, apiKey: apiKey, timeout: timeout,
             maxOutputTokens: min(max(maxIssues * 96, 192), 768)
         )
-        let raw: String
-        do { raw = try await provider.complete(request) } catch { return [] }
-        return mapCandidates(parse(raw), in: text)
+        let completion: LLMCompletion
+        do { completion = try await provider.complete(request) }
+        catch { return LLMResult(issues: [], usage: nil) }
+        return LLMResult(issues: mapCandidates(parse(completion.text), in: text),
+                         usage: completion.usage)
     }
 
     // MARK: - Parsing / mapping

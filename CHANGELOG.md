@@ -5,6 +5,13 @@ once public release tags begin.
 
 ## Unreleased
 
+- Added provider-reported token accounting, a 30-day usage/cost dashboard,
+  per-source totals, automatic-call limits, and a configurable token warning.
+- Added a provider-free Local Quick Check and made provider-backed actions
+  explicit in the UI.
+- Changed the default OpenAI model for new configurations to `gpt-5-nano`.
+- Added explicit browser review for unusual whole-paragraph output.
+
 ## 1.2.0 — 2026-08-21 (public beta)
 
 - Prepared the repository for an open-source public beta.

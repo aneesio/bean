@@ -492,13 +492,13 @@
   }
 
   // Ask the Bean app to proofread a whole paragraph. Resolves to
-  // { text: string|null, code }. `text === null` means "use local fallback".
+  // { text: string|null, code, reviewRequired, message }.
   function bridgeProofreadParagraph(text, fieldType) {
     if (!state.useBridge) return Promise.resolve({ text: null, code: "bridgeFallbackLocal" });
     return new Promise((resolve) => {
       let done = false;
       const finish = (v) => { if (!done) { done = true; reason(v.code); resolve(v); } };
-      const timer = setTimeout(() => finish({ text: null, code: "bridgeTimeout" }), 15000);
+      const timer = setTimeout(() => finish({ text: null, code: "bridgeTimeout", reviewRequired: false }), 15000);
       try {
         chrome.runtime.sendMessage(
           { type: "proofreadParagraph", request: {
@@ -506,9 +506,13 @@
               source: { surface: "browserExtension", urlHost: location.host, fieldType }, text } },
           (resp) => {
             clearTimeout(timer);
-            if (!resp) { finish({ text: null, code: "bridgeUnavailable" }); return; }
-            if (resp.ok && typeof resp.text === "string") { finish({ text: resp.text, code: "paragraphProofreadSucceeded" }); return; }
-            finish({ text: null, code: "bridge_" + (resp.errorCode || "malformed") });
+            if (!resp) { finish({ text: null, code: "bridgeUnavailable", reviewRequired: false }); return; }
+            if (resp.ok && typeof resp.text === "string") {
+              finish({ text: resp.text, code: resp.reviewRequired ? "paragraphReviewRequired" : "paragraphProofreadSucceeded",
+                       reviewRequired: !!resp.reviewRequired, message: resp.message || "" });
+              return;
+            }
+            finish({ text: null, code: "bridge_" + (resp.errorCode || "malformed"), reviewRequired: false });
           }
         );
       } catch (e) { clearTimeout(timer); finish({ text: null, code: "bridgeUnavailable" }); }
@@ -635,6 +639,18 @@
 
     if (corrected === null) { reason("paragraphProofreadUnavailable"); flashAt(g, "Fix Paragraph unavailable"); renderOverlay(); return; }
     if (!corrected.trim()) { reason("paragraphProofreadUnsafeOutput"); flashAt(g, "Couldn't fix paragraph"); renderOverlay(); return; }
+
+    if (bridge.reviewRequired) {
+      const approved = await BeanOverlay.reviewParagraph(
+        g.anchor, sent, corrected, bridge.message || "This result is unusually shaped. Review it before applying.");
+      if (!approved) {
+        state.fixingGroup = false;
+        reason("paragraphReviewCancelled");
+        renderOverlay();
+        return;
+      }
+      reason("paragraphReviewApproved");
+    }
 
     // SAFETY: the paragraph must be byte-for-byte what we sent for proofread.
     if (!target.stillMatches(sent)) { reason("paragraphReplacementRefused"); renderOverlay(); return; }

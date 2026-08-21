@@ -5,7 +5,7 @@ import Foundation
 struct OpenAIProvider: LLMProvider {
     private let endpoint = URL(string: "https://api.openai.com/v1/chat/completions")!
 
-    func complete(_ request: LLMRequest) async throws -> String {
+    func complete(_ request: LLMRequest) async throws -> LLMCompletion {
         guard !request.apiKey.isEmpty else { throw LLMError.missingAPIKey }
 
         var urlRequest = URLRequest(url: endpoint)
@@ -54,6 +54,13 @@ struct OpenAIProvider: LLMProvider {
             throw LLMError.server(status: http.statusCode, message: Self.extractError(data))
         }
 
+        let completion = try Self.parseCompletion(data: data, request: request)
+        let trimmed = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw LLMError.emptyResponse }
+        return completion
+    }
+
+    static func parseCompletion(data: Data, request: LLMRequest) throws -> LLMCompletion {
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let choices = json["choices"] as? [[String: Any]],
@@ -62,10 +69,15 @@ struct OpenAIProvider: LLMProvider {
         else {
             throw LLMError.decoding
         }
-
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw LLMError.emptyResponse }
-        return content
+        let usage: LLMUsage
+        if let rawUsage = json["usage"] as? [String: Any],
+           let input = rawUsage["prompt_tokens"] as? Int,
+           let output = rawUsage["completion_tokens"] as? Int {
+            usage = LLMUsage(inputTokens: input, outputTokens: output, isEstimated: false)
+        } else {
+            usage = .estimated(for: request, output: content)
+        }
+        return LLMCompletion(text: content, usage: usage)
     }
 
     /// Pulls a human-readable message out of an OpenAI error payload.

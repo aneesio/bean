@@ -196,7 +196,8 @@ struct MiniActionMenuView: View {
     let onCancel: () -> Void
 
     // Highest-value subset of actions.
-    private let actions: [WritingAction] = [.proofread, .makeClearer, .makeConcise, .draftReply, .composeMessage]
+    private let actions: [WritingAction] = [.localQuickCheck, .proofread, .makeClearer,
+                                             .makeConcise, .draftReply, .composeMessage]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {

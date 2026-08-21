@@ -42,7 +42,9 @@ extension Options without cloning the repository.
 
 Then enable **Web Inline Support** in Bean Settings and **Use the Bean
 app/provider** in extension Options. These checks can incur provider API charges
-after typing pauses and are rate-limited by the extension.
+after typing pauses, are rate-limited by the extension, contribute to Bean's
+content-free Web Inline usage total, and stop at Bean's daily automatic-call
+limit.
 
 The install manifest accepts only the extension ID supplied to the script. See
 [`NativeMessaging/README.md`](../NativeMessaging/README.md).
@@ -74,6 +76,8 @@ one exact live range. That refusal is intentional.
 - Whole-paragraph replacement rechecks the paragraph and refuses rich blocks
   containing markup that cannot be preserved safely.
 - Provider wrappers, wrapping quotes, and zero-width artifacts are sanitized.
+- Unusual-but-plausible whole-paragraph results show a before/after approval
+  card and are never applied automatically.
 - Typing invalidates outstanding requests and stale overlays.
 
 ## Tests

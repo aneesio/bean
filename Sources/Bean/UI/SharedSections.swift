@@ -7,6 +7,7 @@ import SwiftUI
 
 struct ProviderSetupSection: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var usageLedger: UsageLedgerStore
     /// When true, renders a compact heading (used inside Settings forms).
     var compact: Bool = false
 
@@ -101,8 +102,11 @@ struct ProviderSetupSection: View {
         let timeout = settings.timeoutSeconds
         Task {
             do {
-                try await transformer.testConnection(provider: provider, model: model, apiKey: key, timeout: timeout)
+                let usage = try await transformer.testConnection(
+                    provider: provider, model: model, apiKey: key, timeout: timeout)
                 await MainActor.run {
+                    usageLedger.record(usage, source: .manual,
+                                       provider: provider.rawValue, model: model)
                     settings.markProviderConnectionVerified(provider: provider, model: model)
                     testState = .success
                 }

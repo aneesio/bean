@@ -6,7 +6,7 @@ struct AnthropicProvider: LLMProvider {
     private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     private let apiVersion = "2023-06-01"
 
-    func complete(_ request: LLMRequest) async throws -> String {
+    func complete(_ request: LLMRequest) async throws -> LLMCompletion {
         guard !request.apiKey.isEmpty else { throw LLMError.missingAPIKey }
 
         var urlRequest = URLRequest(url: endpoint)
@@ -48,6 +48,13 @@ struct AnthropicProvider: LLMProvider {
             throw LLMError.server(status: http.statusCode, message: Self.extractError(data))
         }
 
+        let completion = try Self.parseCompletion(data: data, request: request)
+        let trimmed = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw LLMError.emptyResponse }
+        return completion
+    }
+
+    static func parseCompletion(data: Data, request: LLMRequest) throws -> LLMCompletion {
         // Response shape: { "content": [ { "type": "text", "text": "..." } ] }
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -61,9 +68,15 @@ struct AnthropicProvider: LLMProvider {
             .compactMap { $0["text"] as? String }
             .joined()
 
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw LLMError.emptyResponse }
-        return text
+        let usage: LLMUsage
+        if let rawUsage = json["usage"] as? [String: Any],
+           let input = rawUsage["input_tokens"] as? Int,
+           let output = rawUsage["output_tokens"] as? Int {
+            usage = LLMUsage(inputTokens: input, outputTokens: output, isEstimated: false)
+        } else {
+            usage = .estimated(for: request, output: text)
+        }
+        return LLMCompletion(text: text, usage: usage)
     }
 
     private static func extractError(_ data: Data) -> String {

@@ -16,6 +16,7 @@ final class TextActionCoordinator {
     private let settings: AppSettings
     private let userContent: UserContentStore
     private let history: OperationHistoryStore
+    private let usageLedger: UsageLedgerStore
     private let undoStore: ReplacementUndoStore
     private let statusHUD: StatusHUD
     private let selection: TextSelectionService
@@ -28,11 +29,13 @@ final class TextActionCoordinator {
     private var sessionActive = false
 
     init(settings: AppSettings, userContent: UserContentStore,
-         history: OperationHistoryStore, undoStore: ReplacementUndoStore,
+         history: OperationHistoryStore, usageLedger: UsageLedgerStore,
+         undoStore: ReplacementUndoStore,
          statusHUD: StatusHUD) {
         self.settings = settings
         self.userContent = userContent
         self.history = history
+        self.usageLedger = usageLedger
         self.undoStore = undoStore
         self.selection = TextSelectionService(undoStore: undoStore)
         self.statusHUD = statusHUD
@@ -120,7 +123,8 @@ final class TextActionCoordinator {
         Task { [weak self] in
             guard let self else { return }
             defer { self.isRunning = false }
-            guard self.ready(requestedAction: action.rawValue) else { return }
+            guard self.ready(requestedAction: action.rawValue,
+                             requiresProvider: action.usesProvider) else { return }
             guard let job = await self.acquire(requestedAction: action.rawValue) else { return }
             await self.process(job: job, action: action, preview: action.requiresPreview, explicitProfile: nil)
         }
@@ -133,7 +137,7 @@ final class TextActionCoordinator {
         Task { [weak self] in
             guard let self else { return }
             defer { self.isRunning = false }
-            guard self.ready(requestedAction: "openMenu") else { return }
+            guard self.ready(requestedAction: "openMenu", requiresProvider: false) else { return }
             statusHUD.show(.progress, "Opening Bean…")
             guard let job = await self.acquire(requestedAction: "openMenu") else { return }
             self.sessionActive = true
@@ -154,7 +158,7 @@ final class TextActionCoordinator {
 
     // MARK: - Pipeline
 
-    private func ready(requestedAction: String) -> Bool {
+    private func ready(requestedAction: String, requiresProvider: Bool = true) -> Bool {
         guard PermissionService.isAccessibilityGranted else {
             recordPreflight(action: requestedAction, outcome: "accessibilityPermissionRequired")
             statusHUD.show(.warning, "Accessibility permission required")
@@ -162,7 +166,7 @@ final class TextActionCoordinator {
             PermissionService.openAccessibilitySettings()
             return false
         }
-        guard !settings.apiKey.isEmpty else {
+        guard !requiresProvider || !settings.apiKey.isEmpty else {
             recordPreflight(action: requestedAction, outcome: "missingAPIKey")
             statusHUD.show(.warning, "Add an API key in Settings")
             return false
@@ -195,6 +199,38 @@ final class TextActionCoordinator {
 
     private func process(job: Job, action: WritingAction, preview: Bool, explicitProfile: UUID?) async {
         let operationStartedAt = Date()
+        guard !action.usesProvider || !settings.apiKey.isEmpty else {
+            diagnostics(job: job, action: action, outLen: 0, validator: "notRun",
+                        replacement: "missingAPIKey", startedAt: operationStartedAt)
+            endSession(restore: true, .warning, "Add an API key for AI actions, or use Local Quick Check")
+            return
+        }
+
+        if action == .localQuickCheck {
+            statusHUD.show(.progress, "Checking locally…")
+            let correctedCore = LocalQuickChecker.corrected(job.core, dictionary: userContent.dictionary)
+            guard correctedCore != job.core else {
+                diagnostics(job: job, action: action, outLen: correctedCore.count,
+                            validator: "local_quick", replacement: "noChangesNeeded",
+                            startedAt: operationStartedAt)
+                endSession(restore: true, .info, "No obvious local issues found")
+                return
+            }
+            let result = await selection.replace(
+                corrected: job.leading + correctedCore + job.trailing,
+                original: job.original, mode: job.mode)
+            report(result, mode: job.mode)
+            diagnostics(job: job, action: action, outLen: correctedCore.count,
+                        validator: "local_quick", replacement: resultCode(result),
+                        startedAt: operationStartedAt)
+            if needsRecovery(result) {
+                presentReplacementRecovery(job: job, action: action,
+                                           outCore: correctedCore, result: result, model: nil)
+            } else {
+                sessionActive = false
+            }
+            return
+        }
         // Proofread keeps its local fast-paths (typo / short / clean single word).
         if action == .proofread {
             if TextNormalizer.isSingleWord(job.core),
@@ -235,9 +271,9 @@ final class TextActionCoordinator {
         let personalization = userContent.personalization(action: action, context: job.context,
                                                           explicitProfile: explicitProfile, sourceText: job.core)
 
-        let raw: String
+        let completion: LLMCompletion
         do {
-            raw = try await transformer.transform(
+            completion = try await transformer.transform(
                 text: job.core, action: action, context: job.context,
                 personalization: personalization.systemBlock,
                 extraContextLines: personalization.contextLines,
@@ -254,19 +290,21 @@ final class TextActionCoordinator {
             endSession(restore: true, .error, "Could not transform text: \(error.localizedDescription)"); return
         }
 
-        let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: job.core)
+        let outCore = TextNormalizer.sanitizeModelOutput(completion.text, originalCore: job.core)
 
         if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
             switch OutputSafetyValidator.disposition(for: reason) {
             case .hardBlock:
                 Log.event("validation: blocked (\(reason))")
                 diagnostics(job: job, action: action, outLen: outCore.count, validator: reason,
-                            replacement: "blocked", startedAt: operationStartedAt)
+                            replacement: "blocked", startedAt: operationStartedAt,
+                            usage: completion.usage)
                 endSession(restore: true, .warning, "Transformation was blocked because it contained unsafe model output.")
             case .reviewRequired:
                 Log.event("validation: review required (\(reason))")
                 diagnostics(job: job, action: action, outLen: outCore.count, validator: reason,
-                            replacement: "reviewRequired", startedAt: operationStartedAt)
+                            replacement: "reviewRequired", startedAt: operationStartedAt,
+                            usage: completion.usage)
                 presentPreview(job: job, action: action, outCore: outCore,
                                explicitProfile: explicitProfile, personalization: personalization,
                                reviewReason: reason)
@@ -276,21 +314,24 @@ final class TextActionCoordinator {
 
         if outCore == job.core {
             diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok",
-                        replacement: "noChangesNeeded", startedAt: operationStartedAt)
+                        replacement: "noChangesNeeded", startedAt: operationStartedAt,
+                        usage: completion.usage)
             endSession(restore: true, .info, "No changes needed")
             return
         }
 
         if preview {
             diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok",
-                        replacement: "previewReady", startedAt: operationStartedAt)
+                        replacement: "previewReady", startedAt: operationStartedAt,
+                        usage: completion.usage)
             presentPreview(job: job, action: action, outCore: outCore, explicitProfile: explicitProfile, personalization: personalization)
         } else {
             let finalText = job.leading + outCore + job.trailing
             let result = await selection.replace(corrected: finalText, original: job.original, mode: job.mode)
             report(result, mode: job.mode)
             diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok",
-                        replacement: resultCode(result), startedAt: operationStartedAt)
+                        replacement: resultCode(result), startedAt: operationStartedAt,
+                        usage: completion.usage)
             if needsRecovery(result) {
                 presentReplacementRecovery(job: job, action: action, outCore: outCore,
                                            result: result, model: nil)
@@ -370,22 +411,28 @@ final class TextActionCoordinator {
             let personalization = self.userContent.personalization(action: action, context: job.context,
                                                                    explicitProfile: explicitProfile, sourceText: job.core)
             do {
-                let raw = try await self.transformer.transform(
+                let completion = try await self.transformer.transform(
                     text: job.core, action: action, context: job.context,
                     personalization: personalization.systemBlock,
                     extraContextLines: personalization.contextLines,
                     provider: self.settings.provider, model: self.settings.model,
                     apiKey: self.settings.apiKey, timeout: self.settings.timeoutSeconds
                 )
-                let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: job.core)
+                let outCore = TextNormalizer.sanitizeModelOutput(completion.text, originalCore: job.core)
                 if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
                     if OutputSafetyValidator.disposition(for: reason) == .hardBlock {
+                        self.diagnostics(job: job, action: action, outLen: outCore.count,
+                                         validator: reason, replacement: "retryBlocked",
+                                         startedAt: Date(), usage: completion.usage)
                         model.errorMessage = "That result contained unsafe model output. Try again."
                         return
                     }
                     model.reviewWarning = OutputSafetyValidator.reviewMessage(for: reason)
                 }
                 model.transformedText = outCore
+                self.diagnostics(job: job, action: action, outLen: outCore.count,
+                                 validator: model.reviewWarning == nil ? "ok" : "reviewRequired",
+                                 replacement: "retryReady", startedAt: Date(), usage: completion.usage)
             } catch {
                 model.errorMessage = "Couldn't reach the model. Try again."
             }
@@ -472,7 +519,7 @@ final class TextActionCoordinator {
     // MARK: - Diagnostics (text-free)
 
     private func diagnostics(job: Job, action: WritingAction?, outLen: Int, validator: String,
-                             replacement: String, startedAt: Date) {
+                             replacement: String, startedAt: Date, usage: LLMUsage? = nil) {
         Log.diag([
             "provider": settings.provider.rawValue,
             "app": job.context.appName ?? "unknown",
@@ -484,6 +531,11 @@ final class TextActionCoordinator {
             "replacementResult": replacement
         ])
         let local = validator == "local_typo" || validator == "localClean"
+            || validator == "local_quick"
+        if let usage {
+            usageLedger.record(usage, source: .manual,
+                               provider: settings.provider.rawValue, model: settings.model)
+        }
         history.record(OperationRecord(
             source: local ? .local : .manual,
             appName: job.context.appName,
@@ -498,7 +550,9 @@ final class TextActionCoordinator {
             durationMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1_000),
             safetyResult: validator,
             outcome: replacement,
-            usageEstimated: true
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            usageEstimated: usage?.isEstimated ?? false
         ))
     }
 

@@ -107,6 +107,10 @@ enum NativeMessagingHost {
         guard !HostConfig.apiKey.isEmpty else {
             return encode(HostResponse.error(id: request.id, code: "missingApiKey", message: "Add an API key in Bean Settings."))
         }
+        guard await HostConfig.automaticCallAllowed() else {
+            return encode(HostResponse.error(id: request.id, code: "automaticDailyLimit",
+                                             message: "Today's automatic AI limit has been reached."))
+        }
 
         var detector = IssueDetector()
         detector.maxIssues = min(request.settings?.maxIssues ?? maxIssuesCap, maxIssuesCap)
@@ -120,13 +124,19 @@ enum NativeMessagingHost {
             isSearchLikeField: false
         )
 
-        let issues = await detector.llmIssues(
+        let detection = await detector.llmIssues(
             in: text, context: context, dictionary: HostConfig.dictionary,
             provider: HostConfig.provider, model: HostConfig.model,
             apiKey: HostConfig.apiKey, timeout: HostConfig.timeout
         )
 
-        let mapped = issues.map { issue in
+        if let usage = detection.usage {
+            await HostConfig.recordUsage(usage, source: .webInline, context: context,
+                                         action: "detectIssues", inputLength: text.count,
+                                         outputLength: detection.issues.reduce(0) { $0 + $1.suggestion.count },
+                                         outcome: detection.issues.isEmpty ? "noIssues" : "issuesReturned")
+        }
+        let mapped = detection.issues.map { issue in
             HostResponse.Issue(original: issue.original, suggestion: issue.suggestion,
                                type: issue.type.rawValue, explanation: issue.explanation,
                                confidence: issue.confidence)
@@ -153,6 +163,10 @@ enum NativeMessagingHost {
         guard !HostConfig.apiKey.isEmpty else {
             return encode(HostResponse.error(id: request.id, code: "missingApiKey", message: "Add an API key in Bean Settings."))
         }
+        guard await HostConfig.automaticCallAllowed() else {
+            return encode(HostResponse.error(id: request.id, code: "automaticDailyLimit",
+                                             message: "Today's automatic AI limit has been reached."))
+        }
 
         let context = SourceAppContext(
             appName: request.source?.urlHost,
@@ -164,9 +178,9 @@ enum NativeMessagingHost {
         )
 
         let service = WritingTransformService()
-        let raw: String
+        let completion: LLMCompletion
         do {
-            raw = try await service.transform(
+            completion = try await service.transform(
                 text: text, action: .proofread, context: context,
                 personalization: nil, extraContextLines: HostConfig.dictionaryPreservationLines(for: text),
                 provider: HostConfig.provider, model: HostConfig.model,
@@ -176,17 +190,30 @@ enum NativeMessagingHost {
             return encode(HostResponse.error(id: request.id, code: "providerError", message: "Couldn't reach the provider."))
         }
 
-        let corrected = TextNormalizer.sanitizeModelOutput(raw, originalCore: text)
+        let corrected = TextNormalizer.sanitizeModelOutput(completion.text, originalCore: text)
 
         // Last-line safety runs on the exact text that would be returned, after
         // harmless provider wrappers/commentary have been removed.
-        if case .suspicious = OutputSafetyValidator.validate(input: text, output: corrected, action: .proofread) {
-            return encode(HostResponse.error(id: request.id, code: "unsafeOutput", message: "The correction looked unsafe."))
+        if case let .suspicious(reason) = OutputSafetyValidator.validate(input: text, output: corrected, action: .proofread) {
+            await HostConfig.recordUsage(completion.usage, source: .webInline, context: context,
+                                         action: "proofreadParagraph", inputLength: text.count,
+                                         outputLength: corrected.count, safety: reason,
+                                         outcome: OutputSafetyValidator.disposition(for: reason) == .hardBlock
+                                            ? "blocked" : "reviewRequired")
+            if OutputSafetyValidator.disposition(for: reason) == .reviewRequired {
+                return encode(HostResponse(id: request.id, ok: true, text: corrected,
+                                           reviewRequired: true,
+                                           message: OutputSafetyValidator.reviewMessage(for: reason)))
+            }
+            return encode(HostResponse.error(id: request.id, code: "unsafeOutput", message: "The correction contained unsafe model output."))
         }
 
         guard !corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return encode(HostResponse.error(id: request.id, code: "unsafeOutput", message: "The correction was empty."))
         }
+        await HostConfig.recordUsage(completion.usage, source: .webInline, context: context,
+                                     action: "proofreadParagraph", inputLength: text.count,
+                                     outputLength: corrected.count, outcome: "returned")
         return encode(HostResponse(id: request.id, ok: true, text: corrected))
     }
 
@@ -207,6 +234,43 @@ private enum HostConfig {
     static var apiKey: String { KeychainService.get(account: provider.keychainAccount) ?? "" }
     static var timeout: TimeInterval { let t = defaults.double(forKey: "timeoutSeconds"); return t > 0 ? t : 30 }
     static var webInlineEnabled: Bool { defaults.bool(forKey: "webInlineEnabled") }
+    static var dailyAutomaticCallLimit: Int {
+        let value = defaults.integer(forKey: "dailyAutomaticCallLimit")
+        return value > 0 ? value : 20
+    }
+
+    static func automaticCallAllowed() async -> Bool {
+        await MainActor.run {
+            UsageLedgerStore().allowsAutomaticCall(dailyLimit: dailyAutomaticCallLimit)
+        }
+    }
+
+    static func recordUsage(_ usage: LLMUsage, source: OperationSource,
+                            context: SourceAppContext, action: String,
+                            inputLength: Int, outputLength: Int,
+                            safety: String = "ok", outcome: String) async {
+        await MainActor.run {
+            UsageLedgerStore().record(usage, source: source,
+                                      provider: provider.rawValue, model: model)
+            OperationHistoryStore().record(OperationRecord(
+                source: source,
+                appName: context.appName,
+                appBundleIdentifier: context.bundleIdentifier,
+                appCategory: AppCategory.from(bundleIdentifier: context.bundleIdentifier).rawValue,
+                action: action,
+                inputMode: context.acquisitionMode.rawLabel,
+                inputLength: inputLength,
+                outputLength: outputLength,
+                provider: provider.rawValue,
+                model: model,
+                safetyResult: safety,
+                outcome: outcome,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                usageEstimated: usage.isEstimated
+            ))
+        }
+    }
 
     /// Dictionary terms loaded directly from the same JSON the app writes.
     static var dictionary: [DictionaryTerm] {
@@ -251,6 +315,7 @@ private struct HostResponse: Encodable {
     var ok: Bool
     var issues: [Issue]? = nil
     var text: String? = nil            // proofreadParagraph: corrected paragraph
+    var reviewRequired: Bool? = nil
     var errorCode: String? = nil
     var message: String? = nil
     // status-only fields

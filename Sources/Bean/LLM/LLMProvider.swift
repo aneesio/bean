@@ -43,12 +43,40 @@ struct LLMRequest {
     let maxOutputTokens: Int
 }
 
+/// Content-free provider metering attached to a completion. Provider-reported
+/// counts are preferred; Bean marks its conservative byte-based fallback.
+struct LLMUsage: Codable, Equatable {
+    let inputTokens: Int
+    let outputTokens: Int
+    let isEstimated: Bool
+
+    init(inputTokens: Int, outputTokens: Int, isEstimated: Bool) {
+        self.inputTokens = max(0, inputTokens)
+        self.outputTokens = max(0, outputTokens)
+        self.isEstimated = isEstimated
+    }
+
+    static func estimated(for request: LLMRequest, output: String) -> LLMUsage {
+        // Three UTF-8 bytes per token intentionally errs above the common
+        // English approximation, and is safer for non-Latin input.
+        let inputBytes = request.systemPrompt.utf8.count + request.userText.utf8.count
+        return LLMUsage(inputTokens: max(1, (inputBytes + 2) / 3),
+                        outputTokens: max(1, (output.utf8.count + 2) / 3),
+                        isEstimated: true)
+    }
+}
+
+struct LLMCompletion: Equatable {
+    let text: String
+    let usage: LLMUsage
+}
+
 // Clean abstraction over a chat/completions-style provider. New providers
 // (Gemini, local models, etc.) only need to conform to this protocol.
 protocol LLMProvider {
     /// Sends `request.userText` plus `request.systemPrompt` and returns the
     /// corrected text. Throws LLMError on any failure.
-    func complete(_ request: LLMRequest) async throws -> String
+    func complete(_ request: LLMRequest) async throws -> LLMCompletion
 }
 
 extension LLMProvider {

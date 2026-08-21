@@ -9,6 +9,7 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
     private let settings: AppSettings
     private let userContent: UserContentStore
     private let history: OperationHistoryStore
+    private let usageLedger: UsageLedgerStore
     private let setupStatus: SetupStatusStore
     private let onCheckPermissions: () -> Void
     private let onApplyShortcut: (ShortcutSlot, GlobalShortcut) -> String?
@@ -21,6 +22,7 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
         settings: AppSettings,
         userContent: UserContentStore,
         history: OperationHistoryStore,
+        usageLedger: UsageLedgerStore,
         setupStatus: SetupStatusStore,
         onCheckPermissions: @escaping () -> Void,
         onApplyShortcut: @escaping (ShortcutSlot, GlobalShortcut) -> String?
@@ -28,6 +30,7 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
         self.settings = settings
         self.userContent = userContent
         self.history = history
+        self.usageLedger = usageLedger
         self.setupStatus = setupStatus
         self.onCheckPermissions = onCheckPermissions
         self.onApplyShortcut = onApplyShortcut
@@ -46,7 +49,8 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
             present(onboardingWindow)
             return
         }
-        let root = OnboardingView(settings: settings, history: history, setupStatus: setupStatus) { [weak self] in
+        let root = OnboardingView(settings: settings, history: history,
+                                  usageLedger: usageLedger, setupStatus: setupStatus) { [weak self] in
             self?.finishOnboarding()
         }
         let window = makeWindow(title: "Welcome to Bean", root: root, resizable: false)
@@ -80,6 +84,7 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
             settings: settings,
             store: userContent,
             history: history,
+            usageLedger: usageLedger,
             setupStatus: setupStatus,
             actions: actions
         )

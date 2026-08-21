@@ -49,6 +49,11 @@ authorized to send it to your selected provider.
   result codes, and token counts or estimates. It never contains source text,
   transformed text, prompts, responses, clipboard contents, window titles,
   field labels, or field values. You can inspect and erase it in Setup & Status.
+- Bean also keeps up to 120 days of daily usage aggregates in UserDefaults so
+  the Usage & Cost dashboard remains accurate after the 50-record detail history
+  rolls over. Each aggregate contains only date, provider/model, manual or
+  automatic source, token totals, call count, and whether counts were estimated.
+  It contains no text or field metadata and can be erased from AI Provider.
 - Style profiles, context cards, dictionary terms, and app rules are stored in
   `~/Library/Application Support/Bean/userContent.json`.
 - Bean temporarily uses the system clipboard for text acquisition and
@@ -83,7 +88,8 @@ site hostnames in `chrome.storage.local`.
 If you separately enable the native bridge, focused editable-field text and the
 site hostname are sent through Chrome Native Messaging to the local Bean app.
 The Bean app then sends the provider request described above. The bridge does
-not create a separate text history.
+not create a separate text history. It contributes only content-free token and
+call totals to the same local usage ledger.
 
 ## Deleting your data
 

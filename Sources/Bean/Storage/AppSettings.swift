@@ -20,7 +20,7 @@ enum ProviderKind: String, CaseIterable, Identifiable {
     /// A sensible default model for each provider.
     var defaultModel: String {
         switch self {
-        case .openai: return "gpt-4.1-nano"
+        case .openai: return "gpt-5-nano"
         case .anthropic: return "claude-haiku-4-5"
         }
     }
@@ -105,6 +105,8 @@ final class AppSettings: ObservableObject {
         // One-time migrations for settings whose old defaults could spend API
         // tokens after a typing pause. Explicit actions are never affected.
         static let automaticAICostSafetyVersion = "automaticAICostSafetyVersion"
+        static let dailyAutomaticCallLimit = "dailyAutomaticCallLimit"
+        static let monthlyTokenWarningThreshold = "monthlyTokenWarningThreshold"
     }
 
     private let defaults = UserDefaults.standard
@@ -241,6 +243,15 @@ final class AppSettings: ObservableObject {
     /// extension). Stored only; the Mac app doesn't act on web fields itself.
     @Published var webInlineEnabled: Bool { didSet { defaults.set(webInlineEnabled, forKey: Keys.webInlineEnabled) } }
 
+    /// Local guardrails for provider-backed automatic features. Manual actions
+    /// and offline checks remain available when either threshold is reached.
+    @Published var dailyAutomaticCallLimit: Int {
+        didSet { defaults.set(dailyAutomaticCallLimit, forKey: Keys.dailyAutomaticCallLimit) }
+    }
+    @Published var monthlyTokenWarningThreshold: Int {
+        didSet { defaults.set(monthlyTokenWarningThreshold, forKey: Keys.monthlyTokenWarningThreshold) }
+    }
+
     // Transient (not persisted) status surfaced by the typing dispatcher.
     @Published var monitorActive: Bool = false
     @Published var lastPauseHandler: String = "none"
@@ -315,6 +326,10 @@ final class AppSettings: ObservableObject {
         let bd = defaults.double(forKey: Keys.bubbleDelay); self.bubbleDelay = bd > 0 ? bd : 0.6
         self.bubbleOpenOnHover = defaults.bool(forKey: Keys.bubbleOpenOnHover) // default false
         self.webInlineEnabled = defaults.bool(forKey: Keys.webInlineEnabled) // default false
+        let dailyLimit = defaults.integer(forKey: Keys.dailyAutomaticCallLimit)
+        self.dailyAutomaticCallLimit = dailyLimit > 0 ? dailyLimit : 20
+        let monthlyWarning = defaults.integer(forKey: Keys.monthlyTokenWarningThreshold)
+        self.monthlyTokenWarningThreshold = monthlyWarning > 0 ? monthlyWarning : 250_000
 
         if let data = defaults.data(forKey: Keys.shortcut),
            let stored = try? JSONDecoder().decode(GlobalShortcut.self, from: data) {

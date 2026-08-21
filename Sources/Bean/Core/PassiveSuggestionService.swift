@@ -13,6 +13,7 @@ final class PassiveSuggestionService {
     private let settings: AppSettings
     private let userContent: UserContentStore
     private let history: OperationHistoryStore
+    private let usageLedger: UsageLedgerStore
     private let undoStore: ReplacementUndoStore
     private let statusHUD: StatusHUD
 
@@ -39,11 +40,13 @@ final class PassiveSuggestionService {
     private var current: Session?
 
     init(settings: AppSettings, userContent: UserContentStore,
-         history: OperationHistoryStore, undoStore: ReplacementUndoStore,
+         history: OperationHistoryStore, usageLedger: UsageLedgerStore,
+         undoStore: ReplacementUndoStore,
          statusHUD: StatusHUD) {
         self.settings = settings
         self.userContent = userContent
         self.history = history
+        self.usageLedger = usageLedger
         self.undoStore = undoStore
         self.statusHUD = statusHUD
     }
@@ -84,6 +87,10 @@ final class PassiveSuggestionService {
             }
         }
 
+        guard usageLedger.allowsAutomaticCall(dailyLimit: settings.dailyAutomaticCallLimit) else {
+            reason = "automaticDailyLimit"; return false
+        }
+
         let fp = fingerprint(value)
         if fp == lastShownFingerprint { reason = "unchanged"; return false }
         if ignoredFingerprints.contains(fp) { reason = "ignored"; return false }
@@ -94,29 +101,45 @@ final class PassiveSuggestionService {
 
         let personalization = userContent.personalization(action: .proofread, context: context,
                                                           explicitProfile: nil, sourceText: core)
-        let raw: String
+        let completion: LLMCompletion
         do {
-            raw = try await transformer.transform(
+            completion = try await transformer.transform(
                 text: core, action: .proofread, context: context,
                 personalization: personalization.systemBlock, extraContextLines: personalization.contextLines,
                 provider: settings.provider, model: settings.model,
                 apiKey: settings.apiKey, timeout: settings.timeoutSeconds)
         } catch { reason = "requestFailed"; return false }
 
+        usageLedger.record(completion.usage, source: .passive,
+                           provider: settings.provider.rawValue, model: settings.model)
+
         // Stale guard: typing resumed or field changed while in flight.
         guard isCurrent(),
               let nowValue = AccessibilityService.value(of: field.element),
-              fingerprint(nowValue) == fp else { reason = "staleDiscarded"; return false }
+              fingerprint(nowValue) == fp else {
+            recordProviderOperation(context: context, inputLength: core.count, outputLength: 0,
+                                    safety: "notRun", outcome: "staleDiscarded",
+                                    usage: completion.usage)
+            reason = "staleDiscarded"; return false
+        }
 
-        let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: core)
+        let outCore = TextNormalizer.sanitizeModelOutput(completion.text, originalCore: core)
         var reviewReason: String?
         if case .suspicious(let r) = OutputSafetyValidator.validate(input: core, output: outCore, action: .proofread) {
             if OutputSafetyValidator.disposition(for: r) == .hardBlock {
+                recordProviderOperation(context: context, inputLength: core.count,
+                                        outputLength: outCore.count, safety: r,
+                                        outcome: "blocked", usage: completion.usage)
                 reason = r; return false
             }
             reviewReason = r
         }
-        guard outCore != core else { reason = "noChange"; return false }
+        guard outCore != core else {
+            recordProviderOperation(context: context, inputLength: core.count,
+                                    outputLength: outCore.count, safety: "ok",
+                                    outcome: "noChangesNeeded", usage: completion.usage)
+            reason = "noChange"; return false
+        }
 
         lastShownFingerprint = fp
         current = Session(app: app, element: field.element, fingerprint: fp,
@@ -129,6 +152,10 @@ final class PassiveSuggestionService {
             onPreview: { [weak self] in self?.previewCurrent() },
             onIgnore: { [weak self] in self?.ignoreCurrent() },
             onCopy: { [weak self] in self?.copyCurrent() })
+        recordProviderOperation(context: context, inputLength: core.count,
+                                outputLength: outCore.count,
+                                safety: reviewReason ?? "ok", outcome: "suggestionShown",
+                                usage: completion.usage)
         reason = "shown"
         return true
     }
@@ -177,6 +204,10 @@ final class PassiveSuggestionService {
     }
 
     private func previewRetry(session: Session, model: PreviewModel) {
+        guard usageLedger.allowsAutomaticCall(dailyLimit: settings.dailyAutomaticCallLimit) else {
+            model.errorMessage = "Today's automatic AI limit has been reached. Manual actions still work."
+            return
+        }
         model.isRunning = true
         model.errorMessage = nil
         model.reviewWarning = nil
@@ -186,19 +217,30 @@ final class PassiveSuggestionService {
             let personalization = self.userContent.personalization(action: .proofread, context: session.context,
                                                                    explicitProfile: nil, sourceText: session.sourceCore)
             do {
-                let raw = try await self.transformer.transform(
+                let completion = try await self.transformer.transform(
                     text: session.sourceCore, action: .proofread, context: session.context,
                     personalization: personalization.systemBlock, extraContextLines: personalization.contextLines,
                     provider: self.settings.provider, model: self.settings.model,
                     apiKey: self.settings.apiKey, timeout: self.settings.timeoutSeconds)
-                let outCore = TextNormalizer.sanitizeModelOutput(raw, originalCore: session.sourceCore)
+                self.usageLedger.record(completion.usage, source: .passive,
+                                        provider: self.settings.provider.rawValue, model: self.settings.model)
+                let outCore = TextNormalizer.sanitizeModelOutput(completion.text, originalCore: session.sourceCore)
                 if case let .suspicious(reason) = OutputSafetyValidator.validate(input: session.sourceCore, output: outCore, action: .proofread) {
                     if OutputSafetyValidator.disposition(for: reason) == .hardBlock {
+                        self.recordProviderOperation(context: session.context,
+                                                     inputLength: session.sourceCore.count,
+                                                     outputLength: outCore.count, safety: reason,
+                                                     outcome: "retryBlocked", usage: completion.usage)
                         model.errorMessage = "That result contained unsafe model output. Try again."; return
                     }
                     model.reviewWarning = OutputSafetyValidator.reviewMessage(for: reason)
                 }
                 model.transformedText = outCore
+                self.recordProviderOperation(context: session.context,
+                                             inputLength: session.sourceCore.count,
+                                             outputLength: outCore.count,
+                                             safety: model.reviewWarning == nil ? "ok" : "reviewRequired",
+                                             outcome: "retryReady", usage: completion.usage)
             } catch { model.errorMessage = "Couldn't reach the model. Try again." }
         }
     }
@@ -347,6 +389,28 @@ final class PassiveSuggestionService {
         case .staleCopiedToClipboard: statusHUD.show(.warning, "Text changed. Copied suggestion to clipboard.")
         case .failed(let reason): statusHUD.show(.error, reason)
         }
+    }
+
+    private func recordProviderOperation(context: SourceAppContext, inputLength: Int,
+                                         outputLength: Int, safety: String, outcome: String,
+                                         usage: LLMUsage) {
+        history.record(OperationRecord(
+            source: .passive,
+            appName: context.appName,
+            appBundleIdentifier: context.bundleIdentifier,
+            appCategory: AppCategory.from(bundleIdentifier: context.bundleIdentifier).rawValue,
+            action: WritingAction.proofread.rawValue,
+            inputMode: context.acquisitionMode.rawLabel,
+            inputLength: inputLength,
+            outputLength: outputLength,
+            provider: settings.provider.rawValue,
+            model: settings.model,
+            safetyResult: safety,
+            outcome: outcome,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            usageEstimated: usage.isEstimated
+        ))
     }
 
     private func fingerprint(_ s: String) -> Int {

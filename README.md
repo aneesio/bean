@@ -15,6 +15,7 @@ or Anthropic API key, and does not operate a Bean-hosted text service.
 - Use global shortcuts or the optional Bean Bubble near supported fields.
 - Keep style profiles, context cards, and a personal dictionary locally.
 - Run conservative local inline checks without using provider tokens.
+- Use Local Quick Check for obvious typos and spacing without an API request.
 - Add experimental web inline checks through the unpacked Chrome extension.
 
 Automatic provider-backed suggestions, native inline highlights, the Bean
@@ -29,7 +30,7 @@ Bubble, and browser support are beta features and are off by default. See the
 - Xcode or Apple Command Line Tools when building from source
 
 Bean itself is free. Your selected AI provider may charge for API usage. OpenAI
-`gpt-4.1-nano` and Anthropic `claude-haiku-4-5` are the current defaults; model
+`gpt-5-nano` and Anthropic `claude-haiku-4-5` are the current defaults; model
 availability and provider pricing can change independently of Bean.
 
 ## Install
@@ -90,8 +91,17 @@ Bean ships with paid background paths disabled:
 - Native inline checking: local-only when enabled
 
 Settings → AI Provider shows whether any automatic provider checks are active
-and provides **Disable automatic AI checks**. Explicit shortcuts and Bean Bubble
-actions still call the configured provider when you choose them.
+and provides **Disable automatic AI checks**. It also shows today/30-day usage,
+provider-reported or conservatively estimated token counts, an estimated USD
+cost, a daily automatic-call cap, and a configurable 30-day warning. Explicit
+AI shortcuts and Bean Bubble AI actions remain available at the automatic cap;
+Local Quick Check never calls a provider.
+
+The built-in estimate uses public standard list prices captured August 21,
+2026: [OpenAI gpt-5-nano](https://openai.com/index/introducing-gpt-5-for-developers/)
+and [Anthropic Claude Haiku 4.5](https://platform.claude.com/docs/en/about-claude/pricing).
+It is not a bill: caching, tiers, taxes, custom models, and later price changes
+can differ.
 
 ## Browser extension
 

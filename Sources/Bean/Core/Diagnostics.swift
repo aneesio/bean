@@ -9,6 +9,7 @@ struct Diagnostics {
     let settings: AppSettings
     let store: UserContentStore
     let history: OperationHistoryStore
+    let usageLedger: UsageLedgerStore
     let setupStatus: SetupStatusStore
 
     static var appPath: String { Bundle.main.bundlePath }
@@ -51,6 +52,10 @@ struct Diagnostics {
         lines.append("providerConnectionVerified: \(settings.isProviderConnectionVerified ? "yes" : "no")")
         lines.append("crossAppReplacementVerified: \(history.hasConfirmedExternalReplacement ? "yes" : "no")")
         lines.append("diagnosticsEnabled: \(settings.diagnosticsEnabled ? "yes" : "no")")
+        let usage = usageLedger.summary(days: 30)
+        lines.append("usage30dTokens: \(usage.inputTokens)+\(usage.outputTokens)")
+        lines.append("usage30dCalls: \(usage.operationCount) (automatic: \(usage.automaticOperationCount))")
+        lines.append("automaticDailyLimit: \(settings.dailyAutomaticCallLimit)")
 
         // Content-free counts only — never the actual profiles/cards/terms.
         let activeStyle = store.effectiveProfile(explicit: nil, context: nil).name

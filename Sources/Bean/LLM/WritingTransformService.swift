@@ -48,7 +48,7 @@ struct WritingTransformService {
         model: String,
         apiKey: String,
         timeout: TimeInterval
-    ) async throws -> String {
+    ) async throws -> LLMCompletion {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw LLMError.emptyResponse
         }
@@ -72,7 +72,7 @@ struct WritingTransformService {
         model: String,
         apiKey: String,
         timeout: TimeInterval
-    ) async throws {
+    ) async throws -> LLMUsage {
         guard !apiKey.isEmpty else { throw LLMError.missingAPIKey }
         let provider = LLMProviderFactory.make(kind)
         let request = LLMRequest(
@@ -83,7 +83,7 @@ struct WritingTransformService {
             timeout: timeout,
             maxOutputTokens: 64
         )
-        _ = try await provider.complete(request)
+        return try await provider.complete(request).usage
     }
 
     // MARK: - User message assembly

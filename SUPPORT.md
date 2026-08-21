@@ -18,6 +18,9 @@ Bean version, macOS version, source app/version, action used, expected result,
 actual result, and content-free diagnostics. The report includes up to ten recent
 operation outcomes but never the text that was processed.
 
+For unexpected provider cost, include the Usage & Cost source breakdown and the
+automatic-call count. Do not include a provider invoice or account identifier.
+
 Never post an API key, private text, clipboard contents, provider request or
 response body, or a screenshot containing sensitive information.
 

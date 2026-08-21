@@ -5,6 +5,7 @@ import SwiftUI
 struct OnboardingView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var history: OperationHistoryStore
+    @ObservedObject var usageLedger: UsageLedgerStore
     @ObservedObject var setupStatus: SetupStatusStore
 
     /// Called when the user finishes or skips. The presenter marks onboarding
@@ -59,7 +60,7 @@ struct OnboardingView: View {
         switch step {
         case .welcome: welcomeStep
         case .provider: stepFrame("Connect AI", "Bean uses your own API key. It stays in your Mac's Keychain.") {
-            ProviderSetupSection(settings: settings, compact: true)
+            ProviderSetupSection(settings: settings, usageLedger: usageLedger, compact: true)
         }
         case .permissions: stepFrame("Grant Accessibility", "Bean needs Accessibility permission to read and replace text when you ask it to.") {
             PermissionsSection(compact: true)

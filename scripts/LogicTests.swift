@@ -70,6 +70,8 @@ struct LogicTests {
     static func testWritingActions() {
         check(WritingAction.proofread.requiresPreview == false, "proofread: no preview")
         check(WritingAction.proofread.allowsDirectReplace, "proofread: direct replace")
+        check(!WritingAction.localQuickCheck.usesProvider, "localQuickCheck: no provider")
+        check(WritingAction.localQuickCheck.allowsDirectReplace, "localQuickCheck: direct replace")
         check(WritingAction.makeClearer.category == .rewrite, "makeClearer: rewrite")
 
         let replies: [WritingAction] = [.draftReply, .askClarification, .politeNo, .confirmNextSteps, .thankThem, .pushBackProfessionally]
@@ -93,8 +95,12 @@ struct LogicTests {
               "validator: script mismatch blocked")
         check(OutputSafetyValidator.validate(input: "hi", output: "Thanks for reaching out — happy to help, I'll follow up shortly.", action: .draftReply) == .ok,
               "validator: reply long output ok (generative)")
-        check(suspicious(OutputSafetyValidator.validate(input: "This is a reasonably long sentence that should not collapse drastically.", output: "Short.", action: .makeProfessional)),
-              "validator: rewrite too_short blocked")
+        let shortResult = OutputSafetyValidator.validate(
+            input: "This is a reasonably long sentence that should not collapse drastically.",
+            output: "Short.", action: .makeProfessional)
+        check(suspicious(shortResult), "validator: rewrite too_short flagged")
+        check(OutputSafetyValidator.disposition(for: "too_short") == .reviewRequired,
+              "validator: too_short requires review")
         check(OutputSafetyValidator.validate(input: "This is a reasonably long sentence that ought to be shortened considerably.", output: "Shorten this.", action: .makeConcise) == .ok,
               "validator: makeConcise short ok")
         check(suspicious(OutputSafetyValidator.validate(input: "please fix this sentence now", output: "Here is the corrected text: Fixed.", action: .proofread)),

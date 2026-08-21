@@ -2,11 +2,18 @@ import XCTest
 @testable import Bean
 
 final class WritingActionTests: XCTestCase {
-    func testProofreadIsTheOnlyDirectReplacementAction() {
+    func testOnlyProofreadingActionsReplaceDirectly() {
         for action in WritingAction.allCases {
-            XCTAssertEqual(action.allowsDirectReplace, action == .proofread, "Unexpected policy for \(action)")
-            XCTAssertEqual(action.requiresPreview, action != .proofread, "Unexpected preview policy for \(action)")
+            let isProofreading = action == .proofread || action == .localQuickCheck
+            XCTAssertEqual(action.allowsDirectReplace, isProofreading, "Unexpected policy for \(action)")
+            XCTAssertEqual(action.requiresPreview, !isProofreading, "Unexpected preview policy for \(action)")
         }
+    }
+
+    func testLocalQuickCheckDoesNotUseProvider() {
+        XCTAssertFalse(WritingAction.localQuickCheck.usesProvider)
+        XCTAssertTrue(WritingAction.allCases.filter { $0 != .localQuickCheck }.allSatisfy(\.usesProvider))
+        XCTAssertEqual(LocalQuickChecker.corrected("teh  test", dictionary: []), "the test")
     }
 
     func testReplyActionsNeverReplaceSourceMessage() {

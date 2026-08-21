@@ -132,6 +132,7 @@ final class OperationHistoryStore: ObservableObject {
     }
 
     func record(_ record: OperationRecord) {
+        refresh()
         records.insert(record, at: 0)
         if records.count > Self.maximumRecords {
             records.removeLast(records.count - Self.maximumRecords)
@@ -142,6 +143,16 @@ final class OperationHistoryStore: ObservableObject {
     func clear() {
         records = []
         defaults.removeObject(forKey: storageKey)
+        defaults.synchronize()
+    }
+
+    /// Refreshes metadata written by the separate Chrome native-host process.
+    func refresh() {
+        defaults.synchronize()
+        guard let data = defaults.data(forKey: storageKey),
+              let decoded = try? JSONDecoder().decode([OperationRecord].self, from: data),
+              decoded != records else { return }
+        records = Array(decoded.prefix(Self.maximumRecords))
     }
 
     var hasConfirmedExternalReplacement: Bool {
@@ -155,5 +166,6 @@ final class OperationHistoryStore: ObservableObject {
     private func persist() {
         guard let data = try? JSONEncoder().encode(records) else { return }
         defaults.set(data, forKey: storageKey)
+        defaults.synchronize()
     }
 }

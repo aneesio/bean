@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = AppSettings()
     private let userContent = UserContentStore()
     private let operationHistory = OperationHistoryStore()
+    private let usageLedger = UsageLedgerStore()
     private let setupStatus = SetupStatusStore()
     private let statusHUD = StatusHUD()
     private let replacementUndo = ReplacementUndoStore()
@@ -15,17 +16,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings: settings,
         userContent: userContent,
         history: operationHistory,
+        usageLedger: usageLedger,
         undoStore: replacementUndo,
         statusHUD: statusHUD
     )
 
     private lazy var passiveService = PassiveSuggestionService(
         settings: settings, userContent: userContent, history: operationHistory,
-        undoStore: replacementUndo, statusHUD: statusHUD
+        usageLedger: usageLedger, undoStore: replacementUndo, statusHUD: statusHUD
     )
 
     private lazy var inlineService = InlineHighlightService(
-        settings: settings, userContent: userContent, statusHUD: statusHUD
+        settings: settings, userContent: userContent, history: operationHistory,
+        usageLedger: usageLedger, statusHUD: statusHUD
     )
 
     private lazy var bubbleService = BeanBubbleService(
@@ -47,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings: settings,
         userContent: userContent,
         history: operationHistory,
+        usageLedger: usageLedger,
         setupStatus: setupStatus,
         onCheckPermissions: { [weak self] in self?.coordinator.checkPermissions() },
         onApplyShortcut: { [weak self] slot, shortcut in self?.applyShortcut(slot, shortcut) }
