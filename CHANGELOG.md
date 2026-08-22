@@ -22,6 +22,8 @@ once public release tags begin.
   marking an unfinished setup complete.
 - Simplified browser setup to an in-app two-step flow with automatic extension
   discovery and connection repair—no Terminal command required.
+- Made the browser connection-status request independent of MainActor and
+  Keychain access so it always reaches a final result instead of hanging.
 
 ## 1.3.1 — 2026-08-21 (public beta)
 

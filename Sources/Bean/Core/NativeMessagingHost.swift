@@ -103,7 +103,7 @@ enum NativeMessagingHost {
         case "ping":
             return encode(HostResponse(id: request.id, ok: true))
         case "getStatus":
-            return encode(await HostResponse.status(id: request.id))
+            return encode(HostResponse.status(id: request.id))
         case "detectIssues":
             return await detect(request)
         case "proofreadParagraph":
@@ -260,6 +260,28 @@ private enum HostConfig {
         return value > 0 ? value : 20
     }
 
+    /// Status checks must be fast and non-interactive. The provider verification
+    /// marker is content-free and is invalidated whenever the app changes or
+    /// clears its API key, so status does not need to query Keychain.
+    static var providerConfigured: Bool {
+        defaults.double(forKey: "providerVerifiedAt") > 0
+            && defaults.string(forKey: "providerVerifiedKind") == provider.rawValue
+            && defaults.string(forKey: "providerVerifiedModel") == model
+    }
+
+    /// Read the content-free ledger directly so getStatus never waits for a
+    /// MainActor hop from the native-host pipe loop.
+    static var automaticCallsToday: Int {
+        defaults.synchronize()
+        guard let data = defaults.data(forKey: "usageLedgerV1"),
+              let buckets = try? JSONDecoder().decode([DailyUsageBucket].self, from: data) else { return 0 }
+        let calendar = Calendar.current
+        let now = Date()
+        return buckets.filter {
+            calendar.isDate($0.day, inSameDayAs: now) && $0.source.isAutomaticProviderPath
+        }.reduce(0) { $0 + $1.operationCount }
+    }
+
     static func automaticCallAllowed() async -> Bool {
         await MainActor.run {
             UsageLedgerStore().allowsAutomaticCall(dailyLimit: dailyAutomaticCallLimit)
@@ -360,15 +382,14 @@ private struct HostResponse: Encodable {
         HostResponse(id: id, ok: false, errorCode: code, message: message)
     }
 
-    static func status(id: String?) async -> HostResponse {
-        let calls = await MainActor.run { UsageLedgerStore().automaticCallsToday() }
+    static func status(id: String?) -> HostResponse {
         return HostResponse(id: id, ok: true,
                      bridgeAvailable: true,
-                     providerConfigured: !HostConfig.apiKey.isEmpty,
+                     providerConfigured: HostConfig.providerConfigured,
                      webInlineEnabled: HostConfig.webInlineEnabled,
                      appVersion: AppInfo.version,
                      dailyAutomaticCallLimit: HostConfig.dailyAutomaticCallLimit,
-                     automaticCallsToday: calls,
+                     automaticCallsToday: HostConfig.automaticCallsToday,
                      referenceSites: ["mail.google.com", "app.slack.com"])
     }
 }
