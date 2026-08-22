@@ -1,127 +1,126 @@
 import AppKit
 import SwiftUI
 
-/// A user-facing setup flow shared by first-run onboarding and Settings. The
-/// app discovers the unpacked extension and writes the native-host manifest;
-/// users never need to construct or run a Terminal command.
+/// A human-readable setup flow shared by onboarding and Settings. Bean handles
+/// the native connection itself; no Terminal command is ever required.
 struct BrowserExtensionSetupSection: View {
     @ObservedObject var settings: AppSettings
+    var onboarding: Bool = false
+
     @StateObject private var bridge = BrowserBridgeManager()
     @State private var manualExtensionID = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: BeanDesign.Spacing.md) {
-            HStack {
-                Toggle("Enable Web Inline Support", isOn: $settings.webInlineEnabled)
-                Spacer()
-                StatusPill(text: "Beta", kind: .experimental, showsIcon: false)
-            }
+            statusCard
 
-            Text("Web apps need the Bean browser extension. Setup stays local to this Mac, and the extension starts with no site access and no paid AI calls.")
-                .font(.caption).foregroundColor(.secondary)
-
-            setupStep(
-                number: 1,
-                title: "Load the extension",
-                detail: "Reveal Bean's extension, open your browser's Extensions page, enable Developer mode, then choose Load unpacked."
-            ) {
-                HStack {
-                    Button("Reveal Bean Extension") { revealExtensionFolder() }
-                    Button("Open Browser Extensions") { openBrowserExtensions() }
+            if bridge.status.state != .installed {
+                setupGuide
+            } else {
+                Text("Reload the extension once after a Bean update. Click Bean's browser toolbar icon anytime to change blocked websites or check the connection.")
+                    .font(.caption).foregroundColor(.secondary)
+                Button("Repair Connection") {
+                    bridge.installOrRepair(manualExtensionID: manualExtensionID)
                 }
+                .disabled(bridge.isWorking)
             }
 
             Divider().opacity(0.4)
 
-            setupStep(
-                number: 2,
-                title: "Install the local connection",
-                detail: "Bean detects the loaded extension and securely allows only its exact extension ID."
-            ) {
+            Toggle("Allow deeper AI checks from the browser", isOn: $settings.webInlineEnabled)
+            Text("Optional. The free offline checker works without this. AI checks use your configured provider and automatic-call limit.")
+                .font(.caption).foregroundColor(.secondary)
+
+            DisclosureGroup("Connection help") {
                 VStack(alignment: .leading, spacing: 8) {
-                    bridgeStatus
-                    if bridge.status.extensionIDs.isEmpty {
-                        TextField("Extension ID (only if detection fails)", text: $manualExtensionID)
-                            .textFieldStyle(.roundedBorder)
-                        Text("You can copy this ID from the extension's Options page. Most users can leave it blank.")
-                            .font(.caption2).foregroundColor(.secondary)
-                    }
+                    Text("If Bean cannot detect the extension, copy its 32-letter ID from the browser's Extensions page and paste it here.")
+                        .font(.caption).foregroundColor(.secondary)
+                    TextField("Extension ID", text: $manualExtensionID)
+                        .textFieldStyle(.roundedBorder)
                     HStack {
-                        Button(bridge.status.state == .installed ? "Repair Browser Connection" : "Detect and Install") {
+                        Button("Try This ID") {
                             bridge.installOrRepair(manualExtensionID: manualExtensionID)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(bridge.isWorking)
+                        .disabled(bridge.isWorking || manualExtensionID.isEmpty)
                         Button("Scan Again") { bridge.refresh() }
                             .disabled(bridge.isWorking)
                     }
                 }
+                .padding(.top, 6)
             }
-
-            Divider().opacity(0.4)
-
-            setupStep(
-                number: 3,
-                title: "Reload and choose sites",
-                detail: "Reload the extension once, open its Options, approve only the sites you want, and click Test Connection."
-            ) { EmptyView() }
-
-            Text("Provider-backed web checks remain off until you also enable them in extension Options. Local checks use no tokens.")
-                .font(.caption2).foregroundColor(.secondary)
         }
         .onAppear { bridge.refresh() }
     }
 
-    private var bridgeStatus: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: statusSymbol)
-                .foregroundColor(statusColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(statusTitle).font(.callout).fontWeight(.medium)
+    private var statusCard: some View {
+        HStack(alignment: .top, spacing: 10) {
+            IconBadge(symbol: statusSymbol, tint: statusColor, size: 32)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(statusTitle).font(.callout).fontWeight(.semibold)
                 Text(bridge.message ?? bridge.status.detail)
                     .font(.caption).foregroundColor(.secondary)
-                if !bridge.status.extensionIDs.isEmpty {
-                    Text("Detected \(bridge.status.extensionIDs.count) Bean extension installation\(bridge.status.extensionIDs.count == 1 ? "" : "s").")
-                        .font(.caption2).foregroundColor(.secondary)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.warmBackground))
+    }
+
+    private var setupGuide: some View {
+        VStack(alignment: .leading, spacing: BeanDesign.Spacing.md) {
+            Text(onboarding ? "Two quick steps" : "Finish browser setup")
+                .font(.callout).fontWeight(.semibold)
+
+            guideRow(number: 1, title: "Add the extension") {
+                Text("Open your browser's Extensions page, turn on Developer mode, and drag or load Bean's extension folder.")
+                HStack {
+                    Button("Show Extension Folder") { revealExtensionFolder() }
+                    Button("Open Extensions Page") { openBrowserExtensions() }
                 }
+            }
+
+            guideRow(number: 2, title: "Connect it to Bean") {
+                Text("After the extension appears in your browser, come back and let Bean finish the local connection.")
+                Button(bridge.isWorking ? "Connecting…" : "Connect Bean to Browser") {
+                    bridge.installOrRepair(manualExtensionID: manualExtensionID)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(bridge.isWorking)
             }
         }
     }
 
     @ViewBuilder
-    private func setupStep<Content: View>(
-        number: Int, title: String, detail: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        HStack(alignment: .top, spacing: BeanDesign.Spacing.sm) {
+    private func guideRow<Content: View>(number: Int, title: String,
+                                         @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .top, spacing: 10) {
             Text("\(number)")
                 .font(.caption.bold())
                 .frame(width: 22, height: 22)
                 .background(Circle().fill(BeanDesign.subtleBorder))
             VStack(alignment: .leading, spacing: 6) {
                 Text(title).font(.callout).fontWeight(.semibold)
-                Text(detail).font(.caption).foregroundColor(.secondary)
-                content()
+                content().font(.caption).foregroundColor(.secondary)
             }
         }
     }
 
     private var statusTitle: String {
         switch bridge.status.state {
-        case .installed: return "Browser connection is installed"
-        case .readyToInstall: return "Bean extension found"
-        case .needsRepair: return "Browser connection needs repair"
-        case .extensionNotFound: return "Bean extension not detected yet"
-        case .unavailable: return "Supported browser not detected"
+        case .installed: return "Browser connected"
+        case .readyToInstall: return "Extension found — ready to connect"
+        case .needsRepair: return "Connection needs a quick repair"
+        case .extensionNotFound: return "Add the Bean extension"
+        case .unavailable: return "Open a supported browser first"
         }
     }
 
     private var statusSymbol: String {
-        bridge.status.state == .installed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        bridge.status.state == .installed ? "checkmark.circle.fill" : "globe"
     }
 
     private var statusColor: Color {
-        bridge.status.state == .installed ? BeanDesign.success : BeanDesign.warning
+        bridge.status.state == .installed ? BeanDesign.success : BeanDesign.accent
     }
 
     private func revealExtensionFolder() {
@@ -140,10 +139,9 @@ struct BrowserExtensionSetupSection: View {
             "/Applications/Chromium.app"
         ]
         if let path = candidates.first(where: FileManager.default.fileExists(atPath:)) {
-            let appURL = URL(fileURLWithPath: path)
             let configuration = NSWorkspace.OpenConfiguration()
             NSWorkspace.shared.open(
-                [extensionsURL], withApplicationAt: appURL,
+                [extensionsURL], withApplicationAt: URL(fileURLWithPath: path),
                 configuration: configuration, completionHandler: nil
             )
         } else {

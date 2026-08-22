@@ -1,6 +1,6 @@
 import SwiftUI
 
-// First-run onboarding — a calm five-step flow whose verification step uses a
+// First-run onboarding — a calm guided flow whose verification step uses a
 // disposable TextEdit file to prove the real cross-app Accessibility path.
 struct OnboardingView: View {
     @ObservedObject var settings: AppSettings
@@ -8,8 +8,8 @@ struct OnboardingView: View {
     @ObservedObject var usageLedger: UsageLedgerStore
     @ObservedObject var setupStatus: SetupStatusStore
 
-    /// Called when the user finishes or skips. The presenter marks onboarding
-    /// complete and closes the window.
+    /// Called only when the user explicitly finishes. Closing early keeps the
+    /// guide available on the next launch.
     let onClose: () -> Void
 
     @State private var step: Step = .welcome
@@ -35,7 +35,7 @@ struct OnboardingView: View {
                 .padding(.horizontal, BeanDesign.Spacing.xl)
                 .padding(.vertical, BeanDesign.Spacing.md)
         }
-        .frame(width: 540, height: 600)
+        .frame(width: 560, height: 620)
         .tint(BeanDesign.accent)
         .animation(.easeInOut(duration: 0.2), value: step)
     }
@@ -59,16 +59,17 @@ struct OnboardingView: View {
     private var content: some View {
         switch step {
         case .welcome: welcomeStep
-        case .provider: stepFrame("Connect AI", "Bean uses your own API key. It stays in your Mac's Keychain.") {
-            ProviderSetupSection(settings: settings, usageLedger: usageLedger, compact: true)
+        case .provider: stepFrame("Connect your writing engine", "Choose a provider and paste your API key. Bean stores it securely in your Mac's Keychain.") {
+            ProviderSetupSection(settings: settings, usageLedger: usageLedger,
+                                 compact: true, showsModelSettings: false)
         }
-        case .permissions: stepFrame("Grant Accessibility", "Bean needs Accessibility permission to read and replace text when you ask it to.") {
+        case .permissions: stepFrame("Let Bean help in other apps", "macOS requires your permission before Bean can work with the text field you are using.") {
             PermissionsSection(compact: true)
         }
         case .verify:
             CrossAppVerificationSection(settings: settings, history: history, setupStatus: setupStatus)
-        case .browser: stepFrame("Optional browser setup", "Add inline help to supported web text fields. You can skip this and set it up later.") {
-            BrowserExtensionSetupSection(settings: settings)
+        case .browser: stepFrame("Add Bean to your browser", "Optional: get the same quiet highlights in ordinary web text fields.") {
+            BrowserExtensionSetupSection(settings: settings, onboarding: true)
         }
         case .done: doneStep
         }
@@ -89,20 +90,23 @@ struct OnboardingView: View {
             VStack(alignment: .center, spacing: BeanDesign.Spacing.md) {
                 BeanMark(size: 76)
                 Text("Meet Bean").font(BeanDesign.Typography.largeTitle())
-                Text("A small writing helper for your Mac.")
+                Text("Better writing, right where you type.")
                     .font(.system(size: 15)).foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, BeanDesign.Spacing.md)
 
             HStack(spacing: BeanDesign.Spacing.md) {
-                BenefitCard(symbol: "checkmark.circle", title: "Proofread anywhere",
-                            subtitle: "Fix grammar in most Mac apps with a shortcut.")
-                BenefitCard(symbol: "sparkles", title: "Rewrite with style",
-                            subtitle: "Clearer, concise, professional, or casual.")
+                BenefitCard(symbol: "checkmark.circle", title: "Fix it in place",
+                            subtitle: "Proofread without moving text between apps.")
+                BenefitCard(symbol: "sparkles", title: "Sound like yourself",
+                            subtitle: "Rewrite clearly with styles you control.")
                 BenefitCard(symbol: "hand.raised", title: "Stay in control",
                             subtitle: "Review before anything is replaced.")
             }
+            Text("Setup takes about two minutes. Bean will guide you one step at a time.")
+                .font(BeanDesign.Typography.caption()).foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -136,7 +140,7 @@ struct OnboardingView: View {
                     if !history.hasConfirmedExternalReplacement {
                         Label("Cross-app replacement has not been verified yet.", systemImage: "rectangle.and.pencil.and.ellipsis")
                     }
-                    Text("You can finish now and complete these in Settings.")
+                    Text("You can finish now; Bean will keep setup easy to find in Settings.")
                         .font(BeanDesign.Typography.caption()).foregroundColor(.secondary)
                 }
             }
@@ -165,9 +169,6 @@ struct OnboardingView: View {
             if step != .welcome {
                 Button("Back") { goBack() }
             }
-            Button("Skip") { onClose() }
-                .buttonStyle(.borderless)
-                .foregroundColor(.secondary)
 
             Spacer()
 
@@ -177,7 +178,7 @@ struct OnboardingView: View {
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
             } else {
-                Button("Continue") { goNext() }
+                Button(nextButtonTitle) { goNext() }
                     .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
@@ -190,5 +191,16 @@ struct OnboardingView: View {
     }
     private func goBack() {
         if let prev = Step(rawValue: step.rawValue - 1) { step = prev }
+    }
+
+    private var nextButtonTitle: String {
+        switch step {
+        case .welcome: return "Set Up Bean"
+        case .provider: return "Continue"
+        case .permissions: return "Continue"
+        case .verify: return "Continue"
+        case .browser: return "Finish"
+        case .done: return "Start using Bean"
+        }
     }
 }

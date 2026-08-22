@@ -141,11 +141,9 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
-        // Closing the onboarding window (even via the red button) counts as
-        // "seen", so it doesn't reappear on every launch. Settings still shows
-        // setup warnings if anything is incomplete.
+        // Closing an unfinished setup does not silently mark it complete. Bean
+        // will offer the guide again on the next launch.
         if let window = notification.object as? NSWindow, window == onboardingWindow {
-            settings.onboardingComplete = true
             onboardingWindow = nil
         }
     }

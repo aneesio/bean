@@ -24,7 +24,6 @@ function runMigration(initial) {
       }
     },
     action: { onClicked: { addListener: () => {} } },
-    permissions: { onRemoved: { addListener: () => {} } },
     scripting: {
       unregisterContentScripts: (_filter, callback) => callback(),
       registerContentScripts: (_scripts, callback) => callback()
@@ -42,31 +41,43 @@ function runMigration(initial) {
 assert.deepEqual(
   runMigration({ enabled: true, useBridge: true, localFallback: true }),
   {
-    enabled: false,
-    allowedSites: [],
+    enabled: true,
+    blockedSites: [],
     useBridge: false,
     localFallback: true,
-    settingsSchemaVersion: 3
+    settingsSchemaVersion: 4
   },
-  "an old blanket-site and paid bridge preference is disabled exactly once"
+  "old unversioned preferences migrate to all-site local checks without enabling paid checks"
 );
 
 assert.equal(
-  runMigration({ enabled: true, allowedSites: ["mail.google.com"], useBridge: true, settingsSchemaVersion: 3 }),
+  runMigration({ enabled: false, blockedSites: ["example.com"], useBridge: true, settingsSchemaVersion: 4 }),
   null,
-  "a deliberate opt-in made after migration is preserved"
+  "deliberate version-four preferences are preserved"
+);
+
+assert.deepEqual(
+  runMigration({ enabled: false, allowedSites: ["mail.google.com"], useBridge: true, settingsSchemaVersion: 3 }),
+  {
+    enabled: true,
+    blockedSites: [],
+    useBridge: true,
+    localFallback: true,
+    settingsSchemaVersion: 4
+  },
+  "the old allowlist becomes all-site coverage while an explicit AI choice is preserved"
 );
 
 assert.deepEqual(
   runMigration({}),
   {
-    enabled: false,
-    allowedSites: [],
+    enabled: true,
+    blockedSites: [],
     localFallback: true,
     useBridge: false,
-    settingsSchemaVersion: 3
+    settingsSchemaVersion: 4
   },
-  "a fresh installation starts with only local checks available"
+  "a fresh installation starts with all-site local checks available"
 );
 
 console.log("Browser extension settings migration tests passed");

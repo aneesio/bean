@@ -18,8 +18,10 @@ or Anthropic API key, and does not operate a Bean-hosted text service.
 - Use Local Quick Check for obvious typos and spacing without an API request.
 - Add experimental web inline checks through the unpacked Chrome extension.
 
-Automatic provider-backed suggestions, native inline highlights, the Bean
-Bubble, and browser support are beta features and are off by default. See the
+Automatic provider-backed suggestions, native inline highlights, and the Bean
+Bubble are beta features and are off by default. The browser extension's free
+local checker is on across ordinary websites once installed; browser AI remains
+off until enabled separately. See the
 [support matrix](SUPPORTED_APPS.md) before reporting an app-specific problem.
 
 ## Requirements
@@ -69,17 +71,16 @@ Developer ID-signed and notarized artifacts, if introduced later, will omit the
 2. Grant Bean Accessibility permission when macOS asks.
 3. In another app, select text and press **⌘⇧G** to proofread it.
 4. Press **⌃⌥B** to open the full writing-action menu.
-5. Use Settings → Setup → **Open TextEdit verification** to confirm the complete
-   cross-app path.
+5. Follow the first-run guide's TextEdit check to confirm the complete cross-app
+   path.
 6. Keep automatic AI checks off for manual-only API usage.
 
 If no text is selected, Bean can optionally operate on the focused editable
 field. Search fields, secure fields, code editors, and unusually large fields
 are restricted or excluded.
 
-If a field behaves unexpectedly, focus it and choose **Bean → Check Current
-Field**. The resulting capability report uses metadata only and is included in
-the content-free support summary.
+If something behaves unexpectedly, Settings → Privacy & Support provides a
+content-free diagnostics summary under Advanced diagnostics.
 
 ## Cost controls
 
@@ -87,10 +88,10 @@ Bean ships with paid background paths disabled:
 
 - Passive Suggestions: off
 - Provider-backed inline checking: off
-- Web Inline Support: off
+- Browser AI checks: off (the offline browser checker uses no tokens)
 - Native inline checking: local-only when enabled
 
-Settings → Provider & Usage shows whether any automatic provider checks are active
+Settings → AI & Usage shows whether any automatic provider checks are active
 and provides **Disable automatic AI checks**. It also shows today/30-day usage,
 provider-reported or conservatively estimated token counts, an estimated USD
 cost, a daily automatic-call cap, and a configurable 30-day warning. Explicit
@@ -108,13 +109,15 @@ can differ.
 `BrowserExtension/` is an experimental Manifest V3 extension for Chromium-based
 browsers. Its local detector has no token cost; deeper provider checks use the
 local native-messaging bridge and remain separately opt-in. It is not yet a
-Chrome Web Store release. Bean Settings → Labs → Browser Extension now guides
-the unpacked-extension steps, detects its ID, and installs or repairs the local
-bridge without Terminal. See [BrowserExtension/README.md](BrowserExtension/README.md).
+Chrome Web Store release. Bean Settings → Browser guides the unpacked-extension
+steps, detects its ID, and installs or repairs the local bridge without Terminal.
+Local checks work across ordinary websites by default; users can disable Bean
+for the current field or block a website from the correction UI. See
+[BrowserExtension/README.md](BrowserExtension/README.md).
 
 ## Updates
 
-Settings → Setup includes a manual **Check for Updates** button. It contacts the
+Settings → General includes a manual **Check for Updates** button. It contacts the
 public GitHub Releases API only after you click it, shows the installed/latest
 versions and prerelease status, and can open a verified `aneesio/bean` release
 page. Bean does not poll in the background or download or install updates.

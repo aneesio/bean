@@ -22,7 +22,7 @@ struct SettingsView: View {
     @ObservedObject var setupStatus: SetupStatusStore
     let actions: SettingsActions
 
-    @State private var selection: Category? = .status
+    @State private var selection: Category? = .general
     @State private var loginEnabled: Bool = LoginItemService.isEnabled
     @State private var loginError: String?
     @State private var proofreadError: String?
@@ -30,25 +30,21 @@ struct SettingsView: View {
     @StateObject private var updateChecker = UpdateChecker()
 
     enum Category: String, CaseIterable, Identifiable {
-        case status = "Setup"
-        case provider = "Provider & Usage"
-        case shortcuts = "Shortcuts"
-        case style = "Actions & Style"
-        case context = "Context"
-        case privacy = "Privacy"
-        case labs = "Labs"
-        case troubleshooting = "Troubleshooting"
+        case general = "General"
+        case writing = "Writing"
+        case provider = "AI & Usage"
+        case personalization = "Personalization"
+        case browser = "Browser"
+        case privacy = "Privacy & Support"
         var id: String { rawValue }
         var symbol: String {
             switch self {
-            case .status: return "checklist"
-            case .provider: return "cpu"
-            case .shortcuts: return "command"
-            case .style: return "wand.and.stars"
-            case .context: return "doc.text"
+            case .general: return "gearshape"
+            case .writing: return "text.badge.checkmark"
+            case .provider: return "sparkles"
+            case .personalization: return "slider.horizontal.3"
+            case .browser: return "globe"
             case .privacy: return "lock.shield"
-            case .labs: return "flask"
-            case .troubleshooting: return "wrench.and.screwdriver"
             }
         }
     }
@@ -81,12 +77,10 @@ struct SettingsView: View {
             Label(category.rawValue, systemImage: category.symbol)
             Spacer()
             switch category {
-            case .status where !isFullyVerified:
+            case .general where !isFullyVerified:
                 StatusPill(text: "Action", kind: .warning, showsIcon: false)
             case .provider where !settings.hasAPIKey:
                 StatusPill(text: "Set up", kind: .warning, showsIcon: false)
-            case .labs:
-                StatusPill(text: "Beta", kind: .experimental, showsIcon: false)
             default:
                 EmptyView()
             }
@@ -95,43 +89,112 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var detailSections: some View {
-        switch selection ?? .status {
-        case .status:
-            if !settings.isSetupComplete { Section { setupWarning } }
-            Section("Readiness") { readinessSection }
+        switch selection ?? .general {
+        case .general:
+            Section("Bean") { simpleStatusSection }
             Section("General") { generalSection }
-            Section("Permissions") { PermissionsSection(compact: true) }
+            Section("Shortcuts") { shortcutSection }
             Section("Updates") { updateSection }
-            Section("Current field") { fieldInspectionSection }
-            Section("Recent operations (content-free)") { recentOperationsSection }
+        case .writing:
+            Section("Writing Assistance") { writingAssistanceSection }
         case .provider:
             Section("AI Provider") {
                 ProviderSetupSection(settings: settings, usageLedger: usageLedger, compact: true)
-                timeoutRow
             }
-            Section("Usage & Cost") { usageCostSection }
-        case .shortcuts:
-            Section("Shortcuts") { shortcutSection }
-        case .style:
+            Section("Usage") {
+                usageSummarySection
+                DisclosureGroup("Cost controls and detailed usage") {
+                    timeoutRow
+                    usageCostSection
+                }
+            }
+        case .personalization:
             Section("Style Profiles") { StyleProfilesSection(store: store) }
             Section("App Defaults") { AppDefaultsSection(store: store) }
-        case .context:
             Section("Context Cards") { ContextCardsSection(store: store) }
             Section("Personal Dictionary") { DictionarySection(store: store) }
-        case .labs:
-            Section("About Labs") {
-                Text("Labs contains optional beta features with narrower app compatibility. Every feature starts off; enable only the ones you want to test.")
-                    .foregroundColor(.secondary)
-            }
-            Section("Bean Bubble") { bubbleSection }
-            Section("Passive Suggestions") { passiveSection }
-            Section("Inline Highlights (experimental)") { inlineSection }
-            Section("Browser Extension (Beta)") { browserExtensionSection }
+        case .browser:
+            Section("Bean for the Web") { browserExtensionSection }
         case .privacy:
             Section("Privacy") { privacySection }
             Section("Data") { DataSection(store: store) }
-        case .troubleshooting:
-            Section("Troubleshooting") { troubleshootingSection }
+            Section("Help") { simpleSupportSection }
+        }
+    }
+
+    private var simpleStatusSection: some View {
+        Group {
+            HStack(spacing: 12) {
+                IconBadge(symbol: isFullyVerified ? "checkmark.seal.fill" : "sparkles",
+                          tint: isFullyVerified ? BeanDesign.success : BeanDesign.accent, size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isFullyVerified ? "Bean is ready" : "Finish setting up Bean")
+                        .font(.headline)
+                    Text(isFullyVerified
+                         ? "Use " + settings.shortcut.displayString + " in any supported text field."
+                         : "The guided setup will take you through each required step.")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                Spacer()
+                Button(isFullyVerified ? "Run Setup Again" : "Continue Setup") {
+                    actions.resetOnboarding()
+                }
+            }
+            if !isFullyVerified {
+                HStack(spacing: 14) {
+                    compactCheck("API", settings.isProviderConnectionVerified)
+                    compactCheck("Accessibility", PermissionService.isAccessibilityGranted)
+                    compactCheck("Replacement", history.hasConfirmedExternalReplacement)
+                }
+            }
+        }
+    }
+
+    private func compactCheck(_ title: String, _ ready: Bool) -> some View {
+        Label(title, systemImage: ready ? "checkmark.circle.fill" : "circle")
+            .font(.caption)
+            .foregroundColor(ready ? BeanDesign.success : .secondary)
+    }
+
+    private var writingAssistanceSection: some View {
+        Group {
+            Toggle("Show the Bean button near supported text fields", isOn: $settings.bubbleEnabled)
+            Text("A small shortcut to Bean's writing actions. It stays hidden in secure and non-editable fields.")
+                .font(.caption).foregroundColor(.secondary)
+            if settings.bubbleEnabled {
+                DisclosureGroup("Bean button options") { bubbleOptions }
+            }
+
+            Divider()
+            Toggle("Underline issues as I type", isOn: $settings.inlineHighlightsEnabled)
+            Text("Highlights supported native fields. Browser highlights are controlled from the Browser section.")
+                .font(.caption).foregroundColor(.secondary)
+            if settings.inlineHighlightsEnabled {
+                DisclosureGroup("Inline highlight options") { inlineOptions }
+            }
+
+            Divider()
+            Toggle("Suggest improvements after I pause", isOn: $settings.passiveEnabled)
+            Text("Optional. This can use paid AI tokens; nothing is changed until you approve it.")
+                .font(.caption).foregroundColor(.secondary)
+            if settings.passiveEnabled {
+                DisclosureGroup("Automatic suggestion options") { passiveOptions }
+            }
+        }
+    }
+
+    private var usageSummarySection: some View {
+        let month = usageLedger.summary(days: 30)
+        return Group {
+            LabeledContent("Last 30 days", value: "\(month.totalTokens.formatted()) tokens · \(month.operationCount) calls")
+            LabeledContent("Estimated cost") {
+                Text(month.estimatedCostUSD < 1
+                     ? String(format: "US$ %.4f", month.estimatedCostUSD)
+                     : String(format: "US$ %.2f", month.estimatedCostUSD))
+                    .monospacedDigit()
+            }
+            Text("Local Quick Check is free. Automatic AI checks stay within the daily limit below.")
+                .font(.caption).foregroundColor(.secondary)
         }
     }
 
@@ -150,12 +213,12 @@ struct SettingsView: View {
             setupCheckRow(
                 "API key saved",
                 ready: settings.hasAPIKey,
-                detail: settings.hasAPIKey ? settings.provider.displayName : "Add a key in Provider & Usage"
+                detail: settings.hasAPIKey ? settings.provider.displayName : "Add a key in AI & Usage"
             )
             setupCheckRow(
                 "Provider connection verified",
                 ready: settings.isProviderConnectionVerified,
-                detail: settings.isProviderConnectionVerified ? settings.model : "Use Test API key in Provider & Usage"
+                detail: settings.isProviderConnectionVerified ? settings.model : "Use Test API key in AI & Usage"
             )
             setupCheckRow(
                 "Accessibility",
@@ -210,7 +273,7 @@ struct SettingsView: View {
                 Text("No field has been inspected yet.")
                     .foregroundColor(.secondary)
             }
-            Text("Focus a field in another app, then choose Bean → Check Current Field from the menu bar. Bean records metadata only and does not read the field's text for this check.")
+            Text("Focus a field in another app, then choose Bean → Help → Check Current Field from the menu bar. Bean records metadata only and does not read the field's text for this check.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -503,19 +566,25 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
 
             if settings.bubbleEnabled {
-                Toggle("Show when a text field is focused", isOn: $settings.bubbleOnFocus)
-                Toggle("Show when text is selected", isOn: $settings.bubbleOnSelection)
-                Toggle("Open menu on hover (otherwise click)", isOn: $settings.bubbleOpenOnHover)
-                HStack {
-                    Text("Delay before showing")
-                    Slider(value: $settings.bubbleDelay, in: 0.3...2.0, step: 0.1)
-                    Text(String(format: "%.1fs", settings.bubbleDelay)).monospacedDigit().frame(width: 40)
-                }
-                Toggle("Show in chat apps", isOn: $settings.bubbleInChat)
-                Toggle("Show in mail / browser text fields", isOn: $settings.bubbleInMailBrowser)
-                Toggle("Show in code editors", isOn: $settings.bubbleInCode)
-                Toggle("Show in search / address fields", isOn: $settings.bubbleInSearch)
+                bubbleOptions
             }
+        }
+    }
+
+    private var bubbleOptions: some View {
+        Group {
+            Toggle("Show when a text field is focused", isOn: $settings.bubbleOnFocus)
+            Toggle("Show when text is selected", isOn: $settings.bubbleOnSelection)
+            Toggle("Open menu on hover", isOn: $settings.bubbleOpenOnHover)
+            HStack {
+                Text("Delay before showing")
+                Slider(value: $settings.bubbleDelay, in: 0.3...2.0, step: 0.1)
+                Text(String(format: "%.1fs", settings.bubbleDelay)).monospacedDigit().frame(width: 40)
+            }
+            Toggle("Show in chat apps", isOn: $settings.bubbleInChat)
+            Toggle("Show in mail and browser fields", isOn: $settings.bubbleInMailBrowser)
+            Toggle("Show in code editors", isOn: $settings.bubbleInCode)
+            Toggle("Show in search fields", isOn: $settings.bubbleInSearch)
         }
     }
 
@@ -530,31 +599,35 @@ struct SettingsView: View {
             monitorStatusRow
 
             if settings.passiveEnabled {
-                if let until = settings.passivePausedUntil, until > Date() {
-                    HStack {
-                        Text("Paused until \(until.formatted(date: .omitted, time: .shortened))")
-                            .font(.caption).foregroundColor(.orange)
-                        Button("Resume") { settings.resumePassive() }
-                    }
-                } else {
-                    Button("Pause for 1 hour") { settings.pausePassive(forHours: 1) }
-                }
-
-                HStack {
-                    Text("Suggestion delay")
-                    Slider(value: $settings.passiveDelay, in: 0.6...3.0, step: 0.1)
-                    Text(String(format: "%.1fs", settings.passiveDelay)).monospacedDigit().frame(width: 40)
-                }
-                Stepper("Minimum length: \(settings.passiveMinLength)", value: $settings.passiveMinLength, in: 5...200, step: 5)
-                Stepper("Maximum length: \(settings.passiveMaxLength)", value: $settings.passiveMaxLength, in: 200...8000, step: 200)
-
-                Toggle("Enable in chat apps", isOn: $settings.passiveInChat)
-                Toggle("Enable in mail / browser text fields", isOn: $settings.passiveInMailBrowser)
-                Toggle("Enable in code editors", isOn: $settings.passiveInCode)
-                Toggle("Enable in search / address fields", isOn: $settings.passiveInSearch)
-                Toggle("Only call AI when an offline check finds a likely issue", isOn: $settings.passiveOnlyWhenLikely)
-                Toggle("Require preview before apply", isOn: $settings.passiveRequirePreview)
+                passiveOptions
             }
+        }
+    }
+
+    private var passiveOptions: some View {
+        Group {
+            if let until = settings.passivePausedUntil, until > Date() {
+                HStack {
+                    Text("Paused until \(until.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption).foregroundColor(.orange)
+                    Button("Resume") { settings.resumePassive() }
+                }
+            } else {
+                Button("Pause for 1 hour") { settings.pausePassive(forHours: 1) }
+            }
+            HStack {
+                Text("Suggestion delay")
+                Slider(value: $settings.passiveDelay, in: 0.6...3.0, step: 0.1)
+                Text(String(format: "%.1fs", settings.passiveDelay)).monospacedDigit().frame(width: 40)
+            }
+            Stepper("Minimum length: \(settings.passiveMinLength)", value: $settings.passiveMinLength, in: 5...200, step: 5)
+            Stepper("Maximum length: \(settings.passiveMaxLength)", value: $settings.passiveMaxLength, in: 200...8000, step: 200)
+            Toggle("Enable in chat apps", isOn: $settings.passiveInChat)
+            Toggle("Enable in mail and browser fields", isOn: $settings.passiveInMailBrowser)
+            Toggle("Enable in code editors", isOn: $settings.passiveInCode)
+            Toggle("Enable in search fields", isOn: $settings.passiveInSearch)
+            Toggle("Only call AI when an offline check finds a likely issue", isOn: $settings.passiveOnlyWhenLikely)
+            Toggle("Require preview before apply", isOn: $settings.passiveRequirePreview)
         }
     }
 
@@ -580,15 +653,21 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
 
             if settings.inlineHighlightsEnabled {
-                Text("Code editors, search/address bars, and secure fields are always excluded.")
-                    .font(.caption2).foregroundColor(.secondary)
-                Stepper("Max issues shown: \(settings.inlineMaxIssues)", value: $settings.inlineMaxIssues, in: 1...8)
-                Toggle("Use local checks only (no token cost)", isOn: $settings.inlineLocalOnly)
-                Toggle("Include LLM issue suggestions", isOn: $settings.inlineIncludeLLM)
-                    .disabled(settings.inlineLocalOnly)
-                Toggle("Show explanation in correction card", isOn: $settings.inlineShowExplanation)
-                Toggle("Fall back to Passive Suggestions when highlights unavailable", isOn: $settings.inlineFallbackPassive)
+                inlineOptions
             }
+        }
+    }
+
+    private var inlineOptions: some View {
+        Group {
+            Text("Code editors, search fields, and secure fields are always excluded.")
+                .font(.caption2).foregroundColor(.secondary)
+            Stepper("Maximum issues shown: \(settings.inlineMaxIssues)", value: $settings.inlineMaxIssues, in: 1...8)
+            Toggle("Use local checks only (no token cost)", isOn: $settings.inlineLocalOnly)
+            Toggle("Include AI suggestions", isOn: $settings.inlineIncludeLLM)
+                .disabled(settings.inlineLocalOnly)
+            Toggle("Show explanations", isOn: $settings.inlineShowExplanation)
+            Toggle("Use pause suggestions when highlights are unavailable", isOn: $settings.inlineFallbackPassive)
         }
     }
 
@@ -626,6 +705,36 @@ struct SettingsView: View {
 
     @State private var copiedDiagnostics = false
     @State private var reportError: String?
+
+    private var simpleSupportSection: some View {
+        Group {
+            Button("Run Guided Setup") { actions.resetOnboarding() }
+            Button("Check Accessibility Permission") { actions.checkPermissions() }
+            Button("Copy diagnostics and report a problem") { reportIssue() }
+            if let reportError {
+                Text(reportError).font(.caption).foregroundColor(.red)
+            }
+            DisclosureGroup("Advanced diagnostics") {
+                if let warning = Diagnostics.pathWarning {
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange).font(.callout)
+                }
+                Button("Reveal Bean in Finder") { revealInFinder() }
+                Button("Open Console Logs") { openConsole() }
+                Button(copiedDiagnostics ? "Diagnostics copied ✓" : "Copy Diagnostics Summary") {
+                    copyDiagnostics()
+                }
+                HStack {
+                    Button("Open README") { actions.openReadme() }
+                    Button("Open Testing Guide") { actions.openTesting() }
+                }
+                Divider()
+                fieldInspectionSection
+                Divider()
+                recentOperationsSection
+            }
+        }
+    }
 
     private var troubleshootingSection: some View {
         Group {

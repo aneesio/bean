@@ -36,18 +36,16 @@ grep -Eq "^## $APP_VERSION .*public beta" CHANGELOG.md || {
     exit 1
 }
 
-EXPECTED_CATEGORIES="status=Setup
-provider=Provider & Usage
-shortcuts=Shortcuts
-style=Actions & Style
-context=Context
-privacy=Privacy
-labs=Labs
-troubleshooting=Troubleshooting"
+EXPECTED_CATEGORIES="general=General
+writing=Writing
+provider=AI & Usage
+personalization=Personalization
+browser=Browser
+privacy=Privacy & Support"
 ACTUAL_CATEGORIES="$(sed -n '/enum Category:/,/var id:/p' Sources/Bean/UI/SettingsView.swift \
     | sed -n 's/^[[:space:]]*case \([a-zA-Z]*\) = "\([^"]*\)"/\1=\2/p')"
 [[ "$ACTUAL_CATEGORIES" == "$EXPECTED_CATEGORIES" ]] || {
-    echo "error: primary Settings navigation differs from the eight-category release contract" >&2
+    echo "error: primary Settings navigation differs from the six-category release contract" >&2
     exit 1
 }
 

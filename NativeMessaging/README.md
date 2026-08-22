@@ -5,14 +5,14 @@ candidates and whole-paragraph proofreading. The host is the Bean app binary
 running in `--native-messaging` mode; it does not launch the GUI.
 
 ```text
-approved page → extension content script → extension service worker
+supported, unblocked page → extension content script → extension service worker
               → Chrome Native Messaging → local Bean binary
               → the user's selected OpenAI or Anthropic provider
 ```
 
 ## Install (normal users)
 
-Use **Bean Settings → Labs → Browser Extension → Detect and Install**. Bean
+Use **Bean Settings → Browser → Connect Bean to Browser**. Bean
 discovers the loaded extension from Chromium's extension metadata and writes
 the per-user host manifest itself. No Terminal command is required.
 

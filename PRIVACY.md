@@ -48,12 +48,13 @@ authorized to send it to your selected provider.
   action, input mode and length, provider/model, timing, safety/replacement
   result codes, and token counts or estimates. It never contains source text,
   transformed text, prompts, responses, clipboard contents, window titles,
-  field labels, or field values. You can inspect and erase it in Settings → Setup.
+  field labels, or field values. You can inspect and erase it in Settings →
+  Privacy & Support → Advanced diagnostics.
 - Bean also keeps up to 120 days of daily usage aggregates in UserDefaults so
   the Usage & Cost dashboard remains accurate after the 50-record detail history
   rolls over. Each aggregate contains only date, provider/model, manual or
   automatic source, token totals, call count, and whether counts were estimated.
-  It contains no text or field metadata and can be erased from Provider & Usage.
+  It contains no text or field metadata and can be erased from AI & Usage.
 - Style profiles, context cards, dictionary terms, and app rules are stored in
   `~/Library/Application Support/Bean/userContent.json`.
 - Bean temporarily uses the system clipboard for text acquisition and
@@ -92,8 +93,12 @@ or installs an update.
 ## Browser extension
 
 The extension's default detector runs locally in the web page and does not store
-or transmit editable-field text. It stores only extension settings and approved
-site hostnames in `chrome.storage.local`.
+or transmit editable-field text. After installation it is available across
+ordinary HTTP and HTTPS websites, except hostnames the user adds to the blocked
+list. It stores only extension settings and blocked hostnames in
+`chrome.storage.local`. **Disable on this field** lasts only for that page
+session and is not persisted. Password, search, email-address, URL, telephone,
+number, code, disabled, read-only, hidden, and tiny fields are excluded.
 
 If you separately enable the native bridge, focused editable-field text and the
 site hostname are sent through Chrome Native Messaging to the local Bean app.

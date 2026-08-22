@@ -1,8 +1,8 @@
-// Bean extension service worker. Registers the content script only for sites
-// the user explicitly grants, and forwards optional provider requests to the
-// local Bean native-messaging host. It never stores request text.
+// Bean extension service worker. Registers the content script on ordinary web
+// pages except sites the user blocks, and forwards optional provider requests
+// to the local Bean native-messaging host. It never stores request text.
 const HOST = "com.bean.nativehost";
-const SETTINGS_SCHEMA_VERSION = 3;
+const SETTINGS_SCHEMA_VERSION = 4;
 const NATIVE_MESSAGE_TIMEOUT_MS = 5000;
 const SCRIPT_ID = "bean-inline";
 const SCRIPT_FILES = [
@@ -15,7 +15,9 @@ const SCRIPT_FILES = [
 function patternsForHosts(hosts) {
   return [...new Set((hosts || []).flatMap((host) => [
     `http://${host}/*`,
-    `https://${host}/*`
+    `https://${host}/*`,
+    `http://*.${host}/*`,
+    `https://*.${host}/*`
   ]))];
 }
 
@@ -24,12 +26,12 @@ function syncRegisteredContentScript(done = () => {}) {
     // A missing previous registration sets runtime.lastError; reading it keeps
     // Chrome from reporting an unchecked error.
     void chrome.runtime.lastError;
-    chrome.storage.local.get(["enabled", "allowedSites"], (settings) => {
-      const matches = settings.enabled ? patternsForHosts(settings.allowedSites) : [];
-      if (!matches.length) { done(); return; }
+    chrome.storage.local.get(["enabled", "blockedSites"], (settings) => {
+      if (settings.enabled === false) { done(); return; }
       chrome.scripting.registerContentScripts([{
         id: SCRIPT_ID,
-        matches,
+        matches: ["http://*/*", "https://*/*"],
+        excludeMatches: patternsForHosts(settings.blockedSites),
         js: SCRIPT_FILES,
         runAt: "document_idle",
         persistAcrossSessions: true
@@ -47,12 +49,13 @@ chrome.runtime.onInstalled.addListener(() => {
     (settings) => {
       const update = {};
       if ((settings.settingsSchemaVersion || 0) < SETTINGS_SCHEMA_VERSION) {
-        // Version 0.2 switches from blanket page injection to explicit site
-        // grants. Do not carry an old "all sites" state across that boundary.
+        // Version 0.5 makes local inline help available everywhere and replaces
+        // the allowlist with an opt-out blocklist. Provider-backed checks keep
+        // their previous choice and remain off on a truly fresh installation.
         Object.assign(update, {
-          enabled: false,
-          allowedSites: [],
-          useBridge: false,
+          enabled: true,
+          blockedSites: [],
+          useBridge: settings.settingsSchemaVersion ? !!settings.useBridge : false,
           localFallback: settings.localFallback !== false,
           settingsSchemaVersion: SETTINGS_SCHEMA_VERSION
         });
@@ -65,7 +68,6 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup.addListener(() => syncRegisteredContentScript());
-chrome.permissions.onRemoved.addListener(() => syncRegisteredContentScript());
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 
 function sendNative(message, sendResponse, notInstalledCode) {

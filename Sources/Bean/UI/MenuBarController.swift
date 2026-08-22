@@ -3,7 +3,7 @@ import SwiftUI
 
 // Owns the NSStatusItem (menu bar icon) and its menu. Window presentation is
 // delegated out via closures. Menu:
-//   Proofread Now · Open Bean Menu · Settings · Check Permissions · About · Quit
+//   Proofread Now · Open Bean Menu · Undo · Settings · Help · About · Quit
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
     private let onProofreadNow: () -> Void
@@ -108,20 +108,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let fieldItem = NSMenuItem(title: "Check Current Field", action: #selector(handleCheckCurrentField), keyEquivalent: "")
-        fieldItem.target = self
-        fieldItem.image = Self.icon("scope")
-        menu.addItem(fieldItem)
-
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(handleSettings), keyEquivalent: ",")
         settingsItem.target = self
         settingsItem.image = Self.icon("gearshape")
         menu.addItem(settingsItem)
 
+        let helpItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
+        helpItem.image = Self.icon("questionmark.circle")
+        let helpMenu = NSMenu(title: "Help")
+        let fieldItem = NSMenuItem(title: "Check Current Field", action: #selector(handleCheckCurrentField), keyEquivalent: "")
+        fieldItem.target = self
+        fieldItem.image = Self.icon("scope")
+        helpMenu.addItem(fieldItem)
         let permissionsItem = NSMenuItem(title: "Check Permissions", action: #selector(handleCheckPermissions), keyEquivalent: "")
         permissionsItem.target = self
         permissionsItem.image = Self.icon("lock.shield")
-        menu.addItem(permissionsItem)
+        helpMenu.addItem(permissionsItem)
+        helpItem.submenu = helpMenu
+        menu.addItem(helpItem)
 
         let aboutItem = NSMenuItem(title: "About Bean", action: #selector(handleAbout), keyEquivalent: "")
         aboutItem.target = self

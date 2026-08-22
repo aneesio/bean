@@ -90,7 +90,7 @@ struct BrowserBridgeInstaller {
             return BrowserBridgeStatus(
                 state: .extensionNotFound, extensionIDs: [],
                 browserNames: installedBrowsers.map(\.name), configuredBrowserNames: [],
-                detail: "Load the Bean extension first, then click Detect and Install."
+                detail: "Load the Bean extension first, then return here to connect it."
             )
         }
 
@@ -102,7 +102,7 @@ struct BrowserBridgeInstaller {
         let detail: String
         if configured.count == installedBrowsers.count {
             state = .installed
-            detail = "Connection installed for \(configured.map(\.name).joined(separator: ", ")). Reload the extension, then test it."
+            detail = "Ready in \(configured.map(\.name).joined(separator: ", "))."
         } else if configured.isEmpty {
             state = .readyToInstall
             detail = "Extension found. Bean can install the browser connection now."
@@ -263,7 +263,7 @@ final class BrowserBridgeManager: ObservableObject {
         defer { isWorking = false }
         do {
             status = try installer.install(manualExtensionID: manualExtensionID)
-            message = "Browser connection installed. Reload the extension and click Test Connection."
+            message = "Browser connected. Reload the extension once to start using Bean."
         } catch {
             status = installer.inspect()
             message = error.localizedDescription

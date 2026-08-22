@@ -3,6 +3,26 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.4.0 — 2026-08-21 (public beta)
+
+- Changed the browser extension from an approved-sites allowlist to writing help
+  on ordinary websites by default, with a persistent blocked-sites list.
+- Added **Disable on this field** and **Disable on this website** controls to web
+  correction and paragraph cards, plus hover access from paragraph Bean icons.
+- Kept browser AI checks independently opt-in; default browser detection stays
+  local and has no provider token cost.
+- Redesigned browser Options around a minimal readiness summary, blocklist, and
+  a bounded connection check instead of setup/test terminology.
+- Reduced Bean Settings from eight technical destinations to six human-focused
+  areas, with detailed diagnostics hidden under an Advanced disclosure.
+- Simplified the menu-bar menu to everyday actions and moved permission/support
+  recovery into Settings.
+- Refined first-run onboarding copy and hierarchy, hid model IDs from the main
+  path, removed the misleading Skip action, and stopped window-close from
+  marking an unfinished setup complete.
+- Simplified browser setup to an in-app two-step flow with automatic extension
+  discovery and connection repair—no Terminal command required.
+
 ## 1.3.1 — 2026-08-21 (public beta)
 
 - Fixed a native-host main-actor deadlock that left the browser extension's

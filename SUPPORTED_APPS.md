@@ -16,7 +16,7 @@ not mean every editor implementation can be replaced or highlighted.
 | Apple Notes | Supported | Direct write or verified paste | Supported/best effort | Native or passive fallback | Rich-note geometry can vary. |
 | Apple Mail | Supported | Direct write or verified paste | Supported/best effort | Native or passive fallback | Test the message composer, not message display. |
 | Slack desktop | Supported | Best-effort Electron paste with stale guards | Bounds or recent click+typing evidence | No native highlight; passive/manual path | Slack may expose no focused AX editor. |
-| Chromium web editor | Supported/best effort | Verified paste when AX exposes the editor | Best effort | Browser extension on an approved exact hostname | Gmail and Slack web are the extension references. |
+| Chromium web editor | Supported/best effort | Verified paste when AX exposes the editor | Best effort | Browser extension on by default unless the site is blocked | Gmail and Slack web are the extension references. |
 
 ## Deterministic exclusions
 

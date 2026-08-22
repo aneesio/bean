@@ -10,6 +10,9 @@ struct ProviderSetupSection: View {
     @ObservedObject var usageLedger: UsageLedgerStore
     /// When true, renders a compact heading (used inside Settings forms).
     var compact: Bool = false
+    /// Onboarding uses the provider's safe default model and keeps technical
+    /// model IDs out of the primary flow.
+    var showsModelSettings: Bool = true
 
     @State private var apiKeyField: String = ""
     @State private var testState: TestState = .idle
@@ -52,19 +55,27 @@ struct ProviderSetupSection: View {
                     .foregroundColor(.red)
             }
 
-            Text("Model").font(.subheadline)
-            HStack {
-                TextField("Model", text: $settings.model)
-                    .textFieldStyle(.roundedBorder)
-                Button("Default") { settings.model = settings.provider.defaultModel }
+            if showsModelSettings {
+                Text("Model").font(.subheadline)
+                HStack {
+                    TextField("Model", text: $settings.model)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Default") { settings.model = settings.provider.defaultModel }
+                }
+                Text("Default for \(settings.provider.displayName): \(settings.provider.defaultModel)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            Text("Default for \(settings.provider.displayName): \(settings.provider.defaultModel)")
-                .font(.caption)
-                .foregroundColor(.secondary)
 
             HStack(spacing: 10) {
-                Button("Test API key") { runTest() }
-                    .disabled(apiKeyField.isEmpty || testState == .running)
+                if showsModelSettings {
+                    Button("Test API key") { runTest() }
+                        .disabled(apiKeyField.isEmpty || testState == .running)
+                } else {
+                    Button("Connect Bean") { runTest() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(apiKeyField.isEmpty || testState == .running)
+                }
                 testStatusView
             }
         }

@@ -1,6 +1,6 @@
 // Bean content script — orchestrates inline proofreading in web text fields.
 //
-// Off by default. Activates only when enabled for the current site (options).
+// On by default. Activates on ordinary web pages except sites the user blocks.
 // Supports textarea, text inputs, and contenteditable. Skips password/search
 // fields, code editors, and Google Docs. Applying one fix continues to the next.
 //
@@ -13,24 +13,28 @@
   if (window.__beanInlineContentScriptLoaded) return;
   window.__beanInlineContentScriptLoaded = true;
 
-  const SETTINGS_SCHEMA_VERSION = 3;
+  const SETTINGS_SCHEMA_VERSION = 4;
   const state = { active: null, entries: [], selectedId: null, fingerprint: 0, shownFingerprint: 0,
                   ignored: new Set(), reqGen: 0, groups: [], selectedGroupId: null,
                   correctedFps: new Set(), fixingGroup: false,
-                  enabled: false, allowedSites: [], useBridge: false, localFallback: true };
+                  disabledFields: new WeakSet(),
+                  enabled: true, blockedSites: [], useBridge: false, localFallback: true };
   let debounce = null, scrollThrottle = null;
   let lastBridgeAt = 0;
 
   // --- Settings -------------------------------------------------------------
   function host() { return location.hostname.toLowerCase(); }
+  function hostIsBlocked(currentHost, blockedHost) {
+    return currentHost === blockedHost || currentHost.endsWith("." + blockedHost);
+  }
   function siteAllowed() {
     if (!state.enabled) return false;
-    return state.allowedSites.includes(host());
+    return !state.blockedSites.some((blockedHost) => hostIsBlocked(host(), blockedHost));
   }
   function loadSettings(cb) {
-    chrome.storage.local.get(["enabled", "allowedSites", "useBridge", "localFallback", "settingsSchemaVersion"], (s) => {
-      state.enabled = !!s.enabled;
-      state.allowedSites = s.allowedSites || [];
+    chrome.storage.local.get(["enabled", "blockedSites", "useBridge", "localFallback", "settingsSchemaVersion"], (s) => {
+      state.enabled = s.enabled !== false;
+      state.blockedSites = s.blockedSites || [];
       // Requiring the current schema makes an old persisted `useBridge: true`
       // harmless even if this content script starts before migration completes.
       state.useBridge = s.settingsSchemaVersion >= SETTINGS_SCHEMA_VERSION && !!s.useBridge;
@@ -147,7 +151,7 @@
   document.addEventListener("focusin", (e) => {
     if (!siteAllowed()) return;
     const el = e.target;
-    if (!isEditable(el) || isExcluded(el)) { teardown(); return; }
+    if (!isEditable(el) || isExcluded(el) || state.disabledFields.has(el)) { teardown(); return; }
     setActive(el);
   }, true);
 
@@ -175,6 +179,7 @@
   window.addEventListener("resize", () => { if (state.active) recomputeRects(); });
 
   function setActive(el) {
+    if (state.disabledFields.has(el)) return;
     if (state.active === el) return;
     teardown();
     state.active = el;
@@ -450,7 +455,9 @@
         if (entry) state.ignored.add(ignoreKey(entry.issue.original));
         dropIssue(id);
       },
-      onApply: (id) => applyIssue(id)
+      onApply: (id) => applyIssue(id),
+      onDisableField: () => disableCurrentField(),
+      onDisableSite: () => disableCurrentSite()
     });
 
     // Paragraph-level icons + card (priority: an open group card hides the issue
@@ -487,7 +494,36 @@
         if (!state.entries.length) { clearOverlay(); return; }
         renderOverlay();
       },
-      onFixParagraph: (gid) => fixParagraph(gid)
+      onFixParagraph: (gid) => fixParagraph(gid),
+      onDisableField: () => disableCurrentField(),
+      onDisableSite: () => disableCurrentSite()
+    });
+  }
+
+  function disableCurrentField() {
+    const el = state.active;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    state.disabledFields.add(el);
+    teardown();
+    BeanOverlay.flash({ x: rect.left + window.scrollX, y: rect.top + window.scrollY,
+                        w: rect.width, h: rect.height }, "Bean disabled for this field");
+  }
+
+  function disableCurrentSite() {
+    const currentHost = host();
+    const el = state.active;
+    const rect = el ? el.getBoundingClientRect() : null;
+    chrome.storage.local.get(["blockedSites"], (settings) => {
+      const blockedSites = [...new Set([...(settings.blockedSites || []), currentHost])].sort();
+      chrome.storage.local.set({ blockedSites, settingsSchemaVersion: SETTINGS_SCHEMA_VERSION }, () => {
+        chrome.runtime.sendMessage({ type: "refreshRegistration" }, () => { void chrome.runtime.lastError; });
+        teardown();
+        if (rect) {
+          BeanOverlay.flash({ x: rect.left + window.scrollX, y: rect.top + window.scrollY,
+                              w: rect.width, h: rect.height }, `Bean disabled on ${currentHost}`);
+        }
+      });
     });
   }
 

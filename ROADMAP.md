@@ -24,7 +24,8 @@ automatic versus manual provider usage.
 - Automatic provider calls remain off by default and have explicit limits.
 - Unsupported fields fail closed; secure fields are never read.
 - Uncertain model output is never applied automatically.
-- Experimental features remain opt-in and are grouped as Labs.
+- Paid automatic features remain opt-in; optional controls use progressive
+  disclosure in Writing and Browser settings.
 
 ## Phase 1 — Activation and diagnostics
 
@@ -35,8 +36,8 @@ automatic versus manual provider usage.
 1. Add a Setup & Status screen with live checks for app location, API key,
    provider connection, Accessibility permission, shortcuts, and the most recent
    current-field capability inspection.
-2. Add a menu-bar **Check Current Field** action that evaluates the frontmost
-   field without reading or recording its text.
+2. Add a menu-bar **Help → Check Current Field** action that evaluates the
+   frontmost field without reading or recording its text.
 3. Replace the onboarding-only provider demonstration with a guided TextEdit
    cross-app verification. Completing a confirmed external replacement marks
    the end-to-end check as passed.
@@ -146,22 +147,22 @@ automatic versus manual provider usage.
 
 ### Actions
 
-1. Consolidate Bean Bubble, Passive Suggestions, Inline Highlights, and the
-   browser extension under one **Labs** settings category.
-2. Keep primary navigation limited to Setup, Provider & Usage, Shortcuts,
-   Actions & Style, Context, Privacy, Labs, and Troubleshooting.
+1. Consolidate Bean Bubble, Passive Suggestions, and Inline Highlights under a
+   progressive-disclosure **Writing** settings category.
+2. Keep primary navigation limited to General, Writing, AI & Usage,
+   Personalization, Browser, and Privacy & Support.
 3. Add a user-triggered GitHub Releases update check with no background polling,
    analytics, or automatic installation.
 4. Show the installed version, latest version, prerelease status, and a button
    to open the verified GitHub release page.
 5. Document objective gates for Apple notarization and Chrome Web Store
    publication. Neither paid external program is required for source releases.
-6. Add maintainer release checks for update metadata, public-beta lab defaults,
+6. Add maintainer release checks for update metadata, public-beta feature defaults,
    and distribution wording.
 
 ### Acceptance criteria
 
-- Experimental controls are visually separated from the dependable core flow.
+- Optional controls are visually separated from the dependable core flow.
 - Update checks happen only after a user click and fail with an actionable
   message.
 - No executable update is downloaded or installed by Bean.

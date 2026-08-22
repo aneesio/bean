@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Bean — Inline Proofreading (Beta)",
-  "version": "0.4.0",
-  "description": "Bean inline proofreading for web text fields. Off by default; grant access only to sites you choose.",
+  "version": "0.5.0",
+  "description": "Bean inline proofreading for web text fields, with simple per-field and per-site controls.",
   "permissions": ["storage", "nativeMessaging", "scripting"],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "options_page": "options.html",
   "background": { "service_worker": "background.js" },
   "action": { "default_title": "Bean — open settings" },

@@ -70,7 +70,7 @@ tested.
 | Apple Notes | Correct selection | Preserve note structure | No button/control anchors | Native or passive fallback | Formatting outside target unchanged |
 | Apple Mail | Correct in composer | Preserve greeting/sign-off | Composer only | Native or passive fallback | Displayed mail excluded |
 | Slack desktop | Correct selection | Composer replacement or honest fallback | Composer/evidence only | Passive/manual; no fake native inline | Channel buttons excluded |
-| Chromium (Gmail + Slack web) | Manual path best effort | Honest AX fallback | Editable DOM field only | Extension on exact approved host | Search/email-address/buttons excluded |
+| Chromium (Gmail + Slack web) | Manual path best effort | Honest AX fallback | Editable DOM field only | Extension on by default unless blocked | Search/email-address/buttons excluded |
 
 Also test one code editor, a search field, password field, disabled field,
 read-only field, and ordinary button. Focused-field replacement, Bubble, and
@@ -82,7 +82,7 @@ repeatable compatibility boundary changes.
 
 ## Cost and privacy gate
 
-- Fresh preferences show every Labs feature and diagnostics: Off.
+- Fresh preferences show native automatic writing features and diagnostics: Off.
 - Fresh preferences show Automatic provider checks: Off.
 - Pausing after typing makes no provider request with defaults.
 - “Disable automatic AI checks” turns off passive, provider inline, fallback,
@@ -95,38 +95,43 @@ repeatable compatibility boundary changes.
 
 ## Browser extension gate
 
-- A fresh install is disabled, has no approved sites, and has provider bridge
-  use disabled.
-- Saving an exact hostname produces a Chrome permission prompt only for that
-  hostname; removing it revokes permission.
-- Reloading an approved site activates plain text inputs, textareas, and simple
-  contenteditable editors.
-- Unapproved sites receive no Bean content script.
+- A fresh install enables local checks across ordinary websites, has no blocked
+  sites, and has provider bridge use disabled.
+- Saving an exact blocked hostname stops Bean there immediately and excludes
+  that hostname and its subdomains from future registration.
+- Reloading an ordinary, unblocked site activates plain text inputs, textareas,
+  and simple contenteditable editors.
+- **Disable on this field** stops Bean on that DOM field for the page session;
+  **Disable on this website** persists the current hostname in the blocklist.
+- Hovering a paragraph Bean icon opens its actions, including both disable
+  controls.
 - Password/search/email/read-only/code fields and Google Docs canvas are skipped.
 - Local checks work with no native host and make no network request.
-- Provider checks require both extension bridge opt-in and Web Inline Support in
-  the Bean app.
+- Provider checks require both extension bridge opt-in and **Allow deeper AI
+  checks from the browser** in the Bean app.
 - Applying an issue verifies the exact live substring and preserves line breaks.
-- Gmail and Slack web status rows reflect exact-host approval.
+- Options reports all-site coverage and the number of blocked websites.
 - A review-required paragraph shows the before/after approval card and is not
   applied until approved.
 - Test Connection reports the automatic daily-call count and limit.
 - Test Connection reaches a final Connected/Error state within seven seconds;
   it never remains on Checking indefinitely.
-- Settings discovers a loaded Bean extension and Install/Repair writes an exact
+- Settings discovers a loaded Bean extension and Connect/Repair writes an exact
   per-user host manifest without Terminal.
 - In Slack desktop, click the composer and type at least two characters before
-  choosing Bean → Check Current Field. The report should identify the guarded
-  Slack typing fallback; clicking Bean's menu must not erase that evidence.
+  choosing Bean → Help → Check Current Field. The report should identify the
+  guarded Slack typing fallback; clicking Bean's menu must not erase that evidence.
 
 Use `BrowserExtension/test/fixtures/editor.html` for deterministic manual cases.
 
 ## Update and navigation gate
 
-- Settings has exactly eight primary destinations: Setup, Provider & Usage,
-  Shortcuts, Actions & Style, Context, Privacy, Labs, and Troubleshooting.
-- Bean Bubble, Passive Suggestions, Inline Highlights, and Browser Extension
-  appear only in Labs; each starts off with clean preferences.
+- Settings has exactly six primary destinations: General, Writing, AI & Usage,
+  Personalization, Browser, and Privacy & Support.
+- Troubleshooting details, field metadata, and operation history appear only
+  inside Advanced diagnostics; the menu bar keeps only everyday actions.
+- First launch shows the guided onboarding flow. Closing it early does not mark
+  onboarding complete, and **Start using Bean** is the explicit finish action.
 - Launching and leaving Bean idle makes no GitHub update request.
 - Clicking **Check for Updates** shows the installed version and newest
   non-draft GitHub release, including its prerelease status.
@@ -155,7 +160,7 @@ Verify:
 - app/build/changelog/tag versions match, and the extension version was
   incremented when extension code changed;
 - README, Privacy, DMG, and release notes consistently identify the artifact as
-  an unnotarized prerelease and describe Labs/provider-cost behavior.
+  an unnotarized prerelease and describe browser/provider-cost behavior.
 
 Developer ID releases must additionally pass notarization, stapling, and
 Gatekeeper assessment. The packaging script fails closed when those credentials

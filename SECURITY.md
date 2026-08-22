@@ -28,7 +28,8 @@ is the default unless active exploitation requires a faster response.
 - API keys belong in Keychain and must never be committed, logged, included in
   diagnostics, or stored by the browser extension.
 - Native messaging accepts only defined JSON message types with bounded payloads
-  and an extension origin allowlist installed on the local Mac.
+  and an extension-origin allowlist installed on the local Mac. Website access
+  is separate: local checks work broadly, with user-controlled blocked sites.
 - Changes affecting text acquisition, replacement, model-output sanitization,
   native messaging, Keychain access, or release signing require regression tests
   and explicit review.

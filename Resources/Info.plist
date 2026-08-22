@@ -13,9 +13,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.3.1</string>
+    <string>1.4.0</string>
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>6</string>
     <!-- App icon. The build script copies Resources/Icons/AppIcon.icns into the
          bundle when present; until a real icon is added this key simply points
          at a file that may not exist yet (harmless for a menu-bar app). -->

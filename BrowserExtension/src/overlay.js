@@ -44,6 +44,11 @@
               box-shadow:0 1px 4px rgba(0,0,0,0.25); display:flex; align-items:center; justify-content:center;
               font:600 10px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; box-sizing:border-box; }
       .gactions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+      .scope { display:flex; gap:10px; margin-top:10px; padding-top:8px;
+               border-top:1px solid rgba(0,0,0,0.08); }
+      button.scopeb { border:0; background:none; padding:0; cursor:pointer; color:#6b6b70;
+                      font:11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      button.scopeb:hover { color:${ACCENT}; }
       .review { width:560px; }
       .compare { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
       .compare label { display:block; font-size:10px; font-weight:600; color:#6b6b70; margin-bottom:4px; }
@@ -53,6 +58,7 @@
       @media (prefers-color-scheme: dark) {
         .card { background:rgba(40,40,42,0.98); color:#f2f2f5; }
         button.b { background:#3a3a3c; color:#f2f2f5; border-color:rgba(255,255,255,0.12); }
+        .scope { border-top-color:rgba(255,255,255,0.1); }
       }
     `;
     underlineLayer = document.createElement("div");
@@ -124,6 +130,10 @@
         <span class="spacer"></span>
         ${position && position.total > 1 ? `<button class="b" data-act="next" title="Next">→</button>` : ""}
         <button class="b primary" data-act="apply">Apply</button>
+      </div>
+      <div class="scope">
+        <button class="scopeb" data-act="disableField">Disable on this field</button>
+        <button class="scopeb" data-act="disableSite">Disable on this website</button>
       </div>`;
     card.querySelector(".orig").textContent = issue.original;
     card.querySelector(".sugg").textContent = issue.suggestion;
@@ -142,6 +152,8 @@
     wire('[data-act="ignore"]', () => handlers.onIgnore(entry.id));
     wire('[data-act="apply"]', () => handlers.onApply(entry.id));
     wire('[data-act="next"]', () => handlers.onNext());
+    wire('[data-act="disableField"]', () => handlers.onDisableField());
+    wire('[data-act="disableSite"]', () => handlers.onDisableSite());
 
     shadow.appendChild(card);
     cardEl = card;
@@ -180,6 +192,11 @@
       x = Math.max(window.scrollX + 2, x);
       icon.style.left = x + "px";
       icon.style.top = y + "px";
+      icon.addEventListener("mouseenter", () => {
+        if (hoverTimer) clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(() => handlers.onActivateGroup(g.id), 180);
+      });
+      icon.addEventListener("mouseleave", () => { if (hoverTimer) clearTimeout(hoverTimer); });
       icon.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); handlers.onActivateGroup(g.id); });
       groupLayer.appendChild(icon);
     }
@@ -205,6 +222,10 @@
         <button class="b primary" data-act="fix"${group.canFix ? "" : " disabled"}>Fix Paragraph</button>
         <button class="b" data-act="review">Review one by one</button>
         <button class="b" data-act="ignoreAll">Ignore all</button>
+      </div>
+      <div class="scope">
+        <button class="scopeb" data-act="disableField">Disable on this field</button>
+        <button class="scopeb" data-act="disableSite">Disable on this website</button>
       </div>`;
 
     // Same blur-safety as the correction card.
@@ -217,6 +238,8 @@
     wire('[data-act="fix"]', () => handlers.onFixParagraph(group.id));
     wire('[data-act="review"]', () => handlers.onReviewGroup(group.id));
     wire('[data-act="ignoreAll"]', () => handlers.onIgnoreAllGroup(group.id));
+    wire('[data-act="disableField"]', () => handlers.onDisableField());
+    wire('[data-act="disableSite"]', () => handlers.onDisableSite());
 
     shadow.appendChild(card);
     groupCardEl = card;

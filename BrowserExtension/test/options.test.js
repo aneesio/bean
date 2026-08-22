@@ -20,11 +20,6 @@ function element(id) {
 
 const chrome = {
   storage: { local: { get: (_keys, callback) => callback({}), set: (_value, callback) => callback && callback() } },
-  permissions: {
-    getAll: (callback) => callback({ origins: [] }),
-    request: (_permissions, callback) => callback(true),
-    remove: (_permissions, callback) => callback(true)
-  },
   runtime: {
     id: "abcdefghijklmnopabcdefghijklmnop",
     sendMessage: (_message, callback) => callback && callback({
@@ -49,11 +44,10 @@ const source = fs.readFileSync(path.join(__dirname, "..", "options.js"), "utf8")
 const html = fs.readFileSync(path.join(__dirname, "..", "options.html"), "utf8");
 vm.runInNewContext(source, context);
 
-assert.match(html, /id="s-gmail"/);
-assert.match(html, /id="s-slack"/);
+assert.match(html, /Blocked websites/);
+assert.match(html, /id="s-sites"/);
 assert.match(html, /id="s-budget"/);
-assert.match(html, /mail\.google\.com/);
-assert.match(html, /app\.slack\.com/);
+assert.match(html, /On by default across ordinary text fields/);
 assert.doesNotMatch(html, /Terminal|install_native_messaging_host/);
 assert.equal(element("extensionID").textContent, chrome.runtime.id);
 assert.notEqual(element("s-bridge").textContent, "Checking…");
@@ -61,14 +55,9 @@ assert.notEqual(element("s-bridge").textContent, "Checking…");
 assert.equal(context.normalizeHost("MAIL.Google.com"), "mail.google.com");
 assert.equal(context.normalizeHost("https://app.slack.com/client"), "app.slack.com");
 assert.equal(context.normalizeHost("ftp://example.com"), null);
-assert.equal(context.normalizeHost("*.example.com"), null, "wildcards are not exact site grants");
+assert.equal(context.normalizeHost("*.example.com"), null, "wildcards are not valid blocked-site entries");
 assert.deepEqual(
   JSON.parse(JSON.stringify(context.parseSites("app.slack.com\nmail.google.com app.slack.com"))),
   ["app.slack.com", "mail.google.com"]
 );
-assert.deepEqual(
-  JSON.parse(JSON.stringify(context.originsForSites(["mail.google.com"]))),
-  ["http://mail.google.com/*", "https://mail.google.com/*"]
-);
-
 console.log("Browser extension options tests passed");

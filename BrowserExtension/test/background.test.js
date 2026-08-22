@@ -20,7 +20,6 @@ const chrome = {
   },
   storage: { local: { get: (_keys, callback) => callback({}) } },
   action: { onClicked: { addListener: () => {} } },
-  permissions: { onRemoved: { addListener: () => {} } },
   scripting: {
     unregisterContentScripts: (_filter, callback) => callback(),
     registerContentScripts: (_scripts, callback) => callback()

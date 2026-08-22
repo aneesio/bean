@@ -149,7 +149,7 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// Whether first-run onboarding has been completed (or skipped). Stored in
+    /// Whether first-run onboarding has been explicitly completed. Stored in
     /// UserDefaults, never Keychain.
     @Published var onboardingComplete: Bool {
         didSet { defaults.set(onboardingComplete, forKey: Keys.onboardingComplete) }
