@@ -8,7 +8,7 @@
 #
 # Output (version read from Info.plist — no hardcoding):
 #   release/Bean-<version>/Bean.app
-#   release/Bean-<version>/README.md
+#   release/Bean-<version>/README.md and public support/privacy/QA/release docs
 #   release/Bean-<version>.zip
 #   release/Bean-<version>.dmg            (if hdiutil is present)
 #
@@ -78,8 +78,12 @@ echo "    built."
 
 echo "==> Staging…"
 cp -R "$ROOT/build/Bean.app" "$STAGE/Bean.app"
-for doc in README LICENSE PRIVACY; do
-    [[ -f "$ROOT/$doc.md" ]] && cp "$ROOT/$doc.md" "$STAGE/$doc.md"
+for doc in README TESTING QA_TEST_PLAN SUPPORT SUPPORTED_APPS LICENSE PRIVACY CHANGELOG; do
+    [[ -s "$ROOT/$doc.md" ]] || {
+        echo "error: required staged document is missing or empty: $doc.md" >&2
+        exit 1
+    }
+    cp "$ROOT/$doc.md" "$STAGE/$doc.md"
 done
 
 if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then

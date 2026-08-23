@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Support guide
+    url: https://github.com/aneesio/bean/blob/main/SUPPORT.md
+    about: Read setup repair, privacy, and report-preview guidance before filing.
   - name: Security report
     url: mailto:hello@anees.io
     about: Report vulnerabilities privately; do not open a public issue.

@@ -16,7 +16,7 @@ const chrome = {
     lastError: null
   },
   storage: { local: { get: (_keys, callback) => callback({
-    enabled: true,
+    enabled: false,
     blockedSites: ["example.com"]
   }) } },
   action: { onClicked: { addListener: () => {} } },
@@ -26,22 +26,59 @@ const chrome = {
   }
 };
 
-vm.runInNewContext(source, { chrome, Object, Set, setTimeout, clearTimeout });
+vm.runInNewContext(source, { chrome, URL, Object, Array, Set, setTimeout, clearTimeout });
 startupListener();
 
+assert.ok(registered, "legacy global-off preference no longer prevents all-site registration");
 assert.deepEqual(JSON.parse(JSON.stringify(registered.matches)), ["http://*/*", "https://*/*"]);
 assert.ok(registered.excludeMatches.includes("https://example.com/*"));
 assert.ok(registered.excludeMatches.includes("https://*.example.com/*"));
 assert.deepEqual(JSON.parse(JSON.stringify(registered.js)), [
-  "src/localDetector.js", "src/issueMapping.js", "src/overlay.js", "src/contentScript.js"
+  "src/localDetector.js", "src/trustPolicy.js", "src/issueMapping.js", "src/overlay.js", "src/contentScript.js"
 ]);
 
 const content = fs.readFileSync(path.join(__dirname, "..", "src", "contentScript.js"), "utf8");
 const overlay = fs.readFileSync(path.join(__dirname, "..", "src", "overlay.js"), "utf8");
 assert.match(content, /disabledFields: new WeakSet\(\)/);
+assert.match(content, /qaFixtureHost && qaFixturePath/,
+  "ordinary websites cannot spoof the local QA bypass and suppress Bean");
 assert.match(content, /function disableCurrentSite\(\)/);
+assert.match(content, /event\.isTrusted/);
+assert.match(content, /activateInitiallyFocusedField[\s\S]*document\.activeElement/);
+assert.match(content, /function bridgeTextAuthorized\(text\)/);
+assert.match(content, /sendMessage\(\{ type: "getStatus" \}/);
+assert.match(content, /BeanTrustPolicy\.bridgeReadiness/);
+assert.match(content, /protocol before the text-bearing request is even constructed\/sent/);
+assert.match(content, /if \(!bridgeTextAuthorized\(text\)\)/);
+assert.match(content, /bridgeIssues\(context\.text, fieldType, remainingIssueSlots\)/);
+assert.doesNotMatch(content, /bridgeIssues\(text, fieldType\)\.then/);
+assert.doesNotMatch(content, /state\.useBridge/);
+assert.doesNotMatch(content, /\["blockedSites", "useBridge"/);
+assert.match(content, /BeanTrustPolicy\.mergeIssues\(localIssues, result\.issues \|\| \[\], 16\)/);
+assert.match(content, /if \(remainingIssueSlots === 0\)/,
+  "a full local issue budget skips the paid provider path");
+assert.match(content, /hasSensitiveAutocomplete/);
+assert.match(content, /\[role='searchbox'\]/);
+assert.match(content, /hasMatchingLineBreakStructure/);
+assert.match(content, /BeanMapping\.applyTextControlRange/);
+assert.match(content, /BeanMapping\.applyContentEditableRange/);
+assert.match(content, /showUndo\(\{ scope: record\.scope, label: record\.label \}, undoLastApply\)/);
+assert.match(content, /"issue", "Undo correction"/);
+assert.match(content, /"paragraph", "Undo paragraph fix"/);
+assert.match(content, /"block", "Undo block fix"/);
+assert.match(content, /BeanOverlay\.setFieldDisabled\(disabled, \{/);
+assert.match(content, /onUndo: \(\) => undoLastApply\(\)/);
+assert.match(content, /onEnableField: \(\) => enableDisabledField\(state\.disabledControlTarget\)/);
+assert.match(content, /setFieldDisabledOverlay\(true, disabledSurface\)/,
+  "refocusing a disabled field binds recovery to that exact field");
+assert.match(content, /siteBlockSaveFailed/,
+  "website opt-out reports storage failure instead of claiming success");
+assert.match(content, /showParagraphBusy/);
+assert.match(content, /clearParagraphBusy/);
 assert.match(overlay, /Disable on this field/);
 assert.match(overlay, /Disable on this website/);
 assert.match(overlay, /mouseenter[\s\S]*onActivateGroup/);
+assert.match(overlay, /AI Proofread Paragraph/);
+assert.match(overlay, /Fix Obvious Issues/);
 
 console.log("Browser extension coverage and opt-out tests passed");

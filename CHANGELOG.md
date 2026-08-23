@@ -3,6 +3,49 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.6.0 — 2026-08-22 (public beta)
+
+- Rebuilt Bean's web experience around all-site local help, a simple blocklist,
+  a current-site toolbar control, and explicit app/AI readiness.
+- Aligned the app, extension, and native bridge release contract so compatible
+  builds connect without a misleading update-required state.
+- Unified every automatic provider path behind one crash-safe daily budget;
+  failed and timed-out attempts now count without inventing token usage, while
+  explicit AI actions in the Mac app remain available.
+- Made usage/history clearing atomic without resetting the current day's safety
+  limit, and removed browser hostnames and field semantics from persisted web
+  accounting and crash-recovery metadata.
+- Hardened native-host authorization, sensitive-field exclusions, blocklist
+  updates, replacement boundaries, keyboard/VoiceOver focus, and exact Undo.
+- Separated content-free diagnostics copying from a review-before-sharing Support
+  Report preview, and added focused repair cards for common setup problems.
+- Added a verified Full Reset that clears Bean-owned provider keys, generated
+  personalization artifacts, accounting, preferences/onboarding, login
+  registration, and Mac-side browser connections before quitting; Accessibility
+  and extension-local data remain explicit manual steps.
+- Expanded About and public support/release documentation with canonical GitHub,
+  Privacy, License, Changelog, Support, and user-triggered update destinations.
+
+## 1.5.0 — 2026-08-21 (public beta)
+
+- Made AI setup genuinely optional. Quick Proofread now falls back to the free
+  local checker when no provider key is connected.
+- Replaced the TextEdit verification ceremony with an in-app tryout on the
+  final “Bean is ready” screen.
+- Reduced Keychain authorization churn by caching one read per provider and
+  saving credentials only on an explicit Save or Test action.
+- Showed Bean's Dock icon whenever onboarding, Settings, About, the action
+  menu, or a rewrite preview is open, while keeping background UI menu-bar-only.
+- Enlarged Settings, added branded sidebar selection, and split Personalization
+  into smaller Styles & Defaults and Knowledge destinations.
+- Rebuilt the Bean action menu as a wider two-column command window so every
+  action is visible without a long scroll.
+- Renamed the built-in “Slack Casual” style to “Casual,” including migration of
+  existing built-in profiles without breaking saved app rules.
+- Simplified browser Options to a blocklist and optional AI control. Removed
+  the redundant global website switch, kept the offline checker always on, and
+  used the official Bean icon in the toolbar and Options header.
+
 ## 1.4.0 — 2026-08-21 (public beta)
 
 - Changed the browser extension from an approved-sites allowlist to writing help

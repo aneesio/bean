@@ -1,7 +1,18 @@
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
-const tests = ["settingsMigration.test.js", "background.test.js", "coverage.test.js", "core.test.js", "options.test.js", "manifest.test.js"];
+const tests = [
+  "settingsMigration.test.js",
+  "background.test.js",
+  "coverage.test.js",
+  "core.test.js",
+  "contentTrust.test.js",
+  "options.test.js",
+  "popup.test.js",
+  "overlay.test.js",
+  "manifest.test.js",
+  "versionContract.test.js"
+];
 for (const test of tests) {
   const result = spawnSync(process.execPath, [path.join(__dirname, test)], { stdio: "inherit" });
   if (result.status !== 0) process.exit(result.status || 1);

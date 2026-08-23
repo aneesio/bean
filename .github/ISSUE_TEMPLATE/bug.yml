@@ -5,12 +5,12 @@ labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: Do not include API keys, private writing, clipboard contents, or sensitive screenshots.
+      value: Before posting, use Bean Settings → Privacy & Help → Preview Support Report and review every line. Do not include API keys, private writing, clipboard contents, personal hostnames, or sensitive screenshots. Bean never uploads the preview for you.
   - type: input
     id: bean-version
     attributes:
       label: Bean version
-      placeholder: 1.2.0 (3) or commit SHA
+      placeholder: 1.6.0 (8) or commit SHA
     validations:
       required: true
   - type: input
@@ -32,12 +32,13 @@ body:
       label: Bean surface
       options:
         - Quick Proofread shortcut
+        - AI Proofread
         - Bean action menu
         - Bean Bubble
-        - Passive Suggestions
-        - Native inline highlights
+        - Live suggestions
         - Browser extension
-        - Settings or onboarding
+        - Settings, onboarding, or About
+        - Support Report or Full Reset
         - Build or packaging
     validations:
       required: true
@@ -63,13 +64,13 @@ body:
   - type: textarea
     id: diagnostics
     attributes:
-      label: Content-free diagnostics
-      description: Paste Settings → Troubleshooting → Copy Diagnostics Summary after reviewing it.
+      label: Reviewed support report or diagnostics
+      description: Paste only the reviewed lines from Preview Support Report or Copy Diagnostics Summary. Opening this form did not attach anything automatically.
       render: text
   - type: checkboxes
     id: privacy
     attributes:
       label: Privacy confirmation
       options:
-        - label: I removed all API keys, private text, and sensitive information.
+        - label: I reviewed every pasted line and removed API keys, private text, personal hostnames, and other sensitive information.
           required: true

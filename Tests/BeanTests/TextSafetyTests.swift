@@ -2,6 +2,30 @@ import XCTest
 @testable import Bean
 
 final class TextSafetyTests: XCTestCase {
+    func testTextBoundarySafetyRequiresExactLineBreakStructure() {
+        XCTAssertTrue(TextBoundarySafety.isSingleLine("ordinary prose"))
+        XCTAssertFalse(TextBoundarySafety.isSingleLine("two\nlines"))
+        XCTAssertFalse(TextBoundarySafety.isSingleLine("two\u{2028}lines"))
+        XCTAssertFalse(TextBoundarySafety.isSingleLine("two\u{2029}paragraphs"))
+
+        XCTAssertTrue(TextBoundarySafety.preservesLineBreakStructure(
+            from: "one\r\ntwo\u{2028}three\u{2029}four",
+            to: "ONE\r\nTWO\u{2028}THREE\u{2029}FOUR"
+        ))
+        XCTAssertFalse(TextBoundarySafety.preservesLineBreakStructure(
+            from: "one two", to: "one\ntwo"
+        ))
+        XCTAssertFalse(TextBoundarySafety.preservesLineBreakStructure(
+            from: "one\ntwo", to: "one two"
+        ))
+        XCTAssertFalse(TextBoundarySafety.preservesLineBreakStructure(
+            from: "one\r\ntwo", to: "one\ntwo"
+        ))
+        XCTAssertFalse(TextBoundarySafety.preservesLineBreakStructure(
+            from: "one\u{2028}two", to: "one\u{2029}two"
+        ))
+    }
+
     func testSanitizerExtractsOnlyBeanEnvelope() {
         let raw = "Analysis first\n<bean_output>Hello there.</bean_output>\nEverything looks good."
         XCTAssertEqual(

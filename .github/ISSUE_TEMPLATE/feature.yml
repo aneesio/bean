@@ -20,6 +20,7 @@ body:
     id: tradeoffs
     attributes:
       label: Privacy, permission, reliability, and API-cost impact
+      description: Explain any new data storage, network call, permission, automatic behavior, or provider spend.
     validations:
       required: true
   - type: checkboxes
@@ -27,5 +28,5 @@ body:
     attributes:
       label: Scope confirmation
       options:
-        - label: I understand broad new providers or actions should be discussed before implementation.
+        - label: I reviewed the public roadmap and understand broad new providers or actions should be discussed before implementation.
           required: true

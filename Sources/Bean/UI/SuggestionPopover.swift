@@ -7,7 +7,6 @@ import SwiftUI
 @MainActor
 final class SuggestionPopoverController {
     private var panel: NSPanel?
-    private var dismissTimer: Timer?
 
     /// Shows the popover. `showApply` is false when Settings requires a preview
     /// before applying.
@@ -46,16 +45,9 @@ final class SuggestionPopoverController {
 
         self.panel = panel
         panel.orderFrontRegardless() // does NOT take key focus
-
-        // Auto-dismiss after 15s if untouched.
-        dismissTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.dismiss() }
-        }
     }
 
     func dismiss() {
-        dismissTimer?.invalidate()
-        dismissTimer = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -63,12 +55,18 @@ final class SuggestionPopoverController {
     var isShowing: Bool { panel != nil }
 
     private func positionTopRight(_ window: NSWindow) {
-        guard let screen = NSScreen.main else { return }
-        let visible = screen.visibleFrame
-        let size = window.frame.size
-        let x = visible.maxX - size.width - 16
-        let y = visible.maxY - size.height - 12
-        window.setFrameOrigin(NSPoint(x: x, y: y))
+        let screens = OverlayScreenArea.current
+        let sourceRect: CGRect? = AccessibilityService.focusedField().flatMap { field in
+            TextRangeLocator.selectionRect(for: field.element)
+                ?? TextRangeLocator.fieldRect(for: field.element)
+        }
+        let screen = sourceRect.flatMap { OverlayGeometry.screen(containing: $0, from: screens) }
+            ?? OverlayGeometry.screen(containing: NSEvent.mouseLocation, from: screens)
+        guard let screen else { return }
+        window.setFrameOrigin(OverlayGeometry.topRightOrigin(
+            panelSize: window.frame.size,
+            in: screen.visibleFrame
+        ))
     }
 }
 

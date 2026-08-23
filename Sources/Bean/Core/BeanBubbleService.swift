@@ -11,6 +11,7 @@ final class BeanBubbleService {
     private let statusHUD: StatusHUD
     private let runAction: (WritingAction) -> Void
     private let openFullMenu: () -> Void
+    private let openAISettings: () -> Void
 
     private let controller = BeanBubbleController()
 
@@ -22,11 +23,13 @@ final class BeanBubbleService {
 
     init(settings: AppSettings, statusHUD: StatusHUD,
          runAction: @escaping (WritingAction) -> Void,
-         openFullMenu: @escaping () -> Void) {
+         openFullMenu: @escaping () -> Void,
+         openAISettings: @escaping () -> Void) {
         self.settings = settings
         self.statusHUD = statusHUD
         self.runAction = runAction
         self.openFullMenu = openFullMenu
+        self.openAISettings = openAISettings
     }
 
     var isShowing: Bool { controller.isShowing }
@@ -77,7 +80,7 @@ final class BeanBubbleService {
             at: origin,
             savedOffset: bubbleOffset,
             openOnHover: settings.bubbleOpenOnHover,
-            onOpen: { [weak self] in self?.openMenu() },
+            onOpen: { [weak self] intent in self?.openMenu(intent: intent) },
             onDismiss: { [weak self] in self?.hide("dismissed") },
             onCommitOffset: { [weak self] off in self?.bubbleOffset = off; self?.diag(["bubbleDragged": "true"]) },
             onReset: { [weak self] in self?.bubbleOffset = .zero; self?.diag(["bubbleReset": "true"]) }
@@ -91,22 +94,30 @@ final class BeanBubbleService {
     /// evidence gate prevents this path from appearing on ordinary controls.
     private func showSlackFallback(near point: CGPoint) {
         let app = NSWorkspace.shared.frontmostApplication
+        let screens = OverlayScreenArea.current
         guard app?.bundleIdentifier == "com.tinyspeck.slackmacgap",
               settings.bubbleInChat,
-              let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) else {
+              let screen = OverlayGeometry.screen(containing: point, from: screens) else {
             return hide("invalidSlackFallback")
         }
 
         if offsetElement != nil { diag(["bubbleReset": "true"]) }
         offsetElement = nil
         bubbleOffset = .zero
-        let origin = clampedOrigin(x: point.x + 12, y: point.y + 12,
-                                   size: 24, in: screen.visibleFrame)
+        let origin = OverlayGeometry.clampedOrigin(
+            CGPoint(x: point.x + 12, y: point.y + 12),
+            panelSize: CGSize(
+                width: OverlayGeometry.beanLauncherSize,
+                height: OverlayGeometry.beanLauncherSize
+            ),
+            in: screen.visibleFrame,
+            inset: 4
+        )
         controller.showBubble(
             at: origin,
             savedOffset: .zero,
             openOnHover: settings.bubbleOpenOnHover,
-            onOpen: { [weak self] in self?.openMenu() },
+            onOpen: { [weak self] intent in self?.openMenu(intent: intent) },
             onDismiss: { [weak self] in self?.hide("dismissed") },
             onCommitOffset: { [weak self] off in self?.bubbleOffset = off; self?.diag(["bubbleDragged": "true"]) },
             onReset: { [weak self] in self?.bubbleOffset = .zero; self?.diag(["bubbleReset": "true"]) }
@@ -116,11 +127,14 @@ final class BeanBubbleService {
 
     // MARK: - Mini menu
 
-    private func openMenu() {
+    private func openMenu(intent: OverlayActivationIntent) {
         guard let frame = controller.bubbleFrame else { return }
         controller.showMenu(
             near: CGPoint(x: frame.minX, y: frame.minY),
+            intent: intent,
+            aiAvailable: settings.hasAPIKey,
             onSelect: { [weak self] action in self?.choose(action) },
+            onSetUpAI: { [weak self] _ in self?.showAISetup() },
             onMore: { [weak self] in self?.hide("more"); self?.openFullMenu() },
             onCancel: { [weak self] in self?.hide("cancel") }
         )
@@ -133,35 +147,45 @@ final class BeanBubbleService {
         runAction(action)
     }
 
+    private func showAISetup() {
+        hide("aiSetup")
+        openAISettings()
+    }
+
     // MARK: - Positioning
 
     private func bubbleOrigin(for field: AccessibilityService.FocusedField) -> CGPoint? {
-        let size: CGFloat = 24
-        guard let screen = NSScreen.main else { return nil }
-        let visible = screen.visibleFrame
+        let size = OverlayGeometry.beanLauncherSize
+        let screens = OverlayScreenArea.current
 
         // 1. Prefer the selection's top-right, when enabled and available.
         if settings.bubbleOnSelection, let sel = TextRangeLocator.selectionRect(for: field.element),
-           isValid(sel, on: screen) {
-            return clampedOrigin(x: sel.maxX + 6, y: sel.maxY - size, size: size, in: visible)
+           isValid(sel), let screen = OverlayGeometry.screen(containing: sel, from: screens) {
+            return OverlayGeometry.clampedOrigin(
+                CGPoint(x: sel.maxX + 6, y: sel.maxY - size),
+                panelSize: CGSize(width: size, height: size),
+                in: screen.visibleFrame,
+                inset: 4
+            )
         }
         // 2. Else the focused field's top-right inner corner.
         if settings.bubbleOnFocus, let rect = TextRangeLocator.fieldRect(for: field.element),
-           isValid(rect, on: screen), rect.height >= 14, rect.width >= 40 {
-            return clampedOrigin(x: rect.maxX - size - 8, y: rect.maxY - size - 8, size: size, in: visible)
+           isValid(rect), rect.height >= 14, rect.width >= 40,
+           let screen = OverlayGeometry.screen(containing: rect, from: screens) {
+            return OverlayGeometry.clampedOrigin(
+                CGPoint(x: rect.maxX - size - 8, y: rect.maxY - size - 8),
+                panelSize: CGSize(width: size, height: size),
+                in: screen.visibleFrame,
+                inset: 4
+            )
         }
         return nil
     }
 
-    private func isValid(_ rect: CGRect, on screen: NSScreen) -> Bool {
+    private func isValid(_ rect: CGRect) -> Bool {
         guard rect.width > 1, rect.height > 1 else { return false }
         // Must intersect some screen (on-screen, not offscreen/invalid).
         return NSScreen.screens.contains { $0.frame.intersects(rect) }
-    }
-
-    private func clampedOrigin(x: CGFloat, y: CGFloat, size: CGFloat, in visible: CGRect) -> CGPoint {
-        CGPoint(x: min(max(x, visible.minX + 4), visible.maxX - size - 4),
-                y: min(max(y, visible.minY + 4), visible.maxY - size - 4))
     }
 
     private func diag(_ extra: [String: String]) {

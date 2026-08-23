@@ -9,10 +9,13 @@ import ApplicationServices
 // map uniquely), and continues the session.
 @MainActor
 final class InlineHighlightService {
+    private static let maximumInlineCharacters = 1_500
+
     private let settings: AppSettings
     private let userContent: UserContentStore
     private let history: OperationHistoryStore
     private let usageLedger: UsageLedgerStore
+    private let automaticCallBudget: AutomaticCallBudgetStore
     private let statusHUD: StatusHUD
 
     private let detector = IssueDetector()
@@ -33,11 +36,13 @@ final class InlineHighlightService {
 
     init(settings: AppSettings, userContent: UserContentStore,
          history: OperationHistoryStore, usageLedger: UsageLedgerStore,
+         automaticCallBudget: AutomaticCallBudgetStore,
          statusHUD: StatusHUD) {
         self.settings = settings
         self.userContent = userContent
         self.history = history
         self.usageLedger = usageLedger
+        self.automaticCallBudget = automaticCallBudget
         self.statusHUD = statusHUD
         overlay.onActivateIssue = { [weak self] id in self?.activate(id) }
         overlay.onApply = { [weak self] id in self?.apply(id) }
@@ -54,7 +59,7 @@ final class InlineHighlightService {
     func coverage(for field: AccessibilityService.FocusedField) -> InlineSupportResult {
         let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let boundsReliable = field.value.map {
-            !$0.isEmpty && $0.count <= 1500
+            !$0.isEmpty && $0.count <= Self.maximumInlineCharacters
                 && TextRangeLocator.boundsAreReliable(for: field.element, valueLength: $0.count)
         }
         let capabilities = FieldCapabilityPolicy.evaluate(
@@ -64,7 +69,9 @@ final class InlineHighlightService {
             preferences: settings.capabilityPreferences
         )
         let assessment = capabilities.inlineChecking
-        if field.value?.count ?? 0 > 1500 { return .unsupported(reason: "textTooLong") }
+        if field.value?.count ?? 0 > Self.maximumInlineCharacters {
+            return .unsupported(reason: "textTooLong")
+        }
         switch assessment.level {
         case .supported:
             return .supported(mode: .nativeAccessibility, confidence: 0.9)
@@ -104,45 +111,93 @@ final class InlineHighlightService {
 
         var issues = detector.localIssues(in: value, dictionary: userContent.dictionary)
         var llmCount = 0
-        let wantsLLM = issues.count < settings.inlineMaxIssues
-            && !settings.inlineLocalOnly && settings.inlineIncludeLLM && !settings.apiKey.isEmpty
+        let remainingLLMCapacity = IssueDetector.remainingProviderIssueCapacity(
+            totalLimit: settings.inlineMaxIssues, localIssueCount: issues.count
+        )
+        let provider = settings.provider
+        let model = settings.model
+        let providerModeEnabled = remainingLLMCapacity > 0
+            && !settings.inlineLocalOnly && settings.inlineIncludeLLM
+        // Legacy preferences or a just-changed provider/key can leave the old
+        // automatic toggle on briefly. Never read Keychain, reserve budget, or
+        // send field text unless this exact captured pair is still verified.
+        let providerVerified = settings.isProviderConnectionVerified(
+            provider: provider, model: model
+        )
+        let wantsLLM = providerModeEnabled && providerVerified && !settings.apiKey.isEmpty
+        let providerInputWithinLimit = EngineConfig.providerInputIsWithinLimit(
+            value,
+            maximumCharacters: Self.maximumInlineCharacters
+        ) && IssueDetector.providerPayloadIsWithinLimit(
+            text: value,
+            context: context,
+            dictionary: userContent.dictionary,
+            maximumIssues: remainingLLMCapacity
+        )
         let llmCooldownElapsed = lastCallTime.map {
             Date().timeIntervalSince($0) >= EngineConfig.automaticLLMCooldown
         } ?? true
-        let automaticAllowed = usageLedger.allowsAutomaticCall(
-            dailyLimit: settings.dailyAutomaticCallLimit)
-        if wantsLLM, !automaticAllowed, issues.isEmpty {
-            reason = "automaticDailyLimit"; return false
-        } else if wantsLLM, !automaticAllowed {
-            // Keep free local findings, but do not make a provider request.
+        if wantsLLM, !providerInputWithinLimit {
+            if issues.isEmpty { reason = "providerInputTooLong"; return false }
         } else if wantsLLM, llmCooldownElapsed {
-            lastCallTime = Date()
-            let llm = await detector.llmIssues(in: value, context: context, dictionary: userContent.dictionary,
-                                               provider: settings.provider, model: settings.model,
-                                               apiKey: settings.apiKey, timeout: settings.timeoutSeconds)
-            llmCount = llm.issues.count
-            issues += llm.issues
-            if let usage = llm.usage {
-                usageLedger.record(usage, source: .nativeInline,
-                                   provider: settings.provider.rawValue, model: settings.model)
-                history.record(OperationRecord(
-                    source: .nativeInline,
-                    appName: context.appName,
-                    appBundleIdentifier: context.bundleIdentifier,
-                    appCategory: AppCategory.from(bundleIdentifier: context.bundleIdentifier).rawValue,
-                    action: "detectIssues",
-                    inputMode: context.acquisitionMode.rawLabel,
-                    inputLength: value.count,
-                    outputLength: llm.issues.reduce(0) { $0 + $1.suggestion.count },
-                    provider: settings.provider.rawValue,
-                    model: settings.model,
-                    safetyResult: "structuredIssueMapping",
-                    outcome: llm.issues.isEmpty ? "noIssues" : "issuesShown",
-                    inputTokens: usage.inputTokens,
-                    outputTokens: usage.outputTokens,
-                    usageEstimated: usage.isEstimated
-                ))
+            let apiKey = settings.apiKey
+            let timeout = settings.timeoutSeconds
+            let metadata = AutomaticCallMetadata(
+                source: .nativeInline, context: context,
+                action: "detectIssues", inputLength: value.count,
+                provider: provider.rawValue, model: model
+            )
+            let reservation: AutomaticCallBudgetStore.Reservation?
+            switch automaticCallBudget.reserve(
+                dailyLimit: settings.dailyAutomaticCallLimit,
+                leaseDuration: max(timeout + 30, 60),
+                metadata: metadata
+            ) {
+            case .reserved(let value):
+                reservation = value
+            case .limitReached:
+                reservation = nil
+                if issues.isEmpty { reason = "automaticDailyLimit"; return false }
+            case .unavailable:
+                reservation = nil
+                if issues.isEmpty { reason = "usageReservationUnavailable"; return false }
             }
+
+            if let reservation {
+                defer { reservation.cancel() }
+                if reservation.beginProviderAttempt() {
+                    lastCallTime = Date()
+                    var llmDetector = detector
+                    llmDetector.maxIssues = remainingLLMCapacity
+                    let llm = await llmDetector.llmIssues(
+                        in: value, context: context, dictionary: userContent.dictionary,
+                        provider: provider, model: model, apiKey: apiKey, timeout: timeout
+                    )
+                    llmCount = llm.issues.count
+                    issues += llm.issues
+                    if let usage = llm.usage {
+                        _ = reservation.complete(
+                            usage: usage,
+                            outputLength: llm.issues.reduce(0) { $0 + $1.suggestion.count },
+                            safetyResult: "structuredIssueMapping",
+                            outcome: llm.issues.isEmpty ? "noIssues" : "issuesShown"
+                        )
+                    } else {
+                        _ = reservation.fail(outcome: llm.failureOutcome ?? "providerFailed")
+                    }
+                    usageLedger.refresh()
+                    history.refresh()
+                    if llm.usage == nil, issues.isEmpty {
+                        reason = llm.failureOutcome ?? "providerFailed"
+                        return false
+                    }
+                } else if issues.isEmpty {
+                    reason = "usageReservationUnavailable"
+                    return false
+                }
+            }
+        } else if providerModeEnabled, !providerVerified, issues.isEmpty {
+            reason = "providerNotVerified"; return false
         } else if wantsLLM, !llmCooldownElapsed, issues.isEmpty {
             reason = "rateLimited"; return false
         }
@@ -265,19 +320,24 @@ final class InlineHighlightService {
         var result: [HighlightOverlayController.Entry] = []
         var lineBreakRefused = 0
         for issue in issues {
-            // LINE-BREAK SAFETY: never map (and thus never apply) an issue whose
-            // original spans a paragraph/line break. Replacing such a range could
-            // drop the newline or merge the next paragraph. The range we apply is
-            // exactly issue.original, so refusing multi-line originals here makes
-            // single Apply provably boundary-preserving.
-            if issue.original.contains("\n") || issue.original.contains("\r") { lineBreakRefused += 1; continue }
+            // LINE-BREAK SAFETY: native inline issues are single-line and their
+            // suggestion must preserve the exact CR/LF/Unicode boundary shape.
+            // This blocks provider output from inserting a new line or paragraph
+            // separator into an otherwise safe range.
+            if !TextBoundarySafety.isSingleLine(issue.original)
+                || !TextBoundarySafety.preservesLineBreakStructure(
+                    from: issue.original, to: issue.suggestion
+                ) {
+                lineBreakRefused += 1
+                continue
+            }
             guard occurrences(of: issue.original, in: ns) == 1 else { continue }
             let range = ns.range(of: issue.original)
             guard range.location != NSNotFound else { continue }
             guard AccessibilityService.string(in: element, range: range) == issue.original else { continue }
             // Defense in depth: the live range text must also be break-free.
             let live = AccessibilityService.string(in: element, range: range) ?? ""
-            if live.contains("\n") || live.contains("\r") { lineBreakRefused += 1; continue }
+            if !TextBoundarySafety.isSingleLine(live) { lineBreakRefused += 1; continue }
             guard let rect = TextRangeLocator.screenRects(for: range, in: element).first else { continue }
             var updated = issue
             updated.range = range

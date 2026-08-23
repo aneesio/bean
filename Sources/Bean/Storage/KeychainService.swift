@@ -1,6 +1,15 @@
 import Foundation
 import Security
 
+/// Distinguishes a genuinely missing Keychain item from an interrupted or
+/// unavailable read. Callers must not turn a recoverable read failure into
+/// persistent "no key" metadata.
+enum KeychainReadResult: Equatable {
+    case value(String)
+    case notFound
+    case failure(OSStatus)
+}
+
 // Stores secrets (API keys) in the macOS Keychain.
 //
 // API keys are NEVER written to UserDefaults or any plist. Each provider's key
@@ -37,8 +46,10 @@ enum KeychainService {
         return status
     }
 
-    /// Returns the stored secret for the account, or nil if none exists.
-    static func get(account: String) -> String? {
+    /// Reads the stored secret while preserving the Keychain status. In
+    /// particular, cancellation and a locked/unavailable Keychain are not the
+    /// same as a confirmed missing item.
+    static func get(account: String) -> KeychainReadResult {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -49,12 +60,18 @@ enum KeychainService {
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let string = String(data: data, encoding: .utf8) else {
-            return nil
+        if status == errSecItemNotFound {
+            return .notFound
         }
-        return string
+        guard status == errSecSuccess else {
+            return .failure(status)
+        }
+        guard let data = result as? Data,
+              let string = String(data: data, encoding: .utf8),
+              !string.isEmpty else {
+            return .failure(errSecDecode)
+        }
+        return .value(string)
     }
 
     @discardableResult
@@ -70,5 +87,18 @@ enum KeychainService {
 
     static func errorMessage(for status: OSStatus) -> String {
         (SecCopyErrorMessageString(status, nil) as String?) ?? "Keychain error \(status)"
+    }
+
+    /// Content-free, actionable copy for a failed read. Raw status details are
+    /// deliberately reserved for diagnostics rather than exposed in setup UI.
+    static func readErrorMessage(for status: OSStatus) -> String {
+        switch status {
+        case errSecUserCanceled:
+            return "Keychain access was canceled. Try again when you're ready."
+        case errSecInteractionNotAllowed:
+            return "Keychain access isn't available right now. Unlock your Mac and try again."
+        default:
+            return "Bean couldn't read the saved API key. Try again."
+        }
     }
 }

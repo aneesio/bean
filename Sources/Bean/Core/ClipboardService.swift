@@ -11,6 +11,11 @@ import CoreGraphics
 // that snapshot after a safe delay (see TextSelectionService).
 enum ClipboardService {
 
+    /// Marks Bean's own synthetic keyboard events so the content-free Slack
+    /// focus tracker can distinguish Cmd+A/C/V from real user interaction.
+    /// No text, key contents, or destination metadata is encoded here.
+    private static let syntheticEventUserData: Int64 = 0x4245_414E
+
     // MARK: - Snapshot / restore
 
     /// A full copy of the pasteboard's contents: one dictionary of
@@ -88,6 +93,10 @@ enum ClipboardService {
         postCommandKey(keyA)
     }
 
+    static func isBeanSyntheticKeyboardEvent(_ event: NSEvent) -> Bool {
+        event.cgEvent?.getIntegerValueField(.eventSourceUserData) == syntheticEventUserData
+    }
+
     /// Posts a key-down + key-up for `key` with the Command modifier held.
     /// Requires Accessibility permission; without it the events are silently
     /// dropped by the system.
@@ -101,6 +110,8 @@ enum ClipboardService {
 
         keyDown.flags = .maskCommand
         keyUp.flags = .maskCommand
+        keyDown.setIntegerValueField(.eventSourceUserData, value: syntheticEventUserData)
+        keyUp.setIntegerValueField(.eventSourceUserData, value: syntheticEventUserData)
 
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)

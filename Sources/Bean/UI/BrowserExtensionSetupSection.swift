@@ -1,6 +1,68 @@
 import AppKit
 import SwiftUI
 
+/// A browser destination is derived from Bean's validated profile metadata,
+/// then resolved through Launch Services at the moment the user opens it. Do
+/// not infer an application by whichever hard-coded path happens to exist
+/// first; many people keep more than one Chromium browser installed.
+enum BrowserExtensionsPageTarget: String, CaseIterable, Identifiable {
+    case chrome = "Chrome"
+    case brave = "Brave"
+    case edge = "Edge"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .chrome: return "Google Chrome"
+        case .brave: return "Brave"
+        case .edge: return "Microsoft Edge"
+        }
+    }
+
+    var bundleIdentifier: String {
+        switch self {
+        case .chrome: return "com.google.Chrome"
+        case .brave: return "com.brave.Browser"
+        case .edge: return "com.microsoft.edgemac"
+        }
+    }
+
+    var extensionsPageURL: URL {
+        switch self {
+        case .chrome: return URL(string: "chrome://extensions/")!
+        case .brave: return URL(string: "brave://extensions/")!
+        case .edge: return URL(string: "edge://extensions/")!
+        }
+    }
+}
+
+enum BrowserExtensionsPageRouting {
+    /// Prefer a browser where Bean found the exact extension, then a browser
+    /// with a current Mac connection. If neither identifies one browser, offer
+    /// every detected browser as an explicit choice instead of guessing.
+    static func targets(for status: BrowserBridgeStatus) -> [BrowserExtensionsPageTarget] {
+        for names in [
+            status.detectedExtensionBrowserNames,
+            status.configuredBrowserNames,
+            status.browserNames
+        ] {
+            let targets = uniqueKnownTargets(in: names)
+            if !targets.isEmpty { return targets }
+        }
+        return []
+    }
+
+    private static func uniqueKnownTargets(
+        in names: [String]
+    ) -> [BrowserExtensionsPageTarget] {
+        var seen = Set<BrowserExtensionsPageTarget>()
+        return names.compactMap(BrowserExtensionsPageTarget.init(rawValue:)).filter {
+            seen.insert($0).inserted
+        }
+    }
+}
+
 /// A human-readable setup flow shared by onboarding and Settings. Bean handles
 /// the native connection itself; no Terminal command is ever required.
 struct BrowserExtensionSetupSection: View {
@@ -9,6 +71,7 @@ struct BrowserExtensionSetupSection: View {
 
     @StateObject private var bridge = BrowserBridgeManager()
     @State private var manualExtensionID = ""
+    @State private var browserOpenError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: BeanDesign.Spacing.md) {
@@ -17,9 +80,9 @@ struct BrowserExtensionSetupSection: View {
             if bridge.status.state != .installed {
                 setupGuide
             } else {
-                Text("Reload the extension once after a Bean update. Click Bean's browser toolbar icon anytime to change blocked websites or check the connection.")
+                Text("Open Bean's browser toolbar icon and choose Check again to verify the live app connection. Reload the extension once after a Bean update. Blocked websites are managed there too.")
                     .font(.caption).foregroundColor(.secondary)
-                Button("Repair Connection") {
+                Button("Repair Mac Connection") {
                     bridge.installOrRepair(manualExtensionID: manualExtensionID)
                 }
                 .disabled(bridge.isWorking)
@@ -57,7 +120,7 @@ struct BrowserExtensionSetupSection: View {
             IconBadge(symbol: statusSymbol, tint: statusColor, size: 32)
             VStack(alignment: .leading, spacing: 3) {
                 Text(statusTitle).font(.callout).fontWeight(.semibold)
-                Text(bridge.message ?? bridge.status.detail)
+                Text(statusDetail)
                     .font(.caption).foregroundColor(.secondary)
             }
             Spacer()
@@ -75,18 +138,43 @@ struct BrowserExtensionSetupSection: View {
                 Text("Open your browser's Extensions page, turn on Developer mode, and drag or load Bean's extension folder.")
                 HStack {
                     Button("Show Extension Folder") { revealExtensionFolder() }
-                    Button("Open Extensions Page") { openBrowserExtensions() }
+                    extensionsPageControl
+                }
+                if let browserOpenError {
+                    Label(browserOpenError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundColor(BeanDesign.danger)
+                        .accessibilityLabel("Browser error: \(browserOpenError)")
                 }
             }
 
-            guideRow(number: 2, title: "Connect it to Bean") {
-                Text("After the extension appears in your browser, come back and let Bean finish the local connection.")
-                Button(bridge.isWorking ? "Connecting…" : "Connect Bean to Browser") {
+            guideRow(number: 2, title: "Install the Mac connection") {
+                Text("After the extension appears in your browser, come back and let Bean install its local connection file. The extension checks live app status after installation.")
+                Button(bridge.isWorking ? "Installing…" : "Install Mac Connection") {
                     bridge.installOrRepair(manualExtensionID: manualExtensionID)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(bridge.isWorking)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var extensionsPageControl: some View {
+        let targets = BrowserExtensionsPageRouting.targets(for: bridge.status)
+        if let target = targets.first, targets.count == 1 {
+            Button("Open Extensions Page") { openBrowserExtensions(in: target) }
+                .accessibilityHint("Opens the Extensions page in \(target.displayName)")
+        } else if targets.isEmpty {
+            Button("Open Extensions Page") {}
+                .disabled(true)
+                .accessibilityHint("Open Chrome, Brave, or Edge once, then return to Bean")
+        } else {
+            Menu("Open Extensions Page") {
+                ForEach(targets) { target in
+                    Button(target.displayName) { openBrowserExtensions(in: target) }
+                }
+            }
+            .accessibilityHint("Choose which detected browser to open")
         }
     }
 
@@ -107,12 +195,19 @@ struct BrowserExtensionSetupSection: View {
 
     private var statusTitle: String {
         switch bridge.status.state {
-        case .installed: return "Browser connected"
-        case .readyToInstall: return "Extension found — ready to connect"
-        case .needsRepair: return "Connection needs a quick repair"
+        case .installed: return "Mac connection installed"
+        case .readyToInstall: return "Extension found — ready to install"
+        case .needsRepair: return "Mac connection needs a quick repair"
         case .extensionNotFound: return "Add the Bean extension"
         case .unavailable: return "Open a supported browser first"
         }
+    }
+
+    private var statusDetail: String {
+        if bridge.status.state == .installed {
+            return "The Mac connection file is in place. Live browser status is checked inside the extension."
+        }
+        return bridge.message ?? bridge.status.detail
     }
 
     private var statusSymbol: String {
@@ -130,22 +225,26 @@ struct BrowserExtensionSetupSection: View {
         }
     }
 
-    private func openBrowserExtensions() {
-        guard let extensionsURL = URL(string: "chrome://extensions/") else { return }
-        let candidates = [
-            "/Applications/Google Chrome.app",
-            "/Applications/Brave Browser.app",
-            "/Applications/Microsoft Edge.app",
-            "/Applications/Chromium.app"
-        ]
-        if let path = candidates.first(where: FileManager.default.fileExists(atPath:)) {
-            let configuration = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open(
-                [extensionsURL], withApplicationAt: URL(fileURLWithPath: path),
-                configuration: configuration, completionHandler: nil
-            )
-        } else {
-            NSWorkspace.shared.open(extensionsURL)
+    private func openBrowserExtensions(in target: BrowserExtensionsPageTarget) {
+        browserOpenError = nil
+        guard let applicationURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: target.bundleIdentifier
+              ) else {
+            browserOpenError = "Bean found a \(target.displayName) profile but couldn't locate the browser app. Open \(target.displayName), then open its Extensions page."
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.open(
+            [target.extensionsPageURL],
+            withApplicationAt: applicationURL,
+            configuration: configuration
+        ) { _, error in
+            DispatchQueue.main.async {
+                browserOpenError = error == nil
+                    ? nil
+                    : "Bean couldn't open \(target.displayName)'s Extensions page. Open the browser and try again."
+            }
         }
     }
 }

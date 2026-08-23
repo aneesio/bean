@@ -1,137 +1,351 @@
-// Bean options. Local inline help works across ordinary websites by default.
-// This page stores only preferences and blocked hostnames—never page text.
-const SETTINGS_SCHEMA_VERSION = 4;
-const STATUS_TIMEOUT_MS = 7000;
+// Bean options: an autosaving blocklist and truthful app/AI readiness.
+// This page stores hostnames only. It never receives or stores writing.
+const BRIDGE_PROTOCOL_VERSION = 1;
+const STATUS_TIMEOUT_MS = 5000;
+
+function extensionAPI() {
+  return typeof chrome !== "undefined" && chrome.runtime && chrome.storage && chrome.storage.local
+    ? chrome
+    : null;
+}
 
 function normalizeHost(value) {
-  const raw = value.trim().toLowerCase();
+  const raw = String(value || "").trim().toLowerCase();
   if (!raw) return null;
   try {
     const url = new URL(raw.includes("://") ? raw : `https://${raw}`);
     if (!["http:", "https:"].includes(url.protocol)) return null;
     if (!url.hostname || url.hostname.includes("*") || url.username || url.password) return null;
-    return url.hostname.toLowerCase();
+    let host = url.hostname.toLowerCase().replace(/\.$/, "");
+    // `.example.com` is a common shorthand for a domain and its subdomains.
+    // Bean already applies that scope to every rule, so store the enforceable
+    // canonical hostname rather than a misleading leading-dot rule.
+    if (host.startsWith(".")) {
+      host = host.slice(1);
+      if (host.startsWith(".")) return null;
+    }
+    if (!host || host.length > 253 || /[\s/@*]/.test(host)) return null;
+    if (host.startsWith("[") && host.endsWith("]")) {
+      return /^\[[0-9a-f:.]+\]$/.test(host) ? host : null;
+    }
+    return host.split(".").every((label) =>
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ? host : null;
   } catch (_error) {
     return null;
   }
 }
 
 function parseSites(text) {
-  const sites = text.split(/\s+/).filter(Boolean).map(normalizeHost);
+  const sites = String(text || "").split(/[\s,]+/).filter(Boolean).map(normalizeHost);
   if (sites.some((site) => !site)) return null;
   return [...new Set(sites)].sort();
 }
 
-function setStatusCell(id, text, cls) {
-  const element = document.getElementById(id);
-  element.textContent = text;
-  element.className = cls || "";
+function normalizeStoredSites(sites) {
+  if (!Array.isArray(sites)) return [];
+  return [...new Set(sites.map(normalizeHost).filter(Boolean))].sort();
 }
 
-function renderStatus() {
-  chrome.storage.local.get(["enabled", "blockedSites", "localFallback"], (settings) => {
-    const sites = settings.blockedSites || [];
-    const enabled = settings.enabled !== false;
-    setStatusCell("s-enabled", enabled ? "On everywhere" : "Paused", enabled ? "ok" : "off");
-    setStatusCell("s-sites", sites.length ? `${sites.length} blocked` : "No blocked websites", "ok");
-    setStatusCell("s-fallback", settings.localFallback !== false ? "On — no token cost" : "Off",
-                  settings.localFallback !== false ? "ok" : "warn");
-  });
+function assessBridgeStatus(response) {
+  if (response && response.errorCode === "nativeHostForbidden") {
+    return {
+      app: ["Connection not authorized", "error"],
+      ai: ["Local checks only", "neutral"],
+      detail: "Open Bean → Settings → Browser and repair the connection for this extension."
+    };
+  }
+  if (response && response.errorCode === "notInstalled") {
+    return {
+      app: ["Connection not installed", "error"],
+      ai: ["Local checks only", "neutral"],
+      detail: "Open Bean → Settings → Browser to install the connection automatically."
+    };
+  }
+  if (!response || !response.ok) {
+    return {
+      app: ["Bean app not connected", "error"],
+      ai: ["Local checks only", "neutral"],
+      detail: "Open Bean, then use Bean → Settings → Browser if the connection needs repair."
+    };
+  }
+  if (response.compatible === false || response.protocolVersion !== BRIDGE_PROTOCOL_VERSION) {
+    return {
+      app: ["Update required", "error"],
+      ai: ["Unavailable until updated", "error"],
+      detail: "Bean and this extension use different connection versions. Update both, then check again."
+    };
+  }
+  if (response.bridgeAvailable !== true) {
+    return {
+      app: ["Connection needs attention", "error"],
+      ai: ["Local checks only", "neutral"],
+      detail: "Open Bean → Settings → Browser and repair the browser connection."
+    };
+  }
+  if (!response.providerConfigured) {
+    return {
+      app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
+      ai: ["Not set up", "neutral"],
+      detail: "Local checks are ready. Add an AI provider in Bean only if you want deeper suggestions."
+    };
+  }
+  if (!response.webInlineEnabled) {
+    return {
+      app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
+      ai: ["Off in Bean", "neutral"],
+      detail: "Local checks are ready. Turn on browser AI in the Bean app for deeper suggestions."
+    };
+  }
+  if (response.automaticAccountingAvailable !== true) {
+    return {
+      app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
+      ai: ["Usage safety unavailable", "error"],
+      detail: "Local checks still work. Open Bean → Settings → AI & Usage and choose Check Accounting Again. If the warning remains after reopening Bean, Full Reset in Privacy & Help is a data-erasing last resort; contact Support if reset fails."
+    };
+  }
+  if (response.browserAIStatusCode === "settingsUnavailable") {
+    return {
+      app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
+      ai: ["Privacy check unavailable", "error"],
+      detail: "Bean could not verify extension privacy settings. Check again before using browser AI."
+    };
+  }
+  if (response.browserAIConsentRequired === true || response.browserAIEnabled === false) {
+    return {
+      app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
+      ai: ["Waiting for you", "warn"],
+      detail: "Local checks are ready. Your previous browser-AI opt-out is preserved; allow it only if you want deeper suggestions."
+    };
+  }
+  return {
+    app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
+    ai: ["Ready", "ok"],
+    detail: "Local checks are free. Deeper suggestions use your connected provider and its API tokens."
+  };
 }
 
-function load() {
-  document.getElementById("extensionID").textContent = chrome.runtime.id || "Unavailable";
-  chrome.storage.local.get(
-    ["enabled", "blockedSites", "useBridge", "localFallback", "settingsSchemaVersion"],
-    (settings) => {
-      document.getElementById("enabled").checked = settings.enabled !== false;
-      document.getElementById("sites").value = (settings.blockedSites || []).join("\n");
-      document.getElementById("useBridge").checked =
-        settings.settingsSchemaVersion >= SETTINGS_SCHEMA_VERSION && !!settings.useBridge;
-      document.getElementById("localFallback").checked = settings.localFallback !== false;
-      renderStatus();
+let blockedSites = [];
+
+function byId(id) { return document.getElementById(id); }
+
+function announce(message, isError = false) {
+  const notice = byId("notice");
+  if (!notice) return;
+  notice.textContent = message;
+  notice.className = isError ? "error" : "";
+}
+
+function setStatus(id, descriptor) {
+  const element = byId(id);
+  if (!element) return;
+  const [text, tone] = descriptor;
+  element.className = `status-value tone-${tone}`;
+  const value = element.querySelector ? element.querySelector("span:last-child") : null;
+  if (value) value.textContent = text;
+  else element.textContent = text;
+}
+
+function renderBlockedSites() {
+  const list = byId("blocked-list");
+  if (!list || typeof document.createElement !== "function") return;
+  list.replaceChildren();
+  if (!blockedSites.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No blocked websites";
+    list.appendChild(empty);
+    return;
+  }
+  for (const host of blockedSites) {
+    const row = document.createElement("div");
+    row.className = "site-item";
+    const label = document.createElement("span");
+    label.className = "site-host";
+    label.textContent = host;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Allow Bean on ${host}`);
+    remove.addEventListener("click", () => removeBlockedSite(host));
+    row.append(label, remove);
+    list.appendChild(row);
+  }
+}
+
+function persistBlockedSites(operation, hosts, message) {
+  const api = extensionAPI();
+  if (!api) { announce("Extension controls are available after Bean is installed in Chrome.", true); return; }
+  announce("Saving website choice…");
+  // All blocklist mutations are serialized by the service worker. Its returned
+  // list is authoritative, so two open settings surfaces cannot overwrite one
+  // another with stale snapshots.
+  api.runtime.sendMessage({ type: "mutateBlockedSites", operation, hosts }, (result) => {
+    const runtimeError = api.runtime.lastError;
+    if (runtimeError || !result || !result.ok || !Array.isArray(result.blockedSites)) {
+      // The service worker persists the privacy choice before it refreshes
+      // Chrome's dynamic content-script registration. Chrome can suspend or
+      // restart that worker during the refresh and close this response channel
+      // even though storage already contains the requested change. Re-read the
+      // authoritative local value before reporting a false failure.
+      api.storage.local.get(["blockedSites"], (settings) => {
+        const readError = api.runtime.lastError;
+        const savedSites = !readError && settings
+          ? normalizeStoredSites(settings.blockedSites)
+          : null;
+        const applied = savedSites && (operation === "remove"
+          ? hosts.every((host) => !savedSites.includes(host))
+          : operation === "add"
+            ? hosts.every((host) => savedSites.includes(host))
+            : false);
+        if (!applied) {
+          announce("Bean could not save that change. Try again.", true);
+          return;
+        }
+        blockedSites = savedSites;
+        renderBlockedSites();
+        // Ask the worker to finish the visibility-layer refresh. Storage is
+        // already authoritative, so a lost refresh response cannot undo the
+        // user's choice.
+        api.runtime.sendMessage({ type: "refreshRegistration" }, () => {
+          void api.runtime.lastError;
+        });
+        announce(message || "Saved automatically. Reload an open page to apply the change.");
+      });
+      return;
     }
-  );
-}
-
-function showMessage(text, isError = false) {
-  const status = document.getElementById("status");
-  status.textContent = text;
-  status.className = isError ? "warn" : "muted";
-}
-
-function save() {
-  const sites = parseSites(document.getElementById("sites").value);
-  if (!sites) { showMessage("Enter website names only, such as example.com.", true); return; }
-
-  chrome.storage.local.set({
-    enabled: document.getElementById("enabled").checked,
-    blockedSites: sites,
-    useBridge: document.getElementById("useBridge").checked,
-    localFallback: document.getElementById("localFallback").checked,
-    settingsSchemaVersion: SETTINGS_SCHEMA_VERSION
-  }, () => {
-    chrome.runtime.sendMessage({ type: "refreshRegistration" }, () => {
-      void chrome.runtime.lastError;
-      showMessage("Saved. Reload an open page if you changed its website access.");
-      renderStatus();
-    });
+    blockedSites = normalizeStoredSites(result.blockedSites);
+    renderBlockedSites();
+    announce(result.registrationUpdated === false
+      ? "Website choice saved. Restart your browser to finish updating Bean."
+      : (message || "Saved automatically. Reload an open page to apply the change."));
   });
 }
 
-function testBridge() {
-  const button = document.getElementById("test");
-  button.disabled = true;
-  setStatusCell("s-bridge", "Checking…", "off");
-  let finished = false;
-  let timer;
+function addBlockedSites(value) {
+  const additions = parseSites(value);
+  if (!additions || !additions.length) {
+    announce("Enter a website such as example.com.", true);
+    return false;
+  }
+  persistBlockedSites("add", additions,
+    `${additions.length === 1 ? additions[0] : `${additions.length} websites`} blocked.`);
+  return true;
+}
 
-  const finish = (response, runtimeMessage = "") => {
+function removeBlockedSite(host) {
+  persistBlockedSites("remove", [host],
+    `${host} can use Bean again.`);
+}
+
+function renderBridgeResponse(response) {
+  const status = assessBridgeStatus(response);
+  setStatus("app-status", status.app);
+  setStatus("ai-status", status.ai);
+  const detail = byId("connection-detail");
+  if (detail) detail.textContent = status.detail;
+  const confirmation = byId("confirm-browser-ai");
+  if (confirmation) {
+    confirmation.hidden = !(response &&
+      response.browserAIStatusCode === "browserAIConsentRequired" &&
+      response.browserAIConsentRequired === true);
+    confirmation.disabled = false;
+  }
+  const usageRow = byId("usage-row");
+  if (usageRow) {
+    const hasUsage = Number.isInteger(response && response.automaticCallsToday)
+      && Number.isInteger(response && response.dailyAutomaticCallLimit);
+    usageRow.hidden = !hasUsage;
+    if (hasUsage) {
+      const atLimit = response.automaticCallsToday >= response.dailyAutomaticCallLimit;
+      setStatus("usage-status", [
+        `${response.automaticCallsToday} of ${response.dailyAutomaticCallLimit}`,
+        atLimit ? "warn" : "ok"
+      ]);
+    }
+  }
+}
+
+function confirmBrowserAI() {
+  const api = extensionAPI();
+  const button = byId("confirm-browser-ai");
+  if (!api || !button) return;
+  button.disabled = true;
+  announce("Saving your browser AI choice…");
+  api.runtime.sendMessage({ type: "confirmBrowserAI" }, (response) => {
+    const runtimeError = api.runtime.lastError;
+    if (runtimeError || !response || !response.ok) {
+      button.disabled = false;
+      announce("Bean could not save that choice. Try again.", true);
+      return;
+    }
+    button.hidden = true;
+    announce("Browser AI is allowed. Local checks remain available without it.");
+    checkConnection();
+  });
+}
+
+function checkConnection() {
+  const api = extensionAPI();
+  const button = byId("check-connection");
+  if (button) button.disabled = true;
+  setStatus("app-status", ["Checking…", "neutral"]);
+  setStatus("ai-status", ["Checking…", "neutral"]);
+  if (!api) {
+    renderBridgeResponse(null);
+    if (button) button.disabled = false;
+    return;
+  }
+  let finished = false;
+  const finish = (response) => {
     if (finished) return;
     finished = true;
     clearTimeout(timer);
-    button.disabled = false;
-    if (!response || !response.ok) {
-      const code = response && response.errorCode;
-      setStatusCell("s-bridge", "Needs attention", "warn");
-      showMessage(
-        code === "bridgeTimeout"
-          ? "Bean did not respond. Open Bean → Settings → Browser and choose Repair Connection."
-          : `Open Bean → Settings → Browser and finish the connection.${runtimeMessage ? ` (${runtimeMessage})` : ""}`,
-        true
-      );
-      return;
-    }
-    if (Number.isInteger(response.automaticCallsToday) && Number.isInteger(response.dailyAutomaticCallLimit)) {
-      setStatusCell("s-budget", `${response.automaticCallsToday} of ${response.dailyAutomaticCallLimit} today`,
-                    response.automaticCallsToday >= response.dailyAutomaticCallLimit ? "warn" : "ok");
-    }
-    if (!response.providerConfigured) {
-      setStatusCell("s-bridge", "Connected — AI not set up", "warn");
-      showMessage("The local checker is ready. Add an API key in Bean only if you want deeper checks.");
-      return;
-    }
-    if (!response.webInlineEnabled) {
-      setStatusCell("s-bridge", "Connected — web AI is off", "warn");
-      showMessage("The local checker is ready. Turn on Web AI in Bean if you want deeper checks.");
-      return;
-    }
-    setStatusCell("s-bridge", `Connected to Bean ${response.appVersion || ""}`, "ok");
-    showMessage("Everything is connected.");
+    if (button) button.disabled = false;
+    renderBridgeResponse(response);
   };
-
-  timer = setTimeout(() => finish({ ok: false, errorCode: "bridgeTimeout" }), STATUS_TIMEOUT_MS);
-  chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
-    const runtimeMessage = (chrome.runtime.lastError || {}).message || "";
-    finish(response, runtimeMessage);
-  });
+  const timer = setTimeout(() => finish(null), STATUS_TIMEOUT_MS);
+  try {
+    api.runtime.sendMessage({ type: "getStatus" }, (response) => {
+      const runtimeError = api.runtime.lastError;
+      finish(runtimeError ? null : response);
+    });
+  } catch (_error) {
+    finish(null);
+  }
 }
 
-document.getElementById("save").addEventListener("click", save);
-document.getElementById("test").addEventListener("click", testBridge);
-document.getElementById("copyID").addEventListener("click", () => {
-  navigator.clipboard.writeText(chrome.runtime.id || "");
-  showMessage("Extension ID copied.");
+function load() {
+  const api = extensionAPI();
+  if (!api) {
+    blockedSites = [];
+    renderBlockedSites();
+    renderBridgeResponse(null);
+    announce("Preview mode — extension controls are unavailable on this page.");
+    return;
+  }
+  api.storage.local.get(["blockedSites"], (settings) => {
+    blockedSites = normalizeStoredSites(settings.blockedSites);
+    renderBlockedSites();
+  });
+  if (api.storage.onChanged && typeof api.storage.onChanged.addListener === "function") {
+    api.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local" || !changes.blockedSites) return;
+      blockedSites = normalizeStoredSites(changes.blockedSites.newValue);
+      renderBlockedSites();
+    });
+  }
+  checkConnection();
+}
+
+const form = byId("add-site-form");
+if (form) form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const input = byId("site-input");
+  if (input && addBlockedSites(input.value)) input.value = "";
 });
+const checkButton = byId("check-connection");
+if (checkButton) checkButton.addEventListener("click", checkConnection);
+const confirmButton = byId("confirm-browser-ai");
+if (confirmButton) confirmButton.addEventListener("click", confirmBrowserAI);
 load();
-setTimeout(testBridge, 150);

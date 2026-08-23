@@ -33,20 +33,19 @@ automatic versus manual provider usage.
 
 ### Actions
 
-1. Add a Setup & Status screen with live checks for app location, API key,
-   provider connection, Accessibility permission, shortcuts, and the most recent
-   current-field capability inspection.
+1. Add a setup/status experience with live checks for app location, optional AI,
+   Accessibility permission, shortcuts, and the most recent current-field
+   capability inspection.
 2. Add a menu-bar **Help → Check Current Field** action that evaluates the
    frontmost field without reading or recording its text.
-3. Replace the onboarding-only provider demonstration with a guided TextEdit
-   cross-app verification. Completing a confirmed external replacement marks
-   the end-to-end check as passed.
+3. Keep first-run verification inside Bean with a local synthetic tryout, then
+   explain the real cross-app shortcut on the final ready screen.
 4. Add a bounded local operation ledger containing metadata only: timestamp,
    app/category, action, input mode and length, provider/model, duration, safety
    result, replacement result, token counts when known, and automatic/manual
    source.
-5. Include recent operation outcomes in the diagnostics summary, add one-click
-   copy/clear actions, and open the GitHub bug form from the app.
+5. Include recent operation outcomes in diagnostics, keep diagnostics copying
+   separate from a review-before-sharing support report, and link to GitHub.
 6. Update privacy/support documentation and add tests proving history excludes
    text and remains bounded.
 
@@ -55,7 +54,7 @@ automatic versus manual provider usage.
 - Setup clearly distinguishes provider readiness from cross-app readiness.
 - A user can inspect a target field from the menu bar and receive a reason-coded
   capability result.
-- A confirmed TextEdit replacement completes the onboarding verification.
+- A user can finish onboarding without opening another app or configuring AI.
 - The last 50 content-free operations survive relaunch and can be erased.
 - No source or transformed text is encoded in the history or support report.
 
@@ -147,10 +146,11 @@ automatic versus manual provider usage.
 
 ### Actions
 
-1. Consolidate Bean Bubble, Passive Suggestions, and Inline Highlights under a
-   progressive-disclosure **Writing** settings category.
-2. Keep primary navigation limited to General, Writing, AI & Usage,
-   Personalization, Browser, and Privacy & Support.
+1. Consolidate Bean Bubble and Live suggestions under a progressive-disclosure
+   **Writing** settings category; keep retired Passive controls out of the public
+   product surface.
+2. Keep primary navigation limited to General, Writing, AI & Usage, Browser,
+   and Privacy & Help. Personalization lives within Writing.
 3. Add a user-triggered GitHub Releases update check with no background polling,
    analytics, or automatic installation.
 4. Show the installed version, latest version, prerelease status, and a button
@@ -168,6 +168,53 @@ automatic versus manual provider usage.
 - No executable update is downloaded or installed by Bean.
 - Paid distribution remains a documented decision, not a hidden build
   dependency.
+
+## Phase 6 — Support, privacy control, and release readiness
+
+**Status:** Complete.
+
+### Actions
+
+1. Separate one-click content-free diagnostics copying from an in-app Support
+   Report preview that is never saved, copied, or uploaded without user action.
+2. Add focused repair cards for Accessibility, unstable app location, duplicate
+   instances, and an enabled/detected browser integration that needs attention.
+3. Add a confirmed **Full Reset Bean** flow with ordered, fail-aware cleanup of
+   provider keys, user-content artifacts and generated backups, login
+   registration, native-host manifests/manual approvals, visible and private
+   accounting, preferences, and onboarding state.
+4. Make reset boundaries explicit: the Mac app cannot revoke its own macOS
+   Accessibility authorization and cannot erase the Chrome extension's local
+   blocked-sites/settings store.
+5. Expand About into a truthful project surface with canonical GitHub, Support,
+   Privacy, License, Changelog, and user-triggered update links.
+
+## After 1.6 — Accessibility scaling
+
+**Status:** Planned, not a 1.6 release blocker.
+
+- Replace fixed-point text tokens in core native views with semantic,
+  accessibility-scaled typography while keeping decorative symbol sizes
+  intentional.
+- Add adaptive horizontal-to-vertical fallbacks for crowded control rows and
+  flexible minimum heights for text-heavy cards.
+- Render onboarding, previews, Settings, Support, and About at normal and large
+  Accessibility text sizes in light and dark appearance.
+- Add a structural regression preventing new fixed-point body-text fonts in
+  those product surfaces.
+6. Align public docs, issue forms, bundled resources, release scripts, and the
+   1.6.0 (8) / extension 0.7.0 release contract.
+
+### Acceptance criteria
+
+- Support content is visible for review before any clipboard or browser action.
+- Full Reset never claims success after a failed cleanup step and quits only
+  after every removable store has been verified.
+- Reset tests use injected fakes or temporary domains/directories and prove
+  unrelated files, preference domains, native hosts, and keychain accounts are
+  outside scope.
+- About and public documentation make support, update, distribution, privacy,
+  and manual-permission boundaries understandable without Terminal.
 
 ## Release gate
 

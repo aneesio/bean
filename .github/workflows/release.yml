@@ -42,5 +42,6 @@ jobs:
             release/Bean-*-unnotarized.sha256 \
             --verify-tag \
             --generate-notes \
+            --notes "$(cat RELEASE_NOTES.md)" \
             --prerelease \
             --title "Bean $GITHUB_REF_NAME public beta (unnotarized)"

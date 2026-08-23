@@ -55,6 +55,15 @@ enum ProviderKind: String, CaseIterable, Identifiable {
     var keychainAccount: String { "apikey.\(rawValue)" }
 }
 
+/// Content-free knowledge about a provider credential. `unknown` is important
+/// for upgrades from releases that wrote Keychain data before Bean persisted a
+/// separate presence marker; resolving it must remain an explicit user action.
+enum APIKeyPresenceState: Equatable {
+    case present
+    case absent
+    case unknown
+}
+
 // User-facing configuration. Non-secret values live in UserDefaults; API keys
 // live in the Keychain (see KeychainService). Marked @MainActor because it
 // drives SwiftUI views and is read on the main thread during the fix flow.
@@ -67,10 +76,16 @@ final class AppSettings: ObservableObject {
         static let fixFocusedField = "fixFocusedFieldWhenNoSelection"
         static let diagnostics = "diagnosticsEnabled"
         static let onboardingComplete = "onboardingComplete"
+        static let onboardingStep = "onboardingStepRawValue"
         static let providerVerifiedAt = "providerVerifiedAt"
         static let providerVerifiedKind = "providerVerifiedKind"
         static let providerVerifiedModel = "providerVerifiedModel"
+        static func apiKeyPresent(_ provider: ProviderKind) -> String {
+            "apiKeyPresent.\(provider.rawValue)"
+        }
+        static let apiKeyPresenceMetadataMigrationVersion = "apiKeyPresenceMetadataMigrationVersion"
         static let shortcut = "globalShortcut"
+        static let primaryShortcutAction = "primaryShortcutAction"
         static let beanMenuShortcut = "beanMenuShortcut"
         // Phase 5 — Passive Suggestions
         static let passiveEnabled = "passiveEnabled"
@@ -105,13 +120,34 @@ final class AppSettings: ObservableObject {
         // One-time migrations for settings whose old defaults could spend API
         // tokens after a typing pause. Explicit actions are never affected.
         static let automaticAICostSafetyVersion = "automaticAICostSafetyVersion"
+        // Phase 3 removes Passive Suggestions as a public product. Disable any
+        // previously stored hidden background path once on upgrade so an old
+        // preference cannot keep spending tokens after its controls disappear.
+        static let liveAssistanceSimplificationVersion = "liveAssistanceSimplificationVersion"
         static let dailyAutomaticCallLimit = "dailyAutomaticCallLimit"
         static let monthlyTokenWarningThreshold = "monthlyTokenWarningThreshold"
     }
 
     private let defaults: UserDefaults
+    private let readKeychain: (String) -> KeychainReadResult
+    private let writeKeychain: (String, String) -> OSStatus
+    /// Keychain access can show a macOS authorization prompt, especially after
+    /// an ad-hoc development build is replaced. Cache each provider's value
+    /// after the first read so ordinary SwiftUI refreshes never ask repeatedly.
+    private var apiKeyCache: [ProviderKind: String] = [:]
+    private var loadedAPIKeyProviders: Set<ProviderKind> = []
 
     @Published var provider: ProviderKind {
+        willSet {
+            // Revoke the old proof before publishing/persisting a different
+            // provider. The native host is a separate process and may observe
+            // each defaults write independently; invalidating first keeps every
+            // intermediate state fail-closed.
+            if newValue != provider {
+                invalidateProviderVerification()
+                keychainError = nil
+            }
+        }
         didSet {
             defaults.set(provider.rawValue, forKey: Keys.provider)
             // A model ID from the previous provider cannot work after a switch.
@@ -119,14 +155,17 @@ final class AppSettings: ObservableObject {
             if model.isEmpty || oldValue.ownsModelID(model) {
                 model = provider.defaultModel
             }
-            invalidateProviderVerification()
         }
     }
 
     @Published var model: String {
+        willSet {
+            // As with provider changes, clear verification before the new model
+            // becomes visible to the native-host process.
+            if newValue != model { invalidateProviderVerification() }
+        }
         didSet {
             defaults.set(model, forKey: Keys.model)
-            if model != oldValue { invalidateProviderVerification() }
         }
     }
 
@@ -155,6 +194,19 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(onboardingComplete, forKey: Keys.onboardingComplete) }
     }
 
+    /// The last page reached in the three-step first-run guide. Keeping the
+    /// persisted value as an integer avoids coupling settings storage to a UI
+    /// enum while still making an interrupted guide resumable.
+    @Published var onboardingStepRawValue: Int {
+        didSet {
+            let clamped = min(max(onboardingStepRawValue, 0), 2)
+            if onboardingStepRawValue != clamped {
+                onboardingStepRawValue = clamped
+            }
+            defaults.set(clamped, forKey: Keys.onboardingStep)
+        }
+    }
+
     @Published private(set) var providerConnectionVerifiedAt: Date?
 
     /// A content-free persistence error shown beside the API-key field.
@@ -168,6 +220,12 @@ final class AppSettings: ObservableObject {
                 defaults.set(data, forKey: Keys.shortcut)
             }
         }
+    }
+
+    /// What the direct writing shortcut runs. Existing users migrate to the
+    /// historical local Quick Fix behavior; unknown values also fail local.
+    @Published var primaryShortcutAction: PrimaryShortcutAction {
+        didSet { defaults.set(primaryShortcutAction.rawValue, forKey: Keys.primaryShortcutAction) }
     }
 
     /// The global shortcut that opens the Bean action menu. Defaults to ⌃⌥B.
@@ -246,7 +304,15 @@ final class AppSettings: ObservableObject {
     /// Local guardrails for provider-backed automatic features. Manual actions
     /// and offline checks remain available when either threshold is reached.
     @Published var dailyAutomaticCallLimit: Int {
-        didSet { defaults.set(dailyAutomaticCallLimit, forKey: Keys.dailyAutomaticCallLimit) }
+        didSet {
+            let bounded = AutomaticCallBudgetPolicy.requestedDailyLimit(
+                dailyAutomaticCallLimit
+            )
+            if dailyAutomaticCallLimit != bounded {
+                dailyAutomaticCallLimit = bounded
+            }
+            defaults.set(bounded, forKey: Keys.dailyAutomaticCallLimit)
+        }
     }
     @Published var monthlyTokenWarningThreshold: Int {
         didSet { defaults.set(monthlyTokenWarningThreshold, forKey: Keys.monthlyTokenWarningThreshold) }
@@ -257,8 +323,54 @@ final class AppSettings: ObservableObject {
     @Published var lastPauseHandler: String = "none"
     @Published var lastSupportReason: String = ""
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        readKeychain: ((String) -> String?)? = nil,
+        readKeychainResult: ((String) -> KeychainReadResult)? = nil,
+        writeKeychain: @escaping (String, String) -> OSStatus = { value, account in
+            KeychainService.set(value, account: account)
+        }
+    ) {
         self.defaults = defaults
+        if let readKeychainResult {
+            self.readKeychain = readKeychainResult
+        } else if let readKeychain {
+            // Keep the existing test/dependency-injection surface compatible:
+            // an optional-only reader can express value vs confirmed absence.
+            self.readKeychain = { account in
+                readKeychain(account).map(KeychainReadResult.value) ?? .notFound
+            }
+        } else {
+            self.readKeychain = { KeychainService.get(account: $0) }
+        }
+        self.writeKeychain = writeKeychain
+        // Capture upgrade evidence before any current migration writes its own
+        // marker. v1.4 stored this cost-safety version even when onboarding was
+        // interrupted after saving a Keychain credential.
+        let isPriorInstall = defaults.bool(forKey: Keys.onboardingComplete)
+            || defaults.object(forKey: Keys.automaticAICostSafetyVersion) != nil
+        // Distinguish a genuinely fresh, not-yet-onboarded install from an
+        // upgrade whose Keychain item predates content-free presence metadata.
+        // This migration is metadata-only and never probes Keychain.
+        if defaults.integer(forKey: Keys.apiKeyPresenceMetadataMigrationVersion) < 1 {
+            for provider in ProviderKind.allCases {
+                let presenceKey = Keys.apiKeyPresent(provider)
+                if isPriorInstall {
+                    // Buggy intermediate builds could persist false after a
+                    // canceled read. Preserve true, but make false/missing
+                    // recoverable exactly once for an identified prior install.
+                    if defaults.object(forKey: presenceKey) != nil,
+                       !defaults.bool(forKey: presenceKey) {
+                        defaults.removeObject(forKey: presenceKey)
+                    }
+                } else {
+                    if defaults.object(forKey: presenceKey) == nil {
+                        defaults.set(false, forKey: presenceKey)
+                    }
+                }
+            }
+            defaults.set(1, forKey: Keys.apiKeyPresenceMetadataMigrationVersion)
+        }
         // Versions before this migration allowed previously stored automatic-AI
         // settings to survive the new cost-safe defaults. Reset those paid
         // background paths once on upgrade; users can deliberately re-enable
@@ -270,6 +382,11 @@ final class AppSettings: ObservableObject {
             defaults.set(false, forKey: Keys.inlineFallbackPassive)
             defaults.set(false, forKey: Keys.webInlineEnabled)
             defaults.set(1, forKey: Keys.automaticAICostSafetyVersion)
+        }
+        if defaults.integer(forKey: Keys.liveAssistanceSimplificationVersion) < 1 {
+            defaults.set(false, forKey: Keys.passiveEnabled)
+            defaults.set(false, forKey: Keys.inlineFallbackPassive)
+            defaults.set(1, forKey: Keys.liveAssistanceSimplificationVersion)
         }
 
         let providerRaw = defaults.string(forKey: Keys.provider) ?? ProviderKind.openai.rawValue
@@ -289,6 +406,7 @@ final class AppSettings: ObservableObject {
 
         self.diagnosticsEnabled = defaults.bool(forKey: Keys.diagnostics) // default false
         self.onboardingComplete = defaults.bool(forKey: Keys.onboardingComplete) // default false
+        self.onboardingStepRawValue = min(max(defaults.integer(forKey: Keys.onboardingStep), 0), 2)
         let verifiedTimestamp = defaults.double(forKey: Keys.providerVerifiedAt)
         self.providerConnectionVerifiedAt = verifiedTimestamp > 0
             ? Date(timeIntervalSince1970: verifiedTimestamp) : nil
@@ -328,7 +446,7 @@ final class AppSettings: ObservableObject {
         self.bubbleOpenOnHover = defaults.bool(forKey: Keys.bubbleOpenOnHover) // default false
         self.webInlineEnabled = defaults.bool(forKey: Keys.webInlineEnabled) // default false
         let dailyLimit = defaults.integer(forKey: Keys.dailyAutomaticCallLimit)
-        self.dailyAutomaticCallLimit = dailyLimit > 0 ? dailyLimit : 20
+        self.dailyAutomaticCallLimit = AutomaticCallBudgetPolicy.persistedDailyLimit(dailyLimit)
         let monthlyWarning = defaults.integer(forKey: Keys.monthlyTokenWarningThreshold)
         self.monthlyTokenWarningThreshold = monthlyWarning > 0 ? monthlyWarning : 250_000
 
@@ -338,6 +456,10 @@ final class AppSettings: ObservableObject {
         } else {
             self.shortcut = .default
         }
+
+        self.primaryShortcutAction = PrimaryShortcutAction(
+            rawValue: defaults.string(forKey: Keys.primaryShortcutAction) ?? ""
+        ) ?? .quickFix
 
         if let data = defaults.data(forKey: Keys.beanMenuShortcut),
            let stored = try? JSONDecoder().decode(GlobalShortcut.self, from: data) {
@@ -349,21 +471,60 @@ final class AppSettings: ObservableObject {
         Log.diagnosticsEnabled = self.diagnosticsEnabled
     }
 
-    /// True when the basics needed to actually fix text are configured.
+    /// True when Bean can work in other apps. AI is an optional enhancement;
+    /// the deterministic Local Quick Check works without a provider key.
     var isSetupComplete: Bool {
-        hasAPIKey && PermissionService.isAccessibilityGranted
+        PermissionService.isAccessibilityGranted
     }
 
     // MARK: - API key (Keychain-backed)
 
     /// The API key for the currently selected provider.
     var apiKey: String {
-        get { KeychainService.get(account: provider.keychainAccount) ?? "" }
+        get { apiKey(for: provider) }
         set { persistAPIKey(newValue, for: provider) }
     }
 
     func apiKey(for provider: ProviderKind) -> String {
-        KeychainService.get(account: provider.keychainAccount) ?? ""
+        if !loadedAPIKeyProviders.contains(provider) {
+            switch readKeychain(provider.keychainAccount) {
+            case .value(let value) where !value.isEmpty:
+                apiKeyCache[provider] = value
+                loadedAPIKeyProviders.insert(provider)
+                defaults.set(true, forKey: Keys.apiKeyPresent(provider))
+                keychainError = nil
+            case .value:
+                // KeychainService never emits an empty value, but keep an
+                // injected or malformed result from becoming false absence.
+                keychainError = KeychainService.readErrorMessage(for: errSecDecode)
+                Log.event("keychain: read failed status=\(errSecDecode)")
+            case .notFound:
+                apiKeyCache[provider] = ""
+                loadedAPIKeyProviders.insert(provider)
+                // Only a confirmed errSecItemNotFound becomes known absence.
+                defaults.set(false, forKey: Keys.apiKeyPresent(provider))
+                keychainError = nil
+            case .failure(let status):
+                // Do not cache or persist a false absence: cancellation, a
+                // locked Keychain, and transient errors must remain retryable.
+                keychainError = KeychainService.readErrorMessage(for: status)
+                Log.event("keychain: read failed status=\(status)")
+            }
+        }
+        return apiKeyCache[provider] ?? ""
+    }
+
+    /// Process-local load state used by explicit credential UI. This does not
+    /// query Keychain and lets callers distinguish a loaded empty result from
+    /// a read that was canceled or otherwise failed.
+    func hasLoadedAPIKey(for provider: ProviderKind) -> Bool {
+        loadedAPIKeyProviders.contains(provider)
+    }
+
+    /// Clears only transient, content-free UI state. Provider navigation uses
+    /// this so an error for one credential is never shown under another.
+    func clearKeychainError() {
+        keychainError = nil
     }
 
     func setAPIKey(_ value: String, for provider: ProviderKind) {
@@ -371,29 +532,89 @@ final class AppSettings: ObservableObject {
     }
 
     private func persistAPIKey(_ value: String, for provider: ProviderKind) {
-        let previousValue = KeychainService.get(account: provider.keychainAccount) ?? ""
-        let status = KeychainService.set(value, account: provider.keychainAccount)
-        if status == errSecSuccess {
+        let previousValue = apiKey(for: provider)
+        // A failed read intentionally leaves this provider unloaded. Do not
+        // treat its empty fallback as equality or persist false absence.
+        if loadedAPIKeyProviders.contains(provider), previousValue == value {
+            defaults.set(!value.isEmpty, forKey: Keys.apiKeyPresent(provider))
             keychainError = nil
-            if previousValue != value { invalidateProviderVerification() }
+            return
+        }
+        // Keychain and UserDefaults are separate cross-process stores. Revoke
+        // the old verification marker before changing (or clearing) the secret,
+        // so a native-host request can never validate the old marker and then
+        // read a newly written, unverified key. A failed write intentionally
+        // leaves setup unverified until the user retries verification.
+        invalidateProviderVerification()
+        let status = writeKeychain(value, provider.keychainAccount)
+        if status == errSecSuccess {
+            apiKeyCache[provider] = value
+            loadedAPIKeyProviders.insert(provider)
+            defaults.set(!value.isEmpty, forKey: Keys.apiKeyPresent(provider))
+            keychainError = nil
         } else {
             keychainError = "Couldn't save the API key: \(KeychainService.errorMessage(for: status))"
             Log.event("keychain: write failed status=\(status)")
         }
     }
 
-    var hasAPIKey: Bool { !apiKey.isEmpty }
+    /// Content-free key-presence state for status UI. This intentionally never
+    /// queries Keychain: merely launching Bean, opening General, or copying
+    /// diagnostics must not trigger a password prompt. `apiKey(for:)` remains
+    /// the explicit secret-loading API.
+    var hasAPIKey: Bool { hasAPIKey(for: provider) }
+
+    func hasAPIKey(for provider: ProviderKind) -> Bool {
+        apiKeyPresenceState(for: provider) == .present
+    }
+
+    /// Returns only process-local or UserDefaults metadata. It never queries
+    /// Keychain, so Settings and onboarding can distinguish a known-empty key
+    /// from a legacy credential whose presence has not yet been resolved.
+    func apiKeyPresenceState(for provider: ProviderKind) -> APIKeyPresenceState {
+        if loadedAPIKeyProviders.contains(provider) {
+            return (apiKeyCache[provider] ?? "").isEmpty ? .absent : .present
+        }
+        // Some earlier builds could persist a false presence marker after a
+        // canceled read. A matching successful verification is stronger
+        // evidence of a saved key. A deliberate removal invalidates this
+        // verification before persisting known absence.
+        if providerConnectionVerifiedAt != nil,
+           defaults.string(forKey: Keys.providerVerifiedKind) == provider.rawValue {
+            return .present
+        }
+        let presenceKey = Keys.apiKeyPresent(provider)
+        if defaults.object(forKey: presenceKey) != nil {
+            return defaults.bool(forKey: presenceKey) ? .present : .absent
+        }
+        return .unknown
+    }
 
     var isProviderConnectionVerified: Bool {
-        guard hasAPIKey, providerConnectionVerifiedAt != nil else { return false }
-        return defaults.string(forKey: Keys.providerVerifiedKind) == provider.rawValue
+        isProviderConnectionVerified(provider: provider, model: model)
+    }
+
+    /// Checks one captured provider/model pair against the current selection and
+    /// verification marker without reading Keychain. Automatic services call
+    /// this immediately before their synchronous reservation/provider boundary.
+    func isProviderConnectionVerified(provider: ProviderKind, model: String) -> Bool {
+        guard provider == self.provider, model == self.model else { return false }
+        guard providerConnectionVerifiedAt != nil else { return false }
+        return hasAPIKey(for: provider)
+            && defaults.string(forKey: Keys.providerVerifiedKind) == provider.rawValue
             && defaults.string(forKey: Keys.providerVerifiedModel) == model
     }
 
     func markProviderConnectionVerified(provider: ProviderKind, model: String) {
-        guard provider == self.provider, model == self.model, hasAPIKey else { return }
+        // A successful setup flow has already loaded or saved this key. Never
+        // perform a surprise Keychain read just to update status metadata.
+        guard provider == self.provider,
+              model == self.model,
+              loadedAPIKeyProviders.contains(provider),
+              !(apiKeyCache[provider] ?? "").isEmpty else { return }
         let now = Date()
         providerConnectionVerifiedAt = now
+        defaults.set(true, forKey: Keys.apiKeyPresent(provider))
         defaults.set(now.timeIntervalSince1970, forKey: Keys.providerVerifiedAt)
         defaults.set(provider.rawValue, forKey: Keys.providerVerifiedKind)
         defaults.set(model, forKey: Keys.providerVerifiedModel)
@@ -404,6 +625,19 @@ final class AppSettings: ObservableObject {
         defaults.removeObject(forKey: Keys.providerVerifiedAt)
         defaults.removeObject(forKey: Keys.providerVerifiedKind)
         defaults.removeObject(forKey: Keys.providerVerifiedModel)
+    }
+
+    /// Full Reset deletes Keychain entries directly so it never has to read a
+    /// secret merely to remove it. Forget any process-local cached values after
+    /// that attempt and fail closed until a future setup explicitly saves and
+    /// verifies a new credential.
+    func forgetProviderCredentialsAfterResetAttempt() {
+        invalidateProviderVerification()
+        apiKeyCache.removeAll()
+        loadedAPIKeyProviders = Set(ProviderKind.allCases)
+        for provider in ProviderKind.allCases {
+            defaults.set(false, forKey: Keys.apiKeyPresent(provider))
+        }
     }
 
     /// True when merely pausing after typing can spend provider tokens. The Bean

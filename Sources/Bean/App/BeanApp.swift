@@ -2,11 +2,9 @@ import AppKit
 
 // Bean's entry point.
 //
-// Bean is a menu-bar-only app, so it uses an AppKit application lifecycle
-// (NSApplication + AppDelegate) rather than a SwiftUI `App` scene. This gives
-// us precise control over activation policy (.accessory = no Dock icon) and
-// the NSStatusItem. SwiftUI is still used for the Settings window, hosted via
-// NSHostingController.
+// Bean uses an AppKit application lifecycle so it can live quietly in the menu
+// bar, then show its Dock icon only while a user-facing Bean window is open.
+// SwiftUI supplies the windows through NSHostingController.
 @main
 struct BeanApp {
     @MainActor
@@ -14,8 +12,9 @@ struct BeanApp {
         // Native messaging host mode: Chrome launches this same binary with the
         // calling extension's chrome-extension:// origin as an argument. In that
         // case run the stdin/stdout host loop and never start the GUI.
-        let args = CommandLine.arguments.dropFirst()
-        if args.contains(where: { $0.hasPrefix("chrome-extension://") }) || args.contains("--native-messaging-host") {
+        let args = Array(CommandLine.arguments.dropFirst())
+        switch BrowserBridgeInstaller().nativeHostLaunchDecision(arguments: args) {
+        case .nativeHost:
             // The native host performs blocking stdin reads. Running that loop
             // on the main actor deadlocks status requests, because usage and
             // preferences intentionally hop back to MainActor. Keep the main
@@ -25,14 +24,21 @@ struct BeanApp {
                 exit(EXIT_SUCCESS)
             }
             dispatchMain()
+        case .reject:
+            // Never enter the pipe loop for a bare developer flag, malformed or
+            // duplicate origin, stale manifest origin, or unrelated extension.
+            exit(EXIT_FAILURE)
+        case .gui:
+            break
         }
 
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
 
-        // .accessory: the app lives in the menu bar only, with no Dock icon and
-        // no main window on launch.
+        // Start quietly in the menu bar. DockPresence switches to `.regular`
+        // while onboarding, Settings, About, the action menu, or a preview is
+        // open, and restores Bean's standard application menu at the same time.
         app.setActivationPolicy(.accessory)
         app.run()
     }

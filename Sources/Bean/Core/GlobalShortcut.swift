@@ -1,4 +1,18 @@
 import AppKit
+
+/// The deliberate, compact choice for Bean's direct global writing shortcut.
+/// Rewrites and reply/compose actions remain in the Bean menu because they need
+/// more context and preview; the shortcut chooses only between the two clear
+/// proofreading contracts.
+enum PrimaryShortcutAction: String, CaseIterable, Identifiable {
+    case quickFix
+    case aiProofread
+
+    var id: String { rawValue }
+    var writingAction: WritingAction { self == .quickFix ? .localQuickCheck : .proofread }
+    var displayName: String { self == .quickFix ? "Quick Fix" : "AI Proofread" }
+    var detail: String { self == .quickFix ? "Free · On-device" : "Uses your AI provider" }
+}
 import Carbon.HIToolbox
 
 // A global keyboard shortcut: a key plus modifier flags, stored in Carbon terms

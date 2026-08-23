@@ -19,9 +19,18 @@ final class HighlightOverlayController {
     var onCloseCard: (() -> Void)?
     var showExplanation = true
 
-    private var highlightPanels: [UUID: NSPanel] = [:]
-    private var cardPanel: NSPanel?
-    private var cardDismissTimer: Timer?
+    private var highlightPanels: [UUID: OverlayPanel] = [:]
+    private var cardPanel: OverlayPanel?
+    private var renderedEntries: [Entry] = []
+    private var renderedSelectedID: UUID?
+    private var hoverSampleTimer: Timer?
+    private var hoverCandidateID: UUID?
+    private var hoverCandidateSince: Date?
+    private var cardIsInteractive = false
+    private var cardFocusSession: OverlaySourceFocusSession?
+
+    private let hoverDelay: TimeInterval = 0.2
+    private let hoverSampleInterval: TimeInterval = 0.1
 
     var isShowing: Bool { !highlightPanels.isEmpty }
 
@@ -29,6 +38,9 @@ final class HighlightOverlayController {
 
     func render(entries: [Entry], selectedID: UUID?, position: (index: Int, total: Int)?) {
         guard !entries.isEmpty else { hide(); return }
+        renderedEntries = entries
+        renderedSelectedID = selectedID
+        startHoverSamplingIfNeeded()
 
         // Sync highlight panels with the current entries.
         let ids = Set(entries.map { $0.issue.id })
@@ -53,7 +65,9 @@ final class HighlightOverlayController {
     }
 
     func hide() {
-        cardDismissTimer?.invalidate(); cardDismissTimer = nil
+        stopHoverSampling()
+        renderedEntries = []
+        renderedSelectedID = nil
         for panel in highlightPanels.values { panel.orderOut(nil) }
         highlightPanels.removeAll()
         hideCard()
@@ -61,13 +75,14 @@ final class HighlightOverlayController {
 
     // MARK: - Highlight panels
 
-    /// The panel covers the issue text plus a little vertical room for the
-    /// underline and easier hovering.
+    /// Only a narrow strip around the underline is interactive. Covering the
+    /// full glyph rect would prevent ordinary caret placement and selection in
+    /// the source field.
     private func highlightFrame(_ rect: CGRect) -> NSRect {
-        NSRect(x: rect.minX - 2, y: rect.minY - 4, width: rect.width + 4, height: rect.height + 6)
+        OverlayGeometry.highlightInteractionFrame(for: rect)
     }
 
-    private func makeHighlightPanel(for id: UUID, frame: NSRect) -> NSPanel {
+    private func makeHighlightPanel(for id: UUID, frame: NSRect) -> OverlayPanel {
         let panel = OverlayPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.isFloatingPanel = true
@@ -78,25 +93,83 @@ final class HighlightOverlayController {
         panel.ignoresMouseEvents = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         let view = HighlightHitView()
-        view.onHover = { [weak self] in self?.onActivateIssue?(id) }
-        view.onClick = { [weak self] in self?.onActivateIssue?(id) }
+        view.onClick = { [weak self] in self?.activateIssue(id, intent: .explicit) }
         panel.contentView = view
         panel.orderFrontRegardless()
         return panel
     }
 
+    /// Samples global mouse location instead of placing a large transparent
+    /// window over editable text. The >=28pt hover target is therefore forgiving
+    /// while every ordinary source-field click still reaches the source app.
+    private func startHoverSamplingIfNeeded() {
+        guard hoverSampleTimer == nil else { return }
+        let timer = Timer(timeInterval: hoverSampleInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.sampleHover(at: NSEvent.mouseLocation, now: Date()) }
+        }
+        timer.tolerance = hoverSampleInterval / 3
+        RunLoop.main.add(timer, forMode: .common)
+        hoverSampleTimer = timer
+    }
+
+    private func stopHoverSampling() {
+        hoverSampleTimer?.invalidate()
+        hoverSampleTimer = nil
+        hoverCandidateID = nil
+        hoverCandidateSince = nil
+    }
+
+    private func sampleHover(at point: CGPoint, now: Date) {
+        // A deliberately opened card owns keyboard/VoiceOver interaction until
+        // it is dismissed; passing over another underline must not replace it.
+        guard !cardIsInteractive else {
+            hoverCandidateID = nil
+            hoverCandidateSince = nil
+            return
+        }
+        let candidate = renderedEntries
+            .filter { OverlayGeometry.highlightHoverFrame(for: $0.rect).contains(point) }
+            .min { lhs, rhs in
+                squaredDistance(point, lhs.rect.center) < squaredDistance(point, rhs.rect.center)
+            }
+
+        guard let id = candidate?.issue.id else {
+            hoverCandidateID = nil
+            hoverCandidateSince = nil
+            return
+        }
+        if hoverCandidateID != id {
+            hoverCandidateID = id
+            hoverCandidateSince = now
+            return
+        }
+        guard renderedSelectedID != id,
+              let since = hoverCandidateSince,
+              now.timeIntervalSince(since) >= hoverDelay else { return }
+        activateIssue(id, intent: .passiveHover)
+    }
+
+    private func activateIssue(_ id: UUID, intent: OverlayActivationIntent) {
+        if intent.allowsKeyboardInteraction, !cardIsInteractive {
+            cardFocusSession = OverlaySourceFocusSession.capture()
+            cardIsInteractive = true
+        }
+        onActivateIssue?(id)
+        if cardIsInteractive, let cardPanel {
+            makeInteractive(cardPanel)
+        }
+    }
+
     // MARK: - Correction card
 
     private func showCard(for entry: Entry, position: (index: Int, total: Int)?) {
-        cardDismissTimer?.invalidate(); cardDismissTimer = nil
-
         let total = position?.total ?? 1
         let model = CardModel(
             issue: entry.issue,
             positionText: position.map { "\($0.index + 1) of \($0.total)" },
             showNext: total > 1,
             showExplanation: showExplanation,
-            onApply: { [weak self] in self?.onApply?(entry.issue.id) },
+            onApply: { [weak self] in self?.applyFromCard(entry.issue.id) },
             onIgnore: { [weak self] in self?.onIgnore?(entry.issue.id) },
             onNext: { [weak self] in self?.onNext?() },
             onClose: { [weak self] in self?.onCloseCard?() }
@@ -114,64 +187,106 @@ final class HighlightOverlayController {
             panel.hasShadow = false
             panel.hidesOnDeactivate = false
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            panel.onExplicitInteraction = { [weak self] in self?.promoteCardFromExplicitInteraction() }
             panel.contentViewController = host
             cardPanel = panel
         }
+        cardPanel?.allowsKeyInteraction = cardIsInteractive
         cardPanel?.setContentSize(host.view.fittingSize)
         anchorCard(cardPanel!, to: entry.rect)
-        cardPanel?.orderFrontRegardless()
-
-        // Fallback auto-dismiss if the user never interacts (kept generous; the
-        // dispatcher also hides on typing / click-away / Esc / app change).
-        cardDismissTimer = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.onCloseCard?() }
+        if cardIsInteractive {
+            makeInteractive(cardPanel!, firstResponder: host.view)
+        } else {
+            cardPanel?.orderFrontRegardless()
         }
     }
 
     private func hideCard() {
-        cardDismissTimer?.invalidate(); cardDismissTimer = nil
+        let shouldRefreshDock = cardPanel?.allowsKeyInteraction == true
         cardPanel?.orderOut(nil)
         cardPanel = nil
+        cardIsInteractive = false
+        let focusSession = cardFocusSession
+        cardFocusSession = nil
+        focusSession?.restoreIfAppropriate()
+        if shouldRefreshDock { DockPresence.refreshAfterWindowChange() }
+    }
+
+    private func applyFromCard(_ id: UUID) {
+        // Inline apply validates that the original AX field is focused. Restore
+        // it now and again on the next run loop before entering that safety
+        // check. Application activation is asynchronous, while the second AX
+        // focus write makes the focused-element guard deterministic.
+        let focusSession = cardFocusSession
+        cardPanel?.resignKey()
+        focusSession?.restoreIfAppropriate()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            focusSession?.restoreIfAppropriate()
+            self.onApply?(id)
+            if self.cardIsInteractive, let cardPanel = self.cardPanel, !cardPanel.isKeyWindow {
+                self.makeInteractive(cardPanel, firstResponder: cardPanel.contentViewController?.view)
+            }
+        }
+    }
+
+    private func promoteCardFromExplicitInteraction() {
+        guard !cardIsInteractive, let cardPanel else { return }
+        cardFocusSession = OverlaySourceFocusSession.capture()
+        cardIsInteractive = true
+        makeInteractive(cardPanel, firstResponder: cardPanel.contentViewController?.view)
+    }
+
+    private func makeInteractive(_ panel: OverlayPanel, firstResponder: NSView? = nil) {
+        panel.allowsKeyInteraction = true
+        panel.becomesKeyOnlyIfNeeded = false
+        DockPresence.prepareExplicitOverlay(panel, kind: "inline-correction-card")
+        if let firstResponder { panel.initialFirstResponder = firstResponder }
+        panel.makeKeyAndOrderFront(nil)
+        if let firstResponder { panel.makeFirstResponder(firstResponder) }
     }
 
     /// Anchor the card above the issue (preferred), or below if there's no room.
     private func anchorCard(_ panel: NSPanel, to rect: CGRect) {
-        guard let screen = NSScreen.main else { return }
-        let visible = screen.visibleFrame
-        let size = panel.frame.size
-        let gap: CGFloat = 8
+        let screens = OverlayScreenArea.current
+        guard let screen = OverlayGeometry.screen(containing: rect, from: screens) else { return }
+        panel.setFrameOrigin(OverlayGeometry.cardOrigin(
+            anchoredTo: rect,
+            panelSize: panel.frame.size,
+            in: screen.visibleFrame
+        ))
+    }
 
-        var x = rect.midX - size.width / 2
-        x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
-
-        var y = rect.maxY + gap // above the word (Cocoa y-up)
-        if y + size.height > visible.maxY - 8 {
-            y = rect.minY - size.height - gap // not enough room above → below
-        }
-        y = min(max(y, visible.minY + 8), visible.maxY - size.height - 8)
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+    private func squaredDistance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+        let dx = lhs.x - rhs.x
+        let dy = lhs.y - rhs.y
+        return dx * dx + dy * dy
     }
 }
 
 private final class OverlayPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    var allowsKeyInteraction = false
+    var onExplicitInteraction: (() -> Void)?
+    override var canBecomeKey: Bool { allowsKeyInteraction }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown { onExplicitInteraction?() }
+        super.sendEvent(event)
+    }
+}
+
+private extension CGRect {
+    var center: CGPoint { CGPoint(x: midX, y: midY) }
 }
 
 // MARK: - Highlight hit view (draws underline + hover/click)
 
 private final class HighlightHitView: NSView {
-    var onHover: (() -> Void)?
     var onClick: (() -> Void)?
-    private var hoverTimer: Timer?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil))
-    }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
         // Subtle warm dashed underline near the bottom of the range.
@@ -181,23 +296,13 @@ private final class HighlightHitView: NSView {
         path.lineWidth = 1.5
         path.setLineDash([2.5, 2.0], count: 2, phase: 0)
         path.lineCapStyle = .round
-        let y: CGFloat = 4
+        let y: CGFloat = 3
         path.move(to: NSPoint(x: 2, y: y))
         path.line(to: NSPoint(x: bounds.width - 2, y: y))
         path.stroke()
     }
 
-    override func mouseEntered(with event: NSEvent) {
-        hoverTimer?.invalidate()
-        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.onHover?() }
-        }
-    }
-    override func mouseExited(with event: NSEvent) {
-        hoverTimer?.invalidate(); hoverTimer = nil
-    }
     override func mouseDown(with event: NSEvent) {
-        hoverTimer?.invalidate(); hoverTimer = nil
         onClick?()
     }
 }
@@ -237,8 +342,18 @@ struct CorrectionCardView: View {
                     Text(pos).font(BeanDesign.Typography.caption()).foregroundColor(.secondary)
                 }
                 Spacer()
-                Button(action: model.onClose) { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).foregroundColor(.secondary).font(.system(size: 11, weight: .semibold))
+                Button(action: model.onClose) {
+                    Image(systemName: "xmark")
+                        .frame(
+                            width: OverlayGeometry.minimumMotorTarget,
+                            height: OverlayGeometry.minimumMotorTarget
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .font(.system(size: 11, weight: .semibold))
+                .accessibilityLabel("Close suggestion")
             }
             HStack(spacing: BeanDesign.Spacing.sm) {
                 Text(model.issue.original).strikethrough().foregroundColor(.secondary)
@@ -253,13 +368,34 @@ struct CorrectionCardView: View {
             }
 
             HStack {
-                Button("Ignore") { model.onIgnore() }.controlSize(.small)
+                Button { model.onIgnore() } label: {
+                    Text("Ignore")
+                        .frame(minHeight: OverlayGeometry.minimumMotorTarget)
+                        .contentShape(Rectangle())
+                }
+                .controlSize(.small)
                 Spacer()
                 if model.showNext {
-                    Button { model.onNext() } label: { Image(systemName: "arrow.right") }
-                        .controlSize(.small).help("Next suggestion")
+                    Button { model.onNext() } label: {
+                        Image(systemName: "arrow.right")
+                            .frame(
+                                width: OverlayGeometry.minimumMotorTarget,
+                                height: OverlayGeometry.minimumMotorTarget
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .controlSize(.small)
+                    .help("Next suggestion")
+                    .accessibilityLabel("Next suggestion")
                 }
-                Button("Apply") { model.onApply() }.controlSize(.small).buttonStyle(.borderedProminent)
+                Button { model.onApply() } label: {
+                    Text("Apply")
+                        .frame(minHeight: OverlayGeometry.minimumMotorTarget)
+                        .contentShape(Rectangle())
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(BeanDesign.Spacing.md)

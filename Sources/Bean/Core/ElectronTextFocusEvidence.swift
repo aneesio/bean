@@ -56,6 +56,16 @@ enum ElectronTextFocusEvidence {
         validAnchor(for: app) != nil
     }
 
+    /// Re-validates the geometry portion of a previously captured typing
+    /// anchor after Bean temporarily became active and the live evidence cache
+    /// was cleared. Callers must also require an unchanged interaction revision
+    /// and the exact re-copied draft before using this as destination proof.
+    static func capturedAnchorRemainsInAppWindow(_ point: CGPoint,
+                                                 for app: NSRunningApplication?) -> Bool {
+        guard app?.bundleIdentifier == slackBundleID else { return false }
+        return clickIsInsideAppWindow(point, processIdentifier: app?.processIdentifier)
+    }
+
     static func clear() {
         processIdentifier = nil
         clickPoint = nil

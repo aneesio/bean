@@ -1,8 +1,9 @@
 # Bean Native Messaging Bridge
 
-The Chromium extension can ask the local Bean app for provider-backed issue
-candidates and whole-paragraph proofreading. The host is the Bean app binary
-running in `--native-messaging` mode; it does not launch the GUI.
+The Bean extension in signed Chrome, Brave, or Edge can ask the local Bean app
+for provider-backed issue candidates and whole-paragraph proofreading. The host
+is the Bean app binary running in native-messaging mode; it does not launch the
+GUI.
 
 ```text
 supported, unblocked page → extension content script → extension service worker
@@ -12,9 +13,16 @@ supported, unblocked page → extension content script → extension service wor
 
 ## Install (normal users)
 
-Use **Bean Settings → Browser → Connect Bean to Browser**. Bean
-discovers the loaded extension from Chromium's extension metadata and writes
+Use **Bean Settings → Browser → Install Mac Connection**. Bean
+discovers the loaded extension from the browser's extension metadata and writes
 the per-user host manifest itself. No Terminal command is required.
+
+Generic Chromium builds do not have one stable vendor Team ID, so Bean cannot
+strongly authenticate them as the responsible native-host process. The local
+browser extension can still provide its offline checks there, but Bean fails
+closed instead of exposing API-key-backed native actions to an ad-hoc-signed
+caller. Native AI setup is therefore offered only for signed Chrome, Brave,
+and Edge.
 
 ## Command-line fallback (development/recovery)
 
@@ -34,7 +42,7 @@ Uninstall with:
 ./scripts/uninstall_native_messaging_host.sh
 ```
 
-Normal users can use **Repair Browser Connection** after moving Bean.app or if
+Normal users can use **Repair Mac Connection** after moving Bean.app or if
 the unpacked extension ID changes.
 
 ## Protocol
@@ -53,7 +61,11 @@ Request and response text is neither logged nor persisted.
 - Keep the host name synchronized as `com.bean.nativehost` in the app,
   extension, installer, uninstaller, and template.
 - Never broaden `allowed_origins` beyond the intended extension ID.
+- Require a live browser process that satisfies Bean's explicit Apple-anchored
+  vendor requirement in addition to the extension-origin argument before
+  entering native-host mode.
 - Keep input/output caps and the known-message allowlist.
-- Treat site hostname and text as untrusted prompt data.
+- Omit site hostname and field metadata from the native message and provider
+  prompt. Treat only the bounded page text as untrusted user-role prompt data.
 - Preserve exact-range mapping and output validation before page replacement.
 - Update [PRIVACY.md](../PRIVACY.md) for any new message or data flow.

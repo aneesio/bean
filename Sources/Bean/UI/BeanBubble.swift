@@ -1,15 +1,16 @@
 import AppKit
 import SwiftUI
 
-// The tiny contextual Bean bubble and its compact mini action menu. Both live in
-// NON-activating, non-key panels so they never steal typing focus from the
-// user's app (target acquisition stays safe).
+// The contextual Bean bubble stays passive while typing. Its menu only becomes
+// key when the user deliberately clicks/presses the launcher; hover-opened UI
+// remains nonactivating so target acquisition stays safe.
 @MainActor
 final class BeanBubbleController {
-    private var bubblePanel: NSPanel?
-    private var menuPanel: NSPanel?
+    private var bubblePanel: NonKeyBubblePanel?
+    private var menuPanel: NonKeyBubblePanel?
+    private var menuFocusSession: OverlaySourceFocusSession?
 
-    private let bubbleSize: CGFloat = 24
+    private let bubbleSize = OverlayGeometry.beanLauncherSize
 
     // Drag state. The bubble can be dragged off text that it covers; the offset
     // (in AppKit screen coords, y-up) is owned by the service and reapplied to the
@@ -25,7 +26,8 @@ final class BeanBubbleController {
     // MARK: - Bubble
 
     func showBubble(at point: CGPoint, savedOffset: CGSize, openOnHover: Bool,
-                    onOpen: @escaping () -> Void, onDismiss: @escaping () -> Void,
+                    onOpen: @escaping (OverlayActivationIntent) -> Void,
+                    onDismiss: @escaping () -> Void,
                     onCommitOffset: @escaping (CGSize) -> Void, onReset: @escaping () -> Void) {
         hide()
         bubbleBaseOrigin = NSPoint(x: point.x, y: point.y)
@@ -42,19 +44,29 @@ final class BeanBubbleController {
         let origin = NSPoint(x: bubbleBaseOrigin.x + savedOffset.width, y: bubbleBaseOrigin.y + savedOffset.height)
         panel.setFrameOrigin(clampedBubbleOrigin(origin))
         bubblePanel = panel
-        panel.alphaValue = 0
-        panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.16
-            panel.animator().alphaValue = 1
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+        } else {
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.16
+                panel.animator().alphaValue = 1
+            }
         }
     }
 
     private func clampedBubbleOrigin(_ p: NSPoint) -> NSPoint {
-        guard let screen = NSScreen.main else { return p }
-        let v = screen.visibleFrame
-        return NSPoint(x: min(max(p.x, v.minX + 2), v.maxX - bubbleSize - 2),
-                       y: min(max(p.y, v.minY + 2), v.maxY - bubbleSize - 2))
+        let screens = OverlayScreenArea.current
+        let center = CGPoint(x: p.x + bubbleSize / 2, y: p.y + bubbleSize / 2)
+        guard let screen = OverlayGeometry.screen(containing: center, from: screens) else { return p }
+        return OverlayGeometry.clampedOrigin(
+            p,
+            panelSize: CGSize(width: bubbleSize, height: bubbleSize),
+            in: screen.visibleFrame,
+            inset: 2
+        )
     }
 
     // SwiftUI drag translation is y-DOWN; AppKit origin is y-UP → subtract height.
@@ -66,9 +78,13 @@ final class BeanBubbleController {
         panel.setFrameOrigin(clampedBubbleOrigin(origin))
     }
 
-    private func endDragBubble(_ t: CGSize, moved: Bool, onOpen: @escaping () -> Void) {
+    private func endDragBubble(
+        _ t: CGSize,
+        moved: Bool,
+        onOpen: @escaping (OverlayActivationIntent) -> Void
+    ) {
         // A press that didn't move past the threshold is a click → open the menu.
-        guard moved, let panel = bubblePanel else { onOpen(); return }
+        guard moved, let panel = bubblePanel else { onOpen(.explicit); return }
         let final = panel.frame.origin
         let offset = CGSize(width: final.x - bubbleBaseOrigin.x, height: final.y - bubbleBaseOrigin.y)
         bubbleSavedOffset = offset
@@ -85,31 +101,71 @@ final class BeanBubbleController {
 
     // MARK: - Mini menu
 
-    func showMenu(near point: CGPoint, onSelect: @escaping (WritingAction) -> Void,
+    func showMenu(near point: CGPoint, intent: OverlayActivationIntent, aiAvailable: Bool,
+                  onSelect: @escaping (WritingAction) -> Void,
+                  onSetUpAI: @escaping (WritingAction) -> Void,
                   onMore: @escaping () -> Void, onCancel: @escaping () -> Void) {
         menuPanel?.orderOut(nil)
-        let view = MiniActionMenuView(onSelect: onSelect, onMore: onMore, onCancel: onCancel)
-        let panel = makePanel(size: NSSize(width: 200, height: 240))
-        panel.contentViewController = NSHostingController(rootView: view)
-        panel.setContentSize(panel.contentViewController!.view.fittingSize)
+        if intent.allowsKeyboardInteraction, menuFocusSession == nil {
+            menuFocusSession = OverlaySourceFocusSession.capture()
+        }
+        let allowsKeyboardInteraction = menuFocusSession != nil
+        let view = MiniActionMenuView(aiAvailable: aiAvailable, onSelect: onSelect,
+                                      onSetUpAI: onSetUpAI, onMore: onMore,
+                                      onCancel: onCancel)
+        let panel = makePanel(size: NSSize(width: 220, height: 240))
+        panel.allowsKeyInteraction = allowsKeyboardInteraction
+        let host = NSHostingController(rootView: view)
+        panel.contentViewController = host
+        panel.onExplicitInteraction = { [weak self, weak panel] in
+            guard let panel else { return }
+            self?.promoteMenuForExplicitInteraction(panel)
+        }
+        panel.setContentSize(host.view.fittingSize)
         positionMenu(panel, near: point)
         menuPanel = panel
-        panel.orderFrontRegardless()
+        if allowsKeyboardInteraction {
+            promoteMenuForExplicitInteraction(panel)
+        } else {
+            panel.orderFrontRegardless()
+        }
     }
 
     func hideMenu() {
+        let shouldRefreshDock = menuPanel?.allowsKeyInteraction == true
         menuPanel?.orderOut(nil)
         menuPanel = nil
+        let focusSession = menuFocusSession
+        menuFocusSession = nil
+        focusSession?.restoreIfAppropriate()
+        if shouldRefreshDock { DockPresence.refreshAfterWindowChange() }
+    }
+
+    private func promoteMenuForExplicitInteraction(_ panel: NonKeyBubblePanel) {
+        guard menuPanel === panel else { return }
+        if menuFocusSession == nil {
+            menuFocusSession = OverlaySourceFocusSession.capture()
+        }
+        panel.allowsKeyInteraction = true
+        panel.becomesKeyOnlyIfNeeded = false
+        DockPresence.prepareExplicitOverlay(panel, kind: "bean-menu")
+        if let contentView = panel.contentViewController?.view {
+            panel.initialFirstResponder = contentView
+        }
+        panel.makeKeyAndOrderFront(nil)
+        if let contentView = panel.contentViewController?.view {
+            panel.makeFirstResponder(contentView)
+        }
     }
 
     func hide() {
         bubblePanel?.orderOut(nil); bubblePanel = nil
-        menuPanel?.orderOut(nil); menuPanel = nil
+        hideMenu()
     }
 
     // MARK: - Panels
 
-    private func makePanel(size: NSSize) -> NSPanel {
+    private func makePanel(size: NSSize) -> NonKeyBubblePanel {
         let panel = NonKeyBubblePanel(contentRect: NSRect(origin: .zero, size: size),
                                       styleMask: [.borderless, .nonactivatingPanel],
                                       backing: .buffered, defer: false)
@@ -124,51 +180,66 @@ final class BeanBubbleController {
     }
 
     private func positionMenu(_ panel: NSPanel, near point: CGPoint) {
-        guard let screen = NSScreen.main else { return }
-        let visible = screen.visibleFrame
-        let size = panel.frame.size
-        // Below-left of the bubble by default; clamp on-screen.
-        var x = point.x
-        var y = point.y - size.height - 4
-        x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
-        if y < visible.minY + 8 { y = point.y + 28 } // flip above if no room below
-        y = min(max(y, visible.minY + 8), visible.maxY - size.height - 8)
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        let screens = OverlayScreenArea.current
+        guard let screen = OverlayGeometry.screen(containing: point, from: screens) else { return }
+        panel.setFrameOrigin(OverlayGeometry.menuOrigin(
+            below: point,
+            panelSize: panel.frame.size,
+            in: screen.visibleFrame,
+            accessoryHeight: bubbleSize
+        ))
     }
 }
 
 private final class NonKeyBubblePanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    var allowsKeyInteraction = false
+    var onExplicitInteraction: (() -> Void)?
+    override var canBecomeKey: Bool { allowsKeyInteraction }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown { onExplicitInteraction?() }
+        super.sendEvent(event)
+    }
 }
 
 // MARK: - Bubble view
 
 struct BeanBubbleView: View {
     let openOnHover: Bool
-    let onOpen: () -> Void
+    let onOpen: (OverlayActivationIntent) -> Void
     let onDismiss: () -> Void
     var onDragChanged: (CGSize) -> Void = { _ in }
     var onDragEnded: (CGSize, Bool) -> Void = { _, _ in }
     @State private var hovering = false
     @State private var dragging = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // Past this many points a press is a drag, not a click.
     private let dragThreshold: CGFloat = 4
 
     var body: some View {
-        BeanMark(size: 24)
+        BeanMark(size: OverlayGeometry.beanLauncherSize)
+            .frame(
+                width: OverlayGeometry.beanLauncherSize,
+                height: OverlayGeometry.beanLauncherSize
+            )
             .opacity(hovering ? 1.0 : 0.82)
             .scaleEffect(dragging ? 1.12 : (hovering ? 1.06 : 1.0))
             .shadow(color: .black.opacity(0.22), radius: (hovering || dragging) ? 4 : 2, y: 1)
-            .animation(.easeOut(duration: 0.12), value: hovering)
-            .animation(.easeOut(duration: 0.10), value: dragging)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: dragging)
             .contentShape(Rectangle())
             .help("Click Bean to choose an action — drag it if it covers your text")
             .onHover { h in
                 hovering = h
-                if h && openOnHover && !dragging { onOpen() }
+                if h && openOnHover && !dragging { onOpen(.passiveHover) }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Open Bean")
+            .accessibilityHint("Shows writing actions")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { onOpen(.explicit) }
             // minimumDistance 0 so a plain click also routes here: zero movement →
             // treated as a click (open menu); movement past threshold → drag.
             .gesture(
@@ -191,13 +262,11 @@ struct BeanBubbleView: View {
 // MARK: - Mini menu view
 
 struct MiniActionMenuView: View {
+    let aiAvailable: Bool
     let onSelect: (WritingAction) -> Void
+    let onSetUpAI: (WritingAction) -> Void
     let onMore: () -> Void
     let onCancel: () -> Void
-
-    // Highest-value subset of actions.
-    private let actions: [WritingAction] = [.localQuickCheck, .proofread, .makeClearer,
-                                             .makeConcise, .draftReply, .composeMessage]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -208,14 +277,23 @@ struct MiniActionMenuView: View {
             }
             .padding(.bottom, 2)
 
-            ForEach(actions) { action in
-                MiniRow(symbol: action.symbolName, title: miniLabel(action)) { onSelect(action) }
+            ForEach(WritingAction.primaryActions) { action in
+                let requiresSetup = action.requiresAISetup(aiAvailable: aiAvailable)
+                MiniRow(symbol: requiresSetup ? "lock.fill" : action.symbolName,
+                        title: action.displayName,
+                        detail: requiresSetup ? "Set Up AI" : nil) {
+                    if requiresSetup {
+                        onSetUpAI(action)
+                    } else {
+                        onSelect(action)
+                    }
+                }
             }
             Divider().opacity(0.4).padding(.vertical, 2)
-            MiniRow(symbol: "ellipsis.circle", title: "More…") { onMore() }
+            MiniRow(symbol: "ellipsis.circle", title: "More…", detail: nil) { onMore() }
         }
         .padding(8)
-        .frame(width: 200)
+        .frame(width: 220)
         .tint(BeanDesign.accent)
         .background(
             RoundedRectangle(cornerRadius: BeanDesign.Radius.card)
@@ -224,21 +302,18 @@ struct MiniActionMenuView: View {
         )
         .onExitCommand(perform: onCancel)
     }
-
-    private func miniLabel(_ action: WritingAction) -> String {
-        switch action {
-        case .draftReply: return "Reply"
-        case .composeMessage: return "Compose"
-        default: return action.displayName
-        }
-    }
 }
 
 private struct MiniRow: View {
     let symbol: String
     let title: String
+    let detail: String?
     let onTap: () -> Void
     @State private var hovering = false
+
+    private var accessibilityTitle: String {
+        detail.map { "\(title), \($0)" } ?? title
+    }
 
     var body: some View {
         Button(action: onTap) {
@@ -246,12 +321,20 @@ private struct MiniRow: View {
                 Image(systemName: symbol).frame(width: 16).foregroundColor(BeanDesign.accent)
                 Text(title).font(.system(size: 13))
                 Spacer()
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
             }
             .padding(.vertical, 4).padding(.horizontal, 6)
+            .frame(minHeight: OverlayGeometry.minimumMotorTarget)
             .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? BeanDesign.accent.opacity(0.12) : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .accessibilityLabel(accessibilityTitle)
+        .accessibilityHint(detail == "Set Up AI" ? "Opens AI setup" : "Runs \(title)")
     }
 }

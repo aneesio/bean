@@ -12,7 +12,7 @@ enum TextInputMode {
         }
     }
 
-    /// Explicit label used in the `<context>` block of the correction request.
+    /// Fixed label used in the structured provider payload.
     var rawLabel: String {
         switch self {
         case .selectedText: return "selectedText"
@@ -56,10 +56,13 @@ struct SourceAppContext {
 
     /// Short, human-readable description for OPERATIONAL logs only (no text).
     var logDescription: String {
-        let name = appName ?? "unknown app"
+        // Always-on logs use only Bean's fixed coarse category. A localized app
+        // name is still useful in explicit local history/support views after
+        // sanitization, but it must not enter the unified log implicitly.
+        let category = AppCategory.from(bundleIdentifier: bundleIdentifier).rawValue
         switch acquisitionMode {
-        case .selectedText: return "selected text from \(name)"
-        case .focusedFieldFullText: return "focused field full text from \(name)"
+        case .selectedText: return "selected text from \(category) app"
+        case .focusedFieldFullText: return "focused field full text from \(category) app"
         }
     }
 

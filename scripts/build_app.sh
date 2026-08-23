@@ -70,11 +70,15 @@ cp "$EXE" "$APP/Contents/MacOS/Bean"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
-# Ship useful docs inside the bundle so Settings and Finder users can open them.
-for doc in README TESTING PRIVACY LICENSE; do
-    if [[ -f "$ROOT/$doc.md" ]]; then
-        cp "$ROOT/$doc.md" "$APP/Contents/Resources/$doc.md"
-    fi
+# Ship the complete public-release documentation contract inside every app
+# bundle. The ZIP contains only Bean.app, so silently skipping one of these
+# files would make the ZIP less complete than the DMG staging directory.
+for doc in README TESTING QA_TEST_PLAN SUPPORT SUPPORTED_APPS PRIVACY LICENSE CHANGELOG; do
+    [[ -s "$ROOT/$doc.md" ]] || {
+        echo "error: required bundled document is missing or empty: $doc.md" >&2
+        exit 1
+    }
+    cp "$ROOT/$doc.md" "$APP/Contents/Resources/$doc.md"
 done
 
 # Copy the app icon if present (regenerate via scripts/generate_icons.sh).

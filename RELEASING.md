@@ -128,7 +128,7 @@ Before tagging any public release:
   prerelease label, failure copy, and canonical release URL;
 - confirm no launch hook, timer, background task, download code, or installer is
   connected to `UpdateChecker`;
-- use a clean preference domain to verify Bean Bubble, Passive Suggestions,
+- use a clean preference domain to verify Bean Bubble, Live suggestions,
   Inline Highlights, browser AI checks, diagnostics, and automatic provider
   calls start off;
 - review README, Privacy, release notes, DMG title, and GitHub release title so

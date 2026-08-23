@@ -35,6 +35,109 @@
     return { start: first, end: first + original.length };
   }
 
+  function nativeValueSetter(el) {
+    const own = Object.getOwnPropertyDescriptor(el, "value");
+    let proto = Object.getPrototypeOf(el);
+    let inherited = null;
+    while (proto && !inherited) {
+      const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+      if (descriptor && typeof descriptor.set === "function") inherited = descriptor.set;
+      proto = Object.getPrototypeOf(proto);
+    }
+    // React commonly installs an own value tracker. Calling the native
+    // prototype setter bypasses that tracker so the following input event is
+    // observed as a real value transition.
+    if (inherited && (!own || own.set !== inherited)) return inherited;
+    if (own && typeof own.set === "function") return own.set;
+    return inherited;
+  }
+
+  function editEvent(type, replacement) {
+    const options = { bubbles: true, composed: true };
+    if (type === "input" && typeof InputEvent === "function") {
+      try {
+        return new InputEvent("input", {
+          ...options,
+          inputType: "insertReplacementText",
+          data: replacement
+        });
+      } catch (e) {}
+    }
+    return new Event(type, options);
+  }
+
+  // Replaces an exact range in an input/textarea. `execCommand(insertText)` is
+  // attempted first because Chromium records it in native Undo. The fallback
+  // uses the prototype value setter required by React-controlled fields, then
+  // verifies both input/change delivery and the live value after page handlers.
+  function applyTextControlRange(el, start, end, replacement) {
+    if (!el || typeof el.value !== "string" || typeof replacement !== "string") {
+      return { ok: false, nativeUndoPreserved: false, inputEventVerified: false, changeEventVerified: false };
+    }
+    const before = el.value;
+    const expected = replaceRangePreservingBoundaries(before, start, end, replacement);
+    if (expected === null) {
+      return { ok: false, nativeUndoPreserved: false, inputEventVerified: false, changeEventVerified: false };
+    }
+
+    let inputSeen = false;
+    let changeSeen = false;
+    const onInput = () => { inputSeen = true; };
+    const onChange = () => { changeSeen = true; };
+    if (typeof el.addEventListener === "function") {
+      el.addEventListener("input", onInput, true);
+      el.addEventListener("change", onChange, true);
+    }
+
+    let nativeUndoPreserved = false;
+    const active = document.activeElement === el;
+    if (active && typeof el.setSelectionRange === "function" && typeof document.execCommand === "function") {
+      try {
+        el.setSelectionRange(start, end);
+        nativeUndoPreserved = document.execCommand("insertText", false, replacement) === true
+          && el.value === expected;
+      } catch (e) { nativeUndoPreserved = false; }
+    }
+
+    // A page listener may synchronously rewrite another part of the control in
+    // response to execCommand. Never overwrite that newer page/user state with
+    // the whole-value fallback; only fall back when the command left the exact
+    // pre-edit value untouched.
+    const commandLeftUnexpectedValue = el.value !== before && el.value !== expected;
+    if (!commandLeftUnexpectedValue && el.value !== expected) {
+      try {
+        const setter = nativeValueSetter(el);
+        if (setter) setter.call(el, expected);
+        else el.value = expected;
+      } catch (e) {}
+    }
+
+    try {
+      if (!commandLeftUnexpectedValue && !inputSeen) el.dispatchEvent(editEvent("input", replacement));
+      // React and ordinary DOM listeners can synchronously reject/revert the
+      // input. Never report success or dispatch change for a reverted value.
+      if (!commandLeftUnexpectedValue && el.value === expected && !changeSeen) {
+        el.dispatchEvent(editEvent("change", replacement));
+      }
+    } catch (e) {}
+
+    const ok = el.value === expected && inputSeen && changeSeen;
+    if (ok && typeof el.setSelectionRange === "function") {
+      const caret = start + replacement.length;
+      try { el.setSelectionRange(caret, caret); } catch (e) {}
+    }
+    if (typeof el.removeEventListener === "function") {
+      el.removeEventListener("input", onInput, true);
+      el.removeEventListener("change", onChange, true);
+    }
+    return {
+      ok,
+      nativeUndoPreserved,
+      inputEventVerified: inputSeen,
+      changeEventVerified: changeSeen
+    };
+  }
+
   let mirror = null;
   function getMirror() {
     if (mirror) return mirror;
@@ -112,6 +215,108 @@
     } catch (e) { return null; }
   }
 
+  function rangeOffsets(root, range) {
+    if (!root || !range || (range.startContainer !== root && !root.contains(range.startContainer)) ||
+        (range.endContainer !== root && !root.contains(range.endContainer))) return null;
+    try {
+      const beforeStart = document.createRange();
+      beforeStart.selectNodeContents(root);
+      beforeStart.setEnd(range.startContainer, range.startOffset);
+      const beforeEnd = document.createRange();
+      beforeEnd.selectNodeContents(root);
+      beforeEnd.setEnd(range.endContainer, range.endOffset);
+      // cloneContents().textContent uses the same flat text-node representation
+      // as rangeFromOffsets. Range.toString() can synthesize visual separators
+      // around block elements in some editors and would drift from textContent.
+      return {
+        start: beforeStart.cloneContents().textContent.length,
+        end: beforeEnd.cloneContents().textContent.length
+      };
+    } catch (e) { return null; }
+  }
+
+  function rangeFromOffsets(root, start, end) {
+    if (!root || start < 0 || end < start) return null;
+    const segments = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let flatLength = 0, node;
+    while ((node = walker.nextNode())) {
+      segments.push({ node, start: flatLength, end: flatLength + node.nodeValue.length });
+      flatLength += node.nodeValue.length;
+    }
+    if (end > flatLength || !segments.length) return null;
+    const locate = (position, preferPrevious) => {
+      for (let i = 0; i < segments.length; i++) {
+        const segment = segments[i];
+        if (position < segment.end || (position === segment.end && preferPrevious)) {
+          return { node: segment.node, offset: position - segment.start };
+        }
+      }
+      const last = segments[segments.length - 1];
+      return position === flatLength ? { node: last.node, offset: last.node.nodeValue.length } : null;
+    };
+    const a = locate(start, false), b = locate(end, true);
+    if (!a || !b) return null;
+    try {
+      const range = document.createRange();
+      range.setStart(a.node, a.offset);
+      range.setEnd(b.node, b.offset);
+      return range;
+    } catch (e) { return null; }
+  }
+
+  // Applies an exact contenteditable Range while retaining the browser's native
+  // Undo entry whenever execCommand is available. The manual DOM fallback is
+  // used only when the command left the editor untouched; a partial or
+  // unexpected page mutation is refused rather than compounded.
+  function applyContentEditableRange(root, range, replacement, expectedText) {
+    if (!root || !range || typeof replacement !== "string" || typeof expectedText !== "string") {
+      return { ok: false, nativeUndoPreserved: false, inputEventVerified: false, changeEventVerified: false };
+    }
+    const offsets = rangeOffsets(root, range);
+    if (!offsets) {
+      return { ok: false, nativeUndoPreserved: false, inputEventVerified: false, changeEventVerified: false };
+    }
+    const before = root.textContent;
+    let inputSeen = false, changeSeen = false;
+    const onInput = () => { inputSeen = true; };
+    const onChange = () => { changeSeen = true; };
+    root.addEventListener("input", onInput, true);
+    root.addEventListener("change", onChange, true);
+
+    let nativeUndoPreserved = false;
+    try {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      if (typeof document.execCommand === "function") {
+        nativeUndoPreserved = document.execCommand("insertText", false, replacement) === true &&
+          root.textContent === expectedText;
+      }
+    } catch (e) { nativeUndoPreserved = false; }
+
+    if (root.textContent === before) {
+      // A failed command can invalidate/collapse its Range. Rebuild from the
+      // captured offsets before taking the narrow DOM fallback.
+      const fallbackRange = rangeFromOffsets(root, offsets.start, offsets.end);
+      try {
+        if (fallbackRange) {
+          fallbackRange.deleteContents();
+          fallbackRange.insertNode(document.createTextNode(replacement));
+        }
+      } catch (e) {}
+    }
+
+    try {
+      if (root.textContent === expectedText && !inputSeen) root.dispatchEvent(editEvent("input", replacement));
+      if (root.textContent === expectedText && !changeSeen) root.dispatchEvent(editEvent("change", replacement));
+    } catch (e) {}
+    const ok = root.textContent === expectedText && inputSeen && changeSeen;
+    root.removeEventListener("input", onInput, true);
+    root.removeEventListener("change", onChange, true);
+    return { ok, nativeUndoPreserved, inputEventVerified: inputSeen, changeEventVerified: changeSeen };
+  }
+
   // Replaces a contenteditable Range with `text`, preserving undo where possible.
   function applyRange(range, text) {
     try {
@@ -130,9 +335,24 @@
 
   // Boundary-preserving splice for value-based fields. Replaces only [start,end)
   // and keeps everything outside it byte-for-byte (newlines, paragraph breaks).
-  // Returns null on invalid bounds.
+  function lineBreakSignature(value) {
+    if (typeof value !== "string") return null;
+    return value.match(/\r\n|[\r\n\u2028\u2029]/g) || [];
+  }
+
+  function hasMatchingLineBreakStructure(original, replacement) {
+    const before = lineBreakSignature(original);
+    const after = lineBreakSignature(replacement);
+    return !!before && !!after && before.length === after.length
+      && before.every((boundary, index) => boundary === after[index]);
+  }
+
+  // The replacement must preserve the exact CR/LF boundary sequence inside the
+  // selected range too. Returns null on invalid bounds or boundary drift.
   function replaceRangePreservingBoundaries(text, start, end, replacement) {
-    if (start < 0 || end > text.length || start > end) return null;
+    if (typeof text !== "string" || typeof replacement !== "string"
+        || start < 0 || end > text.length || start > end
+        || !hasMatchingLineBreakStructure(text.slice(start, end), replacement)) return null;
     return text.slice(0, start) + replacement + text.slice(end);
   }
 
@@ -170,8 +390,10 @@
   }
 
   window.BeanMapping = {
-    uniqueOffset, textareaRects, rectsFromRange, findUniqueRange, applyRange,
-    replaceRangePreservingBoundaries, sanitizeProofreadParagraphOutput,
+    uniqueOffset, applyTextControlRange, textareaRects, rectsFromRange,
+    findUniqueRange, rangeOffsets, rangeFromOffsets, applyRange, applyContentEditableRange,
+    replaceRangePreservingBoundaries, hasMatchingLineBreakStructure,
+    sanitizeProofreadParagraphOutput,
     // back-compat helper used only for textarea/input
     rectsForRange: (el, start, end) => textareaRects(el, start, end)
   };

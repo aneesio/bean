@@ -3,6 +3,58 @@
 <head>
   <meta charset="utf-8" />
   <title>Bean extension — test fixture</title>
+  <script>
+    // `?beanqa=1` runs the real content/overlay scripts against a content-free,
+    // local-only Chrome API mock. The marker also makes an installed extension's
+    // isolated-world copy yield, so this page never displays duplicate overlays.
+    const beanQAParams = new URLSearchParams(location.search);
+    if (beanQAParams.get("beanqa") === "1") {
+      document.documentElement.dataset.beanQaMode = "mock";
+      const qaReviewMode = beanQAParams.get("beanreview") === "1";
+      const qaSettings = { blockedSites: [] };
+      window.chrome = {
+        storage: {
+          local: {
+            get: (_keys, callback) => callback({ ...qaSettings }),
+            set: (values, callback) => { Object.assign(qaSettings, values); if (callback) callback(); }
+          },
+          onChanged: { addListener: () => {} }
+        },
+        runtime: {
+          id: "bean-fixture-mock",
+          lastError: null,
+          getURL: (resource) => new URL("../../" + resource, location.href).href,
+          sendMessage: (message, callback) => {
+            // No request payload or page text is retained. Normal QA keeps the
+            // provider gate closed; beanreview mode returns a delayed, local
+            // review-required response so the full safety UI can be exercised.
+            if (!callback) return;
+            if (message && message.type === "getStatus") {
+              callback({ ok: true, bridgeAvailable: true, protocolVersion: 1, compatible: true,
+                         providerConfigured: qaReviewMode, webInlineEnabled: true,
+                         automaticAccountingAvailable: true,
+                         browserAIEnabled: qaReviewMode, requestTimeoutSeconds: 30 });
+            } else if (qaReviewMode && message && message.type === "detectIssues") {
+              callback({ ok: true, issues: [] });
+            } else if (qaReviewMode && message && message.type === "proofreadParagraph") {
+              const corrected = String(message.request && message.request.text || "")
+                .replace(/\brecieve\b/g, "receive")
+                .replace(/\bteh\b/g, "the")
+                .replace(/\btommorow\b/g, "tomorrow");
+              setTimeout(() => callback({
+                ok: true,
+                text: corrected,
+                reviewRequired: true,
+                message: "Local QA deliberately requires before/after review."
+              }), 600);
+            } else {
+              callback({ ok: false, errorCode: "qaLocalOnly" });
+            }
+          }
+        }
+      };
+    }
+  </script>
   <style>
     body { font: 15px -apple-system, system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1d1d1f; }
     h2 { font-size: 14px; margin: 24px 0 6px; color: #555; }
@@ -11,14 +63,19 @@
     .ce { border: 1px solid #ccc; border-radius: 8px; padding: 8px; min-height: 70px; }
     .codeish { font-family: ui-monospace, Menlo, monospace; white-space: pre; }
     .note { color: #888; font-size: 12px; }
+    .qa-banner { display:none; position:sticky; top:12px; z-index:10; padding:10px 12px;
+                 border:1px solid #bd7f3c; border-radius:10px; background:#fff8ef; color:#6b431d; }
+    html[data-bean-qa-mode="mock"] .qa-banner { display:block; }
+    input:disabled { opacity:.55; }
   </style>
 </head>
 <body>
   <h1>Bean extension test fixture</h1>
-  <p class="note">Load the extension (chrome://extensions → Load unpacked → BrowserExtension), enable it in Options, then type/edit below and wait ~0.7s. Hover or click an underline to see the correction card. <strong>No real data here.</strong></p>
+  <div class="qa-banner" role="status"><strong>Local QA mode.</strong> Production scripts are running with a no-storage mock, so page text cannot leave this fixture. Focus the first field, wait for underlines, open a correction, Apply, Undo, then use More → Disable on this field → Re-enable. Add <code>&amp;beanreview=1</code>, make one edit, and choose AI Proofread Paragraph to test the busy and before/after review states locally.</div>
+  <p class="note">Open <code>editor.html?beanqa=1</code> for self-running local QA—no extension setup required. Without that query, load the extension normally, edit below, and wait ~1.2s. Hover or click an underline to see the correction card. <strong>No real data here.</strong></p>
 
   <h2>Textarea (supported)</h2>
-  <textarea id="ta">i has a apple and  it dont work,next we will recieve teh package tommorow.</textarea>
+  <textarea id="ta" autofocus>i has a apple and  it dont work,next we will recieve teh package tommorow.</textarea>
 
   <h2>Text input (supported)</h2>
   <input type="text" id="ti" value="this  is definately a calender issue" />
@@ -34,9 +91,9 @@
     <div>This is definitely so much better. and keeps going forwaforward the fixes. Quite impressive, actually.</div>
   </div>
 
-  <h2>Fix Paragraph — textarea (whole-paragraph proofread in one pass)</h2>
-  <p class="note">The first line has multiple issues → a tiny Bean icon appears at the line's left. Click it → <strong>Fix Paragraph</strong> proofreads the WHOLE paragraph in one go (spelling + punctuation + capitalization + spacing), e.g. <code>okay here's the next attemp . let's see if it shows its magic.</code> → <code>Okay, here's the next attempt. Let's see if it shows its magic.</code>. No repeated passes. The single-issue last line gets <em>no</em> icon. (Needs the native bridge + Web Inline + API key for the full proofread; otherwise local fallback fixes obvious typos only.)</p>
-  <textarea id="para-ta">okay here's the next attemp . let's see if it shows its magic.
+  <h2>Paragraph action — textarea</h2>
+  <p class="note">The first line has multiple issues → a tiny Bean icon appears at the line's left. Before a user edit, <strong>Fix Obvious Issues</strong> runs locally and sends no text. After editing that paragraph, <strong>AI Proofread Paragraph</strong> may send only that changed paragraph through the Bean app. If AI is unavailable, Bean says so and applies only obvious local fixes. The single-issue last line gets <em>no</em> icon.</p>
+  <textarea id="para-ta">okay here's teh next attempt. let's see if it shows its magic,tommorow.
 
 this paragraph is fine.
 
@@ -44,7 +101,7 @@ just one typo: tommorow.</textarea>
 
   <h2>Fix Paragraph — line breaks preserved (fix first paragraph only)</h2>
   <p class="note">Fix the first paragraph; the blank line and the second paragraph must stay exactly as-is.</p>
-  <textarea id="para-lb">okay here's the next attemp . let's see if it works.
+  <textarea id="para-lb">okay here's teh next attempt. let's see if it works,tommorow.
 
 this is the next paragraf .</textarea>
 
@@ -76,11 +133,26 @@ the next paragraph must stay separate.</textarea>
   <h2>Search (ignored by default)</h2>
   <input type="search" value="best coffee beans calgary" />
 
+  <h2>ARIA searchbox (ignored)</h2>
+  <div class="ce" role="searchbox" contenteditable="true">private recieve search text</div>
+
+  <h2>One-time code (must never be inspected)</h2>
+  <input type="text" autocomplete="one-time-code" inputmode="numeric" value="482193" />
+
+  <h2>Card number (must never be inspected)</h2>
+  <input type="text" autocomplete="cc-number" value="4111 1111 1111 1111" />
+
+  <h2>Numeric verification code (must never be inspected)</h2>
+  <input type="text" inputmode="numeric" aria-label="Verification code" value="739204" />
+
   <h2>Email (ignored)</h2>
   <input type="email" value="someone@example.com" />
 
   <h2>Read-only (ignored)</h2>
   <textarea readonly>this is readonly and should not be checked, recieve.</textarea>
+
+  <h2>Disabled (ignored)</h2>
+  <input type="text" disabled value="this disabled control must never be checked, recieve." />
 
   <h2>Code-like editor block (should be ignored)</h2>
   <div class="ace_editor"><div class="ce codeish" contenteditable="true">const x = recieve(); // dont touch this</div></div>
@@ -89,6 +161,31 @@ the next paragraph must stay separate.</textarea>
   <textarea id="long"></textarea>
   <script>
     document.getElementById('long').value = ('this is a long paragraph with teh occasional typo. ').repeat(60);
+
+    if (document.documentElement.dataset.beanQaMode === "mock") {
+      const sources = [
+        "../../src/localDetector.js",
+        "../../src/trustPolicy.js",
+        "../../src/issueMapping.js",
+        "../../src/overlay.js",
+        "../../src/contentScript.js"
+      ];
+      const qaRun = Date.now().toString(36);
+      let sequence = Promise.resolve();
+      for (const src of sources) {
+        sequence = sequence.then(() => new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = src + "?qa=" + qaRun;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error("Could not load " + src));
+          document.body.appendChild(script);
+        }));
+      }
+      sequence.catch((error) => {
+        const banner = document.querySelector(".qa-banner");
+        banner.textContent = "QA fixture failed to start: " + error.message;
+      });
+    }
   </script>
 </body>
 </html>

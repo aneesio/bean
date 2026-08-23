@@ -5,6 +5,64 @@ import AppKit
 // colors scattered across views. Everything adapts to light/dark.
 enum BeanDesign {
 
+    /// Testable sRGB values keep accessibility decisions explicit instead of
+    /// burying contrast-critical colors inside opaque SwiftUI values.
+    struct SRGB: Equatable {
+        let red: Double
+        let green: Double
+        let blue: Double
+
+        init(_ red: Int, _ green: Int, _ blue: Int) {
+            self.red = Double(red) / 255
+            self.green = Double(green) / 255
+            self.blue = Double(blue) / 255
+        }
+
+        var nsColor: NSColor {
+            NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+        }
+
+        var relativeLuminance: Double {
+            func linear(_ component: Double) -> Double {
+                component <= 0.04045
+                    ? component / 12.92
+                    : pow((component + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        }
+
+        func contrastRatio(against other: SRGB) -> Double {
+            let brighter = max(relativeLuminance, other.relativeLuminance)
+            let darker = min(relativeLuminance, other.relativeLuminance)
+            return (brighter + 0.05) / (darker + 0.05)
+        }
+    }
+
+    enum Palette {
+        static let lightSurface = SRGB(255, 255, 255)
+        static let darkSurface = SRGB(30, 30, 30)
+
+        // Caramel remains part of the brand, but the lighter value is reserved
+        // for illustration and non-text decoration.
+        static let decorativeAccentLight = SRGB(194, 130, 69)
+        static let decorativeAccentDark = SRGB(224, 161, 94)
+
+        // Interactive/text accents meet WCAG AA against their intended surface.
+        static let interactiveAccentLight = SRGB(138, 76, 23)
+        static let interactiveAccentDark = SRGB(224, 161, 94)
+        static let secondaryTextLight = SRGB(70, 70, 70)
+        static let secondaryTextDark = SRGB(199, 199, 199)
+
+        static let successLight = SRGB(30, 107, 58)
+        static let successDark = SRGB(109, 213, 140)
+        static let warningLight = SRGB(138, 79, 0)
+        static let warningDark = SRGB(241, 179, 91)
+        static let dangerLight = SRGB(161, 38, 34)
+        static let dangerDark = SRGB(255, 138, 128)
+        static let infoLight = SRGB(26, 95, 158)
+        static let infoDark = SRGB(117, 183, 242)
+    }
+
     // MARK: - Spacing
     enum Spacing {
         static let xs: CGFloat = 4
@@ -22,11 +80,20 @@ enum BeanDesign {
         static let lg: CGFloat = 16
     }
 
+    // MARK: - Interaction
+    static let minimumTargetSize: CGFloat = 28
+    static let comfortableTargetSize: CGFloat = 32
+
     // MARK: - Semantic colors
-    /// Warm, restrained coffee accent (amber/caramel, not brown).
+    /// Contrast-safe brand color for controls, links, selection, and text.
     static let accent = Color.beanDynamic(
-        light: NSColor(srgbRed: 0.76, green: 0.51, blue: 0.27, alpha: 1),
-        dark:  NSColor(srgbRed: 0.85, green: 0.65, blue: 0.41, alpha: 1)
+        light: Palette.interactiveAccentLight.nsColor,
+        dark: Palette.interactiveAccentDark.nsColor
+    )
+    /// Lighter caramel for artwork and backgrounds; never use for small text.
+    static let decorativeAccent = Color.beanDynamic(
+        light: Palette.decorativeAccentLight.nsColor,
+        dark: Palette.decorativeAccentDark.nsColor
     )
     /// Subtle warm background for hero/onboarding surfaces.
     static let warmBackground = Color.beanDynamic(
@@ -37,12 +104,46 @@ enum BeanDesign {
         light: NSColor.white,
         dark:  NSColor(white: 0.165, alpha: 1)
     )
-    static let subtleBorder = Color.primary.opacity(0.08)
+    static let secondaryText = Color.beanDynamic(
+        light: Palette.secondaryTextLight.nsColor,
+        dark: Palette.secondaryTextDark.nsColor
+    )
+    static let subtleBorder = Color.beanDynamic(
+        light: NSColor(srgbRed: 0.80, green: 0.77, blue: 0.73, alpha: 1),
+        dark: NSColor(srgbRed: 0.33, green: 0.31, blue: 0.29, alpha: 1)
+    )
+    static let strongBorder = Color.beanDynamic(
+        light: NSColor(srgbRed: 0.55, green: 0.50, blue: 0.45, alpha: 1),
+        dark: NSColor(srgbRed: 0.55, green: 0.52, blue: 0.48, alpha: 1)
+    )
 
-    static let success = Color.green
-    static let warning = Color.orange
-    static let danger  = Color.red
-    static let info    = Color.blue
+    static let success = Color.beanDynamic(
+        light: Palette.successLight.nsColor,
+        dark: Palette.successDark.nsColor
+    )
+    static let warning = Color.beanDynamic(
+        light: Palette.warningLight.nsColor,
+        dark: Palette.warningDark.nsColor
+    )
+    static let danger = Color.beanDynamic(
+        light: Palette.dangerLight.nsColor,
+        dark: Palette.dangerDark.nsColor
+    )
+    static let info = Color.beanDynamic(
+        light: Palette.infoLight.nsColor,
+        dark: Palette.infoDark.nsColor
+    )
+
+    /// AppKit's display option is available before macOS 14, unlike SwiftUI's
+    /// `accessibilityContrast` environment value. Components observe the
+    /// matching workspace notification so this remains live on macOS 13.
+    static var increaseContrast: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+    }
+
+    static func border(increasedContrast: Bool) -> Color {
+        increasedContrast ? strongBorder : subtleBorder
+    }
 
     // MARK: - Typography
     enum Typography {
@@ -50,7 +151,8 @@ enum BeanDesign {
         static func title() -> Font { .system(size: 20, weight: .semibold) }
         static func sectionTitle() -> Font { .system(size: 13, weight: .semibold) }
         static func body() -> Font { .system(size: 13) }
-        static func caption() -> Font { .system(size: 11) }
+        static func caption() -> Font { .system(size: 12) }
+        static func smallCaption() -> Font { .system(size: 11) }
     }
 }
 

@@ -33,10 +33,17 @@ final class UsageAccountingTests: XCTestCase {
     func testLedgerAggregatesSourcesAndEnforcesAutomaticLimit() throws {
         let suite = "UsageLedgerTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = temporaryCoordinationDirectory("UsageLedgerAggregate")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let ledger = UsageLedgerStore(defaults: defaults, storageKey: "usage", calendar: calendar)
+        let ledger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage", calendar: calendar,
+            coordinationDirectoryURL: directory
+        )
         let now = Date()
 
         ledger.record(LLMUsage(inputTokens: 100, outputTokens: 20, isEstimated: false),
@@ -53,7 +60,10 @@ final class UsageAccountingTests: XCTestCase {
         XCTAssertFalse(ledger.allowsAutomaticCall(dailyLimit: 1, now: now))
         XCTAssertTrue(ledger.allowsAutomaticCall(dailyLimit: 2, now: now))
 
-        let reloaded = UsageLedgerStore(defaults: defaults, storageKey: "usage", calendar: calendar)
+        let reloaded = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage", calendar: calendar,
+            coordinationDirectoryURL: directory
+        )
         XCTAssertEqual(reloaded.summary(days: 30, now: now), summary)
     }
 
@@ -61,9 +71,16 @@ final class UsageAccountingTests: XCTestCase {
     func testClearingUsageLeavesOtherPreferencesUntouchedAndStoresNoText() throws {
         let suite = "UsageLedgerPrivacyTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = temporaryCoordinationDirectory("UsageLedgerPrivacy")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
         defaults.set("anthropic", forKey: "provider")
-        let ledger = UsageLedgerStore(defaults: defaults, storageKey: "usage")
+        let ledger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
         ledger.record(LLMUsage(inputTokens: 12, outputTokens: 3, isEstimated: false),
                       source: .webInline, provider: "anthropic", model: "claude-haiku-4-5")
 
@@ -82,18 +99,278 @@ final class UsageAccountingTests: XCTestCase {
     func testSeparateNativeHostAndAppWritersMergeBeforePersisting() throws {
         let suite = "UsageLedgerMergeTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let appLedger = UsageLedgerStore(defaults: defaults, storageKey: "usage")
-        let hostLedger = UsageLedgerStore(defaults: defaults, storageKey: "usage")
+        let directory = temporaryCoordinationDirectory("UsageLedgerMerge")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let appLedger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
+        let hostLedger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
 
         hostLedger.record(LLMUsage(inputTokens: 20, outputTokens: 2, isEstimated: false),
                           source: .webInline, provider: "openai", model: "gpt-5-nano")
         appLedger.record(LLMUsage(inputTokens: 30, outputTokens: 3, isEstimated: false),
                          source: .manual, provider: "openai", model: "gpt-5-nano")
 
-        let reloaded = UsageLedgerStore(defaults: defaults, storageKey: "usage")
+        let reloaded = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
         XCTAssertEqual(reloaded.summary(days: 1).operationCount, 2)
         XCTAssertEqual(reloaded.summary(days: 1).totalTokens, 55)
+    }
+
+    @MainActor
+    func testRetentionPruningIsPersistedWhileSharedLockIsHeld() throws {
+        let suite = "UsageLedgerDurableRetention.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let directory = temporaryCoordinationDirectory("UsageLedgerDurableRetention")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+        let staleDay = try XCTUnwrap(calendar.date(
+            byAdding: .day,
+            value: -(UsageLedgerStore.retentionDays + 1),
+            to: today
+        ))
+        let retained = DailyUsageBucket(
+            day: today, source: .manual, provider: "openai", model: "gpt-5-nano",
+            inputTokens: 10, outputTokens: 2,
+            operationCount: 1, estimatedOperationCount: 0
+        )
+        let stale = DailyUsageBucket(
+            day: staleDay, source: .manual, provider: "openai", model: "gpt-5-nano",
+            inputTokens: 99, outputTokens: 9,
+            operationCount: 1, estimatedOperationCount: 0
+        )
+        defaults.set(try JSONEncoder().encode([retained, stale]), forKey: "usage")
+
+        let ledger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage", calendar: calendar,
+            coordinationDirectoryURL: directory
+        )
+
+        XCTAssertEqual(ledger.buckets, [retained])
+        let persisted = try JSONDecoder().decode(
+            [DailyUsageBucket].self,
+            from: XCTUnwrap(defaults.data(forKey: "usage"))
+        )
+        XCTAssertEqual(persisted, [retained],
+                       "Pruned buckets must not return on the next process refresh")
+    }
+
+    @MainActor
+    func testUnavailableSharedLockNeverRewritesRecordsOrClearsPersistedUsage() throws {
+        let suite = "UsageLedgerUnavailableLock.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let directory = temporaryCoordinationDirectory("UsageLedgerUnavailableLock")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = calendar.startOfDay(for: Date())
+        let staleDay = try XCTUnwrap(calendar.date(
+            byAdding: .day,
+            value: -(UsageLedgerStore.retentionDays + 1),
+            to: today
+        ))
+        let seeded = [
+            DailyUsageBucket(
+                day: today, source: .manual, provider: "openai", model: "gpt-5-nano",
+                inputTokens: 10, outputTokens: 2,
+                operationCount: 1, estimatedOperationCount: 0
+            ),
+            DailyUsageBucket(
+                day: staleDay, source: .manual, provider: "openai", model: "gpt-5-nano",
+                inputTokens: 99, outputTokens: 9,
+                operationCount: 1, estimatedOperationCount: 0
+            )
+        ]
+        let seededData = try JSONEncoder().encode(seeded)
+        defaults.set(seededData, forKey: "usage")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent("automatic-call-reservations.lock"),
+            withIntermediateDirectories: false
+        )
+
+        let ledger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage", calendar: calendar,
+            coordinationDirectoryURL: directory
+        )
+        XCTAssertEqual(ledger.buckets, [seeded[0]])
+        XCTAssertEqual(defaults.data(forKey: "usage"), seededData,
+                       "Read-only fallback must not persist its pruned snapshot")
+
+        let inMemorySnapshot = ledger.buckets
+        ledger.record(
+            LLMUsage(inputTokens: 1, outputTokens: 1, isEstimated: false),
+            source: .manual, provider: "openai", model: "gpt-5-nano"
+        )
+        ledger.clear()
+
+        XCTAssertEqual(ledger.buckets, inMemorySnapshot)
+        XCTAssertEqual(defaults.data(forKey: "usage"), seededData)
+    }
+
+    @MainActor
+    func testCorruptLedgerIsNotSilentlyOverwrittenByRecord() throws {
+        let suite = "UsageLedgerCorruptPreservation.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let directory = temporaryCoordinationDirectory("UsageLedgerCorruptPreservation")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let corrupt = Data("not-json".utf8)
+        defaults.set(corrupt, forKey: "usage")
+        let ledger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
+
+        ledger.record(
+            LLMUsage(inputTokens: 1, outputTokens: 1, isEstimated: false),
+            source: .manual, provider: "openai", model: "gpt-5-nano"
+        )
+
+        XCTAssertTrue(ledger.buckets.isEmpty)
+        XCTAssertEqual(defaults.data(forKey: "usage"), corrupt)
+    }
+
+    @MainActor
+    func testExtremeUsageCountersSaturateWithoutCrashingOrProducingInfiniteCost() throws {
+        let suite = "UsageLedgerOverflowSafety.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let directory = temporaryCoordinationDirectory("UsageLedgerOverflowSafety")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+        defaults.set(try JSONEncoder().encode([
+            DailyUsageBucket(
+                day: today, source: .webInline,
+                provider: "openai", model: "gpt-5-nano",
+                inputTokens: Int.max, outputTokens: Int.max,
+                operationCount: Int.max, estimatedOperationCount: Int.max
+            ),
+            DailyUsageBucket(
+                day: today, source: .nativeInline,
+                provider: "custom", model: "unpriced",
+                inputTokens: Int.max, outputTokens: Int.max,
+                operationCount: Int.max, estimatedOperationCount: Int.max
+            )
+        ]), forKey: "usage")
+        let ledger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage", calendar: calendar,
+            coordinationDirectoryURL: directory
+        )
+
+        var summary = ledger.summary(days: 1, now: now)
+        XCTAssertEqual(summary.inputTokens, Int.max)
+        XCTAssertEqual(summary.outputTokens, Int.max)
+        XCTAssertEqual(summary.totalTokens, Int.max)
+        XCTAssertEqual(summary.operationCount, Int.max)
+        XCTAssertEqual(summary.automaticOperationCount, Int.max)
+        XCTAssertEqual(summary.estimatedOperationCount, Int.max)
+        XCTAssertEqual(summary.unpricedOperationCount, Int.max)
+        XCTAssertEqual(summary.averageTokensPerOperation, 1)
+        XCTAssertTrue(summary.estimatedCostUSD.isFinite)
+
+        ledger.record(
+            LLMUsage(inputTokens: Int.max, outputTokens: Int.max, isEstimated: true),
+            source: .webInline, provider: "openai", model: "gpt-5-nano", at: now
+        )
+        summary = ledger.summary(days: 1, now: now)
+        XCTAssertEqual(summary.totalTokens, Int.max)
+        XCTAssertEqual(summary.operationCount, Int.max)
+        XCTAssertEqual(summary.estimatedOperationCount, Int.max)
+        XCTAssertTrue(summary.estimatedCostUSD.isFinite)
+        XCTAssertEqual(ledger.automaticCallsToday(now: now), Int.max)
+        XCTAssertNil(UsageCostEstimator.costUSD(
+            inputTokens: -1, outputTokens: 0,
+            provider: "openai", model: "gpt-5-nano"
+        ))
+    }
+
+    @MainActor
+    func testManualAndAutomaticConcurrentWritersCannotOverwriteEachOther() throws {
+        let suite = "UsageLedgerConcurrentWriters.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BeanUsageConcurrency-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let manualLedger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
+        let finished = DispatchGroup()
+        finished.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let workerDefaults = UserDefaults(suiteName: suite)!
+            let budget = AutomaticCallBudgetStore(
+                defaults: workerDefaults, usageStorageKey: "usage",
+                historyStorageKey: "history", directoryURL: directory
+            )
+            for _ in 0..<20 {
+                let metadata = AutomaticCallMetadata(
+                    source: .webInline,
+                    appName: "example.test",
+                    appBundleIdentifier: nil,
+                    appCategory: "browser",
+                    action: "detectIssues",
+                    inputMode: "focusedFieldFullText",
+                    inputLength: 20,
+                    provider: "test",
+                    model: "test"
+                )
+                guard case .reserved(let reservation) = budget.reserve(
+                    dailyLimit: 100, leaseDuration: 60, metadata: metadata
+                ), reservation.beginProviderAttempt() else { continue }
+                _ = reservation.complete(
+                    usage: LLMUsage(inputTokens: 2, outputTokens: 1, isEstimated: false),
+                    outputLength: 5, safetyResult: "ok", outcome: "issuesReturned"
+                )
+            }
+            finished.leave()
+        }
+
+        for _ in 0..<20 {
+            manualLedger.record(
+                LLMUsage(inputTokens: 1, outputTokens: 1, isEstimated: false),
+                source: .manual, provider: "test", model: "test"
+            )
+        }
+        XCTAssertEqual(finished.wait(timeout: .now() + 5), .success)
+
+        let reloaded = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
+        let summary = reloaded.summary(days: 1)
+        XCTAssertEqual(summary.operationCount, 40)
+        XCTAssertEqual(summary.automaticOperationCount, 20)
+        XCTAssertEqual(summary.totalTokens, 100)
     }
 
     func testKnownModelCostRatesAndUnknownModelExclusion() throws {
@@ -107,5 +384,56 @@ final class UsageAccountingTests: XCTestCase {
         XCTAssertEqual(anthropicCost, 6.0, accuracy: 0.000_001)
         XCTAssertNil(UsageCostEstimator.costUSD(
             inputTokens: 10, outputTokens: 10, provider: "openai", model: "custom-model"))
+    }
+
+    func testInlineProviderBudgetOnlyFillsSlotsLeftAfterLocalIssues() {
+        let remaining = IssueDetector.remainingProviderIssueCapacity(
+            totalLimit: 8, localIssueCount: 7
+        )
+
+        XCTAssertEqual(remaining, 1)
+        XCTAssertEqual(IssueDetector.outputTokenBudget(maximumIssues: remaining), 192)
+        XCTAssertEqual(IssueDetector.remainingProviderIssueCapacity(
+            totalLimit: 8, localIssueCount: 8
+        ), 0)
+    }
+
+    func testEveryNativeAutomaticServiceVerifiesProviderBeforeReservation() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for relativePath in [
+            "Sources/Bean/Core/InlineHighlightService.swift",
+            "Sources/Bean/Core/PassiveSuggestionService.swift"
+        ] {
+            let source = try String(
+                contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+            let verification = try XCTUnwrap(
+                source.range(of: "isProviderConnectionVerified(")?.lowerBound,
+                "\(relativePath) must verify the exact provider/model pair"
+            )
+            let keyRead = try XCTUnwrap(
+                source.range(of: "let apiKey = settings.apiKey")?.lowerBound
+                    ?? source.range(of: "let apiKey = self.settings.apiKey")?.lowerBound
+            )
+            let reservation = try XCTUnwrap(
+                source.range(of: "automaticCallBudget.reserve(")?.lowerBound
+                    ?? source.range(of: "self.automaticCallBudget.reserve(")?.lowerBound
+            )
+            XCTAssertLessThan(verification, keyRead,
+                              "\(relativePath) must verify before reading Keychain")
+            XCTAssertLessThan(verification, reservation,
+                              "\(relativePath) must verify before reserving automatic spend")
+        }
+    }
+
+    private func temporaryCoordinationDirectory(_ prefix: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "\(prefix)-\(UUID().uuidString)",
+            isDirectory: true
+        )
     }
 }

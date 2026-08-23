@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bean for the Web</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --accent:#8a4c17; --accent-strong:#713b10; --ink:#252321; --muted:#6a645e;
+      --paper:#f8f6f2; --surface:#fffdfa; --line:#d8d1c9; --success:#1e6b3a;
+      --warning:#8a4f00; --danger:#a12622;
+    }
+    * { box-sizing:border-box; }
+    body { width:360px; margin:0; background:var(--paper); color:var(--ink);
+           font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { padding:16px; }
+    header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+    .mark { width:38px; height:38px; border-radius:10px; box-shadow:0 4px 12px rgba(70,55,40,.14); }
+    h1 { margin:0; font-size:16px; letter-spacing:-.15px; }
+    .sub { margin:1px 0 0; color:var(--muted); font-size:11px; }
+    .site-card { padding:14px; border:1px solid var(--line); border-radius:14px; background:var(--surface); }
+    .site-head { display:flex; align-items:flex-start; gap:10px; }
+    .site-copy { min-width:0; flex:1; }
+    #site-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
+    #site-detail { margin:3px 0 0; color:var(--muted); font-size:11px; }
+    .pill { flex:0 0 auto; border-radius:999px; padding:3px 8px; background:#eee9e3; color:var(--muted); font-size:10px; font-weight:700; }
+    .pill.active { background:#e5f2e9; color:var(--success); }
+    .pill.blocked { background:#f7e8e5; color:var(--danger); }
+    button { min-height:36px; border:1px solid var(--line); border-radius:10px; padding:7px 11px;
+             background:var(--surface); color:var(--ink); cursor:pointer;
+             font:600 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    button:hover { border-color:var(--accent); }
+    button.primary { border-color:var(--accent); background:var(--accent); color:#fff; }
+    button.primary:hover { background:var(--accent-strong); }
+    button:disabled { cursor:default; opacity:.55; }
+    #site-action { width:100%; margin-top:12px; }
+    .readiness { display:grid; gap:1px; margin:12px 0; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:var(--line); }
+    .readiness-row { display:grid; grid-template-columns:110px 1fr; gap:8px; align-items:center; min-height:42px; padding:8px 11px; background:var(--surface); }
+    .key { color:var(--muted); }
+    .value { display:flex; align-items:center; gap:7px; font-weight:600; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+    .tone-ok .dot { background:var(--success); } .tone-warn .dot { background:var(--warning); }
+    .tone-error .dot { background:var(--danger); }
+    .footer { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    #message { min-height:18px; color:var(--muted); font-size:11px; }
+    #message.error { color:var(--danger); }
+    .settings { flex:0 0 auto; }
+    button:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+    @media (prefers-color-scheme:dark) {
+      :root { --accent:#e0a15e; --accent-strong:#efb779; --ink:#f2efeb; --muted:#c4bdb5;
+              --paper:#1d1b19; --surface:#292622; --line:#4c4640; --success:#6dd58c;
+              --warning:#f1b35b; --danger:#ff8a80; }
+      .pill { background:#3c3834; } .pill.active { background:#243b2c; } .pill.blocked { background:#472a28; }
+      button.primary { color:#21160d; }
+    }
+    @media (prefers-reduced-motion:reduce) { * { transition:none !important; } }
+    @media (forced-colors:active) { button,.site-card,.readiness { border:1px solid CanvasText; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <img class="mark" src="icon128.png" alt="">
+      <div><h1>Bean for the Web</h1><p class="sub">Quiet help where you write</p></div>
+    </header>
+
+    <section class="site-card" aria-labelledby="site-name">
+      <div class="site-head">
+        <div class="site-copy">
+          <span id="site-name">Current website</span>
+          <p id="site-detail">Checking website access…</p>
+        </div>
+        <span id="site-state" class="pill">Checking</span>
+      </div>
+      <button id="site-action" type="button" disabled>Block this website</button>
+    </section>
+
+    <section class="readiness" aria-label="Bean readiness" aria-live="polite">
+      <div class="readiness-row">
+        <span class="key">Bean app</span>
+        <span id="app-status" class="value"><span class="dot" aria-hidden="true"></span><span>Checking…</span></span>
+      </div>
+      <div class="readiness-row">
+        <span class="key">AI suggestions</span>
+        <span id="ai-status" class="value"><span class="dot" aria-hidden="true"></span><span>Checking…</span></span>
+      </div>
+    </section>
+
+    <div class="footer">
+      <div id="message" role="status" aria-live="polite"></div>
+      <button id="open-settings" class="settings" type="button">Settings…</button>
+    </div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -4,6 +4,7 @@ import Foundation
 // status messages.
 enum LLMError: LocalizedError {
     case missingAPIKey
+    case inputTooLong(maxCharacters: Int)
     case invalidAPIKey
     case network(String)
     case timeout
@@ -14,6 +15,8 @@ enum LLMError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey: return "Missing API key"
+        case .inputTooLong(let maxCharacters):
+            return "Text is longer than Bean's \(maxCharacters.formatted())-character AI limit"
         case .invalidAPIKey: return "Invalid API key"
         case .network(let detail): return "Network error: \(detail)"
         case .timeout: return "Request timed out"
@@ -28,10 +31,10 @@ enum LLMError: LocalizedError {
 // of any dependency on AppSettings.
 //
 // SECURITY BOUNDARY: `systemPrompt` is Bean's TRUSTED instruction. `userText`
-// is the UNTRUSTED user content (wrapped in delimiters by WritingTransformService)
-// and must be sent strictly as the user-role message — never merged into the
-// system prompt. This separation is what stops instructions embedded in the
-// user's text from being obeyed.
+// is an UNTRUSTED user-role payload (serialized as one JSON object by Bean's
+// prompt builders) and must never be merged into the system prompt. This
+// separation keeps instructions embedded in text or personalization out of the
+// trusted instruction channel.
 struct LLMRequest {
     let systemPrompt: String
     let userText: String

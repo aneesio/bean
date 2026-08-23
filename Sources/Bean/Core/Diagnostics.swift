@@ -12,8 +12,10 @@ struct Diagnostics {
     let usageLedger: UsageLedgerStore
     let setupStatus: SetupStatusStore
 
-    static var appPath: String { Bundle.main.bundlePath }
     static var bundleID: String { Bundle.main.bundleIdentifier ?? "unknown (unbundled)" }
+    static var appLocationAssessment: AppLocationAssessment {
+        AppLocationAssessment(appURL: Bundle.main.bundleURL)
+    }
 
     /// Number of running bundled Bean instances (single-instance protection
     /// should keep this at 1; >1 means another bundled copy is also running).
@@ -25,15 +27,7 @@ struct Diagnostics {
     /// A warning if Bean is running from a non-stable location, where macOS may
     /// reset Accessibility/login-item state on each rebuild or move.
     static var pathWarning: String? {
-        let path = appPath
-        let location: String?
-        if path.contains("/DerivedData/") { location = "Xcode DerivedData" }
-        else if path.contains("/build/") { location = "the build folder" }
-        else if path.contains("/Downloads/") { location = "Downloads" }
-        else { location = nil }
-
-        guard let location else { return nil }
-        return "Bean is running from \(location). For stable permissions and launch-at-login, move Bean.app to /Applications."
+        appLocationAssessment.warningMessage
     }
 
     /// Multi-line, copy-pasteable summary (no secrets, no user text).
@@ -41,12 +35,20 @@ struct Diagnostics {
         var lines: [String] = ["Bean diagnostics"]
         lines.append("version: \(AppInfo.version) (\(AppInfo.build))")
         lines.append("bundleID: \(Self.bundleID)")
-        lines.append("appPath: \(Self.appPath)")
+        lines.append("appBundle: \(Bundle.main.bundleURL.lastPathComponent)")
+        lines.append("appLocation: \(Self.appLocationAssessment.kind.rawValue)")
         lines.append("provider: \(settings.provider.rawValue)")
-        lines.append("model: \(settings.model)")
+        // The model field accepts custom text. Preserve the canonical shipped
+        // identifier because it is useful support metadata, but never copy an
+        // arbitrary user-entered value into a diagnostics/support report.
+        let diagnosticModel = settings.model == settings.provider.defaultModel
+            ? settings.model
+            : "custom"
+        lines.append("model: \(diagnosticModel)")
         lines.append("accessibility: \(PermissionService.isAccessibilityGranted ? "granted" : "not granted")")
         lines.append("launchAtLogin: \(LoginItemService.statusDescription)")
-        lines.append("quickProofreadShortcut: \(settings.shortcut.displayString)")
+        lines.append("writingShortcut: \(settings.shortcut.displayString)")
+        lines.append("writingShortcutAction: \(settings.primaryShortcutAction.rawValue)")
         lines.append("beanMenuShortcut: \(settings.beanMenuShortcut.displayString)")
         lines.append("onboardingComplete: \(settings.onboardingComplete ? "yes" : "no")")
         lines.append("providerConnectionVerified: \(settings.isProviderConnectionVerified ? "yes" : "no")")
@@ -58,40 +60,40 @@ struct Diagnostics {
         lines.append("automaticDailyLimit: \(settings.dailyAutomaticCallLimit)")
 
         // Content-free counts only — never the actual profiles/cards/terms.
-        let activeStyle = store.effectiveProfile(explicit: nil, context: nil).name
+        let activeProfile = store.effectiveProfile(explicit: nil, context: nil)
+        let activeStyle = StyleProfile.builtIns().first(where: { $0.id == activeProfile.id })
+            .map { "builtIn:\($0.name)" } ?? "custom"
         lines.append("styleProfiles: \(store.profiles.count)")
         lines.append("activeStyle: \(activeStyle)")
-        lines.append("contextCards: \(store.cards.count) (enabled: \(store.cards.filter { $0.isEnabledByDefault }.count))")
+        lines.append("writingContextItems: \(store.cards.count) (enabled: \(store.cards.filter { $0.isEnabledByDefault }.count))")
         lines.append("dictionaryTerms: \(store.dictionary.count)")
 
-        // Passive Suggestions (Phase 5) — flags/settings only, no text.
-        lines.append("passiveEnabled: \(settings.passiveEnabled ? "yes" : "no")")
-        if settings.passiveEnabled {
-            if let until = settings.passivePausedUntil, until > Date() {
-                lines.append("passivePausedUntil: \(ISO8601DateFormatter().string(from: until))")
-            }
-            lines.append("passiveDelay: \(String(format: "%.1f", settings.passiveDelay))s")
-            lines.append("passiveLengthRange: \(settings.passiveMinLength)-\(settings.passiveMaxLength)")
-            var cats: [String] = []
-            if settings.passiveInChat { cats.append("chat") }
-            if settings.passiveInMailBrowser { cats.append("mail/browser") }
-            if settings.passiveInCode { cats.append("code") }
-            if settings.passiveInSearch { cats.append("search") }
-            lines.append("passiveCategories: \(cats.isEmpty ? "none" : cats.joined(separator: ","))")
-        }
+        // Current product names only. These are flags and numeric limits, never
+        // the text behind a suggestion or any saved personalization detail.
+        lines.append("liveSuggestionsEnabled: \(settings.inlineHighlightsEnabled ? "yes" : "no")")
+        let deeperAISuggestionsEnabled = settings.inlineHighlightsEnabled
+            && !settings.inlineLocalOnly
+            && settings.inlineIncludeLLM
+        lines.append("deeperAISuggestionsEnabled: \(deeperAISuggestionsEnabled ? "yes" : "no")")
 
-        lines.append("inlineHighlightsEnabled: \(settings.inlineHighlightsEnabled ? "yes" : "no")")
-        lines.append("webInlineEnabled: \(settings.webInlineEnabled ? "yes" : "no")")
-        lines.append("nativeHostBinary: \(Bundle.main.executablePath ?? "unknown")")
+        lines.append("browserAIEnabled: \(settings.webInlineEnabled ? "yes" : "no")")
         let browserBridge = BrowserBridgeInstaller().inspect()
         lines.append("browserBridgeStatus: \(browserBridge.diagnosticsName)")
         lines.append("browserBridgeExtensionsDetected: \(browserBridge.extensionIDs.count)")
         lines.append("browserBridgeConfiguredBrowsers: \(browserBridge.configuredBrowserNames.count)/\(browserBridge.browserNames.count)")
         lines.append("beanBubbleEnabled: \(settings.bubbleEnabled ? "yes" : "no")")
         lines.append("typingMonitorActive: \(settings.monitorActive ? "yes" : "no")")
-        lines.append("lastPauseHandler: \(settings.lastPauseHandler)")
-        if !settings.lastSupportReason.isEmpty {
-            lines.append("lastReasonCode: \(settings.lastSupportReason)")
+        let lastPauseHandler = OperationalMetadataSanitizer.required(
+            settings.lastPauseHandler,
+            fallback: "none",
+            maximumScalars: OperationalMetadataSanitizer.operationLabelMaximumScalars
+        )
+        lines.append("lastPauseHandler: \(lastPauseHandler)")
+        if let lastReasonCode = OperationalMetadataSanitizer.optional(
+            settings.lastSupportReason,
+            maximumScalars: OperationalMetadataSanitizer.operationLabelMaximumScalars
+        ) {
+            lines.append("lastReasonCode: \(lastReasonCode)")
         }
 
         let instances = Self.runningInstanceCount

@@ -18,6 +18,94 @@ struct FieldInspectionReport: Codable, Equatable {
     let beanBubble: CapabilityAssessment
     let inlineChecking: CapabilityAssessment
 
+    private enum CodingKeys: String, CodingKey {
+        case checkedAt, appName, bundleIdentifier, appCategory, referenceSurface
+        case role, subrole, fallbackEvidence, selectedTextAction
+        case focusedFieldReplacement, beanBubble, inlineChecking
+    }
+
+    init(checkedAt: Date, appName: String, bundleIdentifier: String?,
+         appCategory: String, referenceSurface: String?, role: String?,
+         subrole: String?, fallbackEvidence: String?,
+         selectedTextAction: CapabilityAssessment,
+         focusedFieldReplacement: CapabilityAssessment,
+         beanBubble: CapabilityAssessment,
+         inlineChecking: CapabilityAssessment) {
+        self.checkedAt = checkedAt
+        self.appName = OperationalMetadataSanitizer.required(
+            appName, fallback: "Unknown app",
+            maximumScalars: OperationalMetadataSanitizer.appNameMaximumScalars
+        )
+        self.bundleIdentifier = OperationalMetadataSanitizer.optional(
+            bundleIdentifier,
+            maximumScalars: OperationalMetadataSanitizer.bundleIdentifierMaximumScalars
+        )
+        self.appCategory = OperationalMetadataSanitizer.required(
+            appCategory,
+            maximumScalars: OperationalMetadataSanitizer.categoryMaximumScalars
+        )
+        self.referenceSurface = OperationalMetadataSanitizer.optional(
+            referenceSurface,
+            maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+        )
+        self.role = OperationalMetadataSanitizer.optional(
+            role,
+            maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+        )
+        self.subrole = OperationalMetadataSanitizer.optional(
+            subrole,
+            maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+        )
+        self.fallbackEvidence = OperationalMetadataSanitizer.optional(
+            fallbackEvidence,
+            maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+        )
+        self.selectedTextAction = Self.sanitized(selectedTextAction)
+        self.focusedFieldReplacement = Self.sanitized(focusedFieldReplacement)
+        self.beanBubble = Self.sanitized(beanBubble)
+        self.inlineChecking = Self.sanitized(inlineChecking)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            checkedAt: try container.decode(Date.self, forKey: .checkedAt),
+            appName: try container.decode(String.self, forKey: .appName),
+            bundleIdentifier: try container.decodeIfPresent(
+                String.self, forKey: .bundleIdentifier
+            ),
+            appCategory: try container.decode(String.self, forKey: .appCategory),
+            referenceSurface: try container.decodeIfPresent(
+                String.self, forKey: .referenceSurface
+            ),
+            role: try container.decodeIfPresent(String.self, forKey: .role),
+            subrole: try container.decodeIfPresent(String.self, forKey: .subrole),
+            fallbackEvidence: try container.decodeIfPresent(
+                String.self, forKey: .fallbackEvidence
+            ),
+            selectedTextAction: try container.decode(
+                CapabilityAssessment.self, forKey: .selectedTextAction
+            ),
+            focusedFieldReplacement: try container.decode(
+                CapabilityAssessment.self, forKey: .focusedFieldReplacement
+            ),
+            beanBubble: try container.decode(CapabilityAssessment.self, forKey: .beanBubble),
+            inlineChecking: try container.decode(
+                CapabilityAssessment.self, forKey: .inlineChecking
+            )
+        )
+    }
+
+    private static func sanitized(_ assessment: CapabilityAssessment) -> CapabilityAssessment {
+        CapabilityAssessment(
+            level: assessment.level,
+            reason: OperationalMetadataSanitizer.required(
+                assessment.reason,
+                maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+            )
+        )
+    }
+
     var headline: String {
         if fallbackEvidence == "slackRecentTyping" {
             return "Bean detected a Slack composer (best effort)"
@@ -29,19 +117,51 @@ struct FieldInspectionReport: Codable, Equatable {
     }
 
     var diagnosticsLines: [String] {
-        [
+        let safeAppName = OperationalMetadataSanitizer.required(
+            appName, fallback: "Unknown app",
+            maximumScalars: OperationalMetadataSanitizer.appNameMaximumScalars
+        )
+        let safeBundle = OperationalMetadataSanitizer.optional(
+            bundleIdentifier,
+            maximumScalars: OperationalMetadataSanitizer.bundleIdentifierMaximumScalars
+        ) ?? "unknown"
+        let safeCategory = OperationalMetadataSanitizer.required(
+            appCategory,
+            maximumScalars: OperationalMetadataSanitizer.categoryMaximumScalars
+        )
+        let safeReference = OperationalMetadataSanitizer.optional(
+            referenceSurface,
+            maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+        ) ?? "generic"
+        let safeRole = OperationalMetadataSanitizer.optional(
+            role,
+            maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+        ) ?? "unknown"
+        let safeSubrole = OperationalMetadataSanitizer.optional(
+            subrole,
+            maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+        ) ?? "unknown"
+        let safeEvidence = OperationalMetadataSanitizer.optional(
+            fallbackEvidence,
+            maximumScalars: OperationalMetadataSanitizer.fieldMetadataMaximumScalars
+        ) ?? "none"
+        let selection = Self.sanitized(selectedTextAction)
+        let replacement = Self.sanitized(focusedFieldReplacement)
+        let bubble = Self.sanitized(beanBubble)
+        let inline = Self.sanitized(inlineChecking)
+        return [
             "fieldCheckAt: \(ISO8601DateFormatter().string(from: checkedAt))",
-            "fieldCheckApp: \(appName)",
-            "fieldCheckBundle: \(bundleIdentifier ?? "unknown")",
-            "fieldCheckCategory: \(appCategory)",
-            "fieldCheckReferenceSurface: \(referenceSurface ?? "generic")",
-            "fieldCheckRole: \(role ?? "unknown")",
-            "fieldCheckSubrole: \(subrole ?? "unknown")",
-            "fieldCheckEvidence: \(fallbackEvidence ?? "none")",
-            "fieldCheckSelection: \(selectedTextAction.level.rawValue)(\(selectedTextAction.reason))",
-            "fieldCheckFocusedReplacement: \(focusedFieldReplacement.level.rawValue)(\(focusedFieldReplacement.reason))",
-            "fieldCheckBubble: \(beanBubble.level.rawValue)(\(beanBubble.reason))",
-            "fieldCheckInline: \(inlineChecking.level.rawValue)(\(inlineChecking.reason))"
+            "fieldCheckApp: \(safeAppName)",
+            "fieldCheckBundle: \(safeBundle)",
+            "fieldCheckCategory: \(safeCategory)",
+            "fieldCheckReferenceSurface: \(safeReference)",
+            "fieldCheckRole: \(safeRole)",
+            "fieldCheckSubrole: \(safeSubrole)",
+            "fieldCheckEvidence: \(safeEvidence)",
+            "fieldCheckSelection: \(selection.level.rawValue)(\(selection.reason))",
+            "fieldCheckFocusedReplacement: \(replacement.level.rawValue)(\(replacement.reason))",
+            "fieldCheckBubble: \(bubble.level.rawValue)(\(bubble.reason))",
+            "fieldCheckInline: \(inline.level.rawValue)(\(inline.reason))"
         ]
     }
 }
@@ -59,6 +179,12 @@ final class SetupStatusStore: ObservableObject {
         if let data = defaults.data(forKey: storageKey),
            let report = try? JSONDecoder().decode(FieldInspectionReport.self, from: data) {
             latestFieldInspection = report
+            // Rewrite legacy metadata immediately so hostile line separators or
+            // oversized labels do not remain in the persisted inspection.
+            if let sanitized = try? JSONEncoder().encode(report) {
+                defaults.set(sanitized, forKey: storageKey)
+                defaults.synchronize()
+            }
         }
     }
 
@@ -114,18 +240,6 @@ final class SetupStatusStore: ObservableObject {
     func clearInspection() {
         latestFieldInspection = nil
         defaults.removeObject(forKey: storageKey)
-    }
-
-    /// Opens a disposable, synthetic sentence in the default plain-text editor
-    /// so onboarding can verify the real cross-app shortcut/replacement path.
-    /// The file contains no user content and lives in the system temp folder.
-    func openTextEditVerificationFile() throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Bean-Setup-Verification.txt")
-        try "i has a apple".write(to: url, atomically: true, encoding: .utf8)
-        guard NSWorkspace.shared.open(url) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
     }
 
     private static func makeReport(

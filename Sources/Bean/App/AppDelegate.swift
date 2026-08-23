@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 // Wires together the menu bar, the two global hotkeys (quick proofread + Bean
 // menu), and the coordinator. Owns the long-lived services.
@@ -8,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let userContent = UserContentStore()
     private let operationHistory = OperationHistoryStore()
     private let usageLedger = UsageLedgerStore()
+    private let automaticCallBudget = AutomaticCallBudgetStore()
     private let setupStatus = SetupStatusStore()
     private let statusHUD = StatusHUD()
     private let replacementUndo = ReplacementUndoStore()
@@ -18,24 +20,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         history: operationHistory,
         usageLedger: usageLedger,
         undoStore: replacementUndo,
-        statusHUD: statusHUD
+        statusHUD: statusHUD,
+        onShowSettings: { [weak self] in self?.showSettingsWindow() }
     )
 
     private lazy var passiveService = PassiveSuggestionService(
         settings: settings, userContent: userContent, history: operationHistory,
-        usageLedger: usageLedger, undoStore: replacementUndo, statusHUD: statusHUD
+        usageLedger: usageLedger, automaticCallBudget: automaticCallBudget,
+        undoStore: replacementUndo, statusHUD: statusHUD
     )
 
     private lazy var inlineService = InlineHighlightService(
         settings: settings, userContent: userContent, history: operationHistory,
-        usageLedger: usageLedger, statusHUD: statusHUD
+        usageLedger: usageLedger, automaticCallBudget: automaticCallBudget,
+        statusHUD: statusHUD
     )
 
     private lazy var bubbleService = BeanBubbleService(
         settings: settings,
         statusHUD: statusHUD,
         runAction: { [weak self] action in self?.coordinator.runAction(action) },
-        openFullMenu: { [weak self] in self?.coordinator.showActionMenu() }
+        openFullMenu: { [weak self] in self?.coordinator.showActionMenu() },
+        openAISettings: { [weak self] in self?.windowPresenter.showSettings(section: .provider) }
     )
 
     private lazy var typingDispatcher = TypingPauseDispatcher(
@@ -51,15 +57,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         userContent: userContent,
         history: operationHistory,
         usageLedger: usageLedger,
+        automaticCallBudget: automaticCallBudget,
         setupStatus: setupStatus,
         onCheckPermissions: { [weak self] in self?.coordinator.checkPermissions() },
         onApplyShortcut: { [weak self] slot, shortcut in self?.applyShortcut(slot, shortcut) }
     )
 
     private lazy var menuBarController = MenuBarController(
-        onProofreadNow: { [weak self] in self?.coordinator.fixSelectedText() },
+        onQuickFix: { [weak self] in self?.coordinator.fixSelectedText() },
+        onAIProofread: { [weak self] in self?.coordinator.proofreadWithAI() },
         onOpenBeanMenu: { [weak self] in self?.coordinator.showActionMenu() },
         onUndoLastChange: { [weak self] in self?.coordinator.undoLastChange() },
+        isUndoAvailable: { [weak self] in self?.replacementUndo.isAvailable ?? false },
         onCheckCurrentField: { [weak self] in self?.checkCurrentField() },
         onCheckPermissions: { [weak self] in self?.coordinator.checkPermissions() },
         onShowSettings: { [weak self] in self?.windowPresenter.showSettings() },
@@ -67,6 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private let hotkeyService = HotkeyService()
+    private var settingsCancellables = Set<AnyCancellable>()
+
+    /// Method indirection keeps the coordinator and presenter lazy graphs
+    /// independent while still allowing persistent notices to open Settings.
+    private func showSettingsWindow() {
+        windowPresenter.showSettings(section: .provider)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Single-instance guard: bring an existing Bean to the front and quit
@@ -76,7 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        menuBarController.install(proofreadShortcut: settings.shortcut, beanMenuShortcut: settings.beanMenuShortcut)
+        // Reconcile crash-recovery leases even when all automatic features are
+        // now off, so minimal reservation metadata never lingers indefinitely.
+        _ = automaticCallBudget.cleanupStaleReservations()
+        usageLedger.refresh()
+        operationHistory.refresh()
+
+        menuBarController.install(proofreadShortcut: settings.shortcut,
+                                  shortcutAction: settings.primaryShortcutAction,
+                                  beanMenuShortcut: settings.beanMenuShortcut)
         windowPresenter.showOnboardingIfNeeded()
 
         registerHotkeys()
@@ -86,6 +110,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onPassiveChanged = { [weak self] in self?.typingDispatcher.refresh() }
         settings.onInlineChanged = { [weak self] in self?.typingDispatcher.refresh() }
         settings.onBubbleChanged = { [weak self] in self?.typingDispatcher.refresh() }
+        settings.$primaryShortcutAction.dropFirst().sink { [weak self] action in
+            guard let self else { return }
+            self.menuBarController.updateShortcuts(
+                proofread: self.settings.shortcut,
+                shortcutAction: action,
+                beanMenu: self.settings.beanMenuShortcut
+            )
+        }.store(in: &settingsCancellables)
         typingDispatcher.refresh()
     }
 
@@ -132,7 +164,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handler(for slot: ShortcutSlot) -> () -> Void {
         switch slot {
-        case .quickProofread: return { [weak self] in self?.coordinator.fixSelectedText() }
+        case .quickProofread: return { [weak self] in
+            guard let self else { return }
+            self.coordinator.runAction(self.settings.primaryShortcutAction.writingAction)
+        }
         case .beanMenu: return { [weak self] in self?.coordinator.showActionMenu() }
         }
     }

@@ -1,6 +1,6 @@
 # Supported Apps and Surfaces
 
-Policy matrix version: **1.3** (August 21, 2026). These expectations are backed
+Policy matrix version: **1.6** (August 22, 2026). These expectations are backed
 by `FieldCapabilityPolicyTests`; the release checklist still requires live-app
 smoke testing because app and macOS Accessibility implementations can change.
 
@@ -16,7 +16,7 @@ not mean every editor implementation can be replaced or highlighted.
 | Apple Notes | Supported | Direct write or verified paste | Supported/best effort | Native or passive fallback | Rich-note geometry can vary. |
 | Apple Mail | Supported | Direct write or verified paste | Supported/best effort | Native or passive fallback | Test the message composer, not message display. |
 | Slack desktop | Supported | Best-effort Electron paste with stale guards | Bounds or recent click+typing evidence | No native highlight; passive/manual path | Slack may expose no focused AX editor. |
-| Chromium web editor | Supported/best effort | Verified paste when AX exposes the editor | Best effort | Browser extension on by default unless the site is blocked | Gmail and Slack web are the extension references. |
+| Chromium web editor | Supported/best effort | Verified paste when AX exposes the editor | Best effort | Browser extension on by default unless the site is blocked | Plain inputs, textareas, and simple contenteditable editors are the reference surfaces. |
 
 ## Deterministic exclusions
 
@@ -35,13 +35,16 @@ an app name. Bubble bounds and native inline range geometry are rechecked live.
 ## Browser extension
 
 The unpacked Chromium extension works best in plain text inputs, textareas, and
-simple contenteditable editors such as basic Gmail or Slack web composition.
-Complex rich editors vary. Google Docs canvas editing, Slack desktop, Safari,
-password/search/email-address fields, and code editors are excluded from the
-Chromium extension path.
+simple contenteditable editors such as basic Gmail composition. Complex rich
+editors vary. Slack web's ProseMirror composer, Google Docs canvas editing,
+Slack desktop, Safari, password/search/email-address fields, and code editors
+are excluded from the Chromium extension path for 1.6.
 
 When an unsupported or ambiguous target is detected, the correct behavior is to
 show no highlight or decline replacement—not to guess.
 
 Compatibility reports should include app/version, macOS version, field type,
-and synthetic reproduction text. See [SUPPORT.md](SUPPORT.md).
+and synthetic reproduction text. Focus the problem field and run Bean → Help →
+Check Current Field, then use Settings → Privacy & Help → Preview Support Report.
+Review the preview before copying it; Bean never uploads the report. See
+[SUPPORT.md](SUPPORT.md).

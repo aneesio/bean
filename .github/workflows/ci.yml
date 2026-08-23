@@ -32,4 +32,8 @@ jobs:
           test -x build/Bean.app/Contents/MacOS/Bean
           test -f build/Bean.app/Contents/Resources/PRIVACY.md
           test -f build/Bean.app/Contents/Resources/LICENSE.md
+          test -f build/Bean.app/Contents/Resources/SUPPORT.md
+          test -f build/Bean.app/Contents/Resources/QA_TEST_PLAN.md
+          test -f build/Bean.app/Contents/Resources/CHANGELOG.md
+          test -f build/Bean.app/Contents/Resources/SUPPORTED_APPS.md
           test -x build/Bean.app/Contents/Resources/NativeMessaging/install_native_messaging_host.sh

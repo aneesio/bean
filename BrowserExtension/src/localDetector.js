@@ -63,5 +63,31 @@
     return issues.slice(0, MAX_ISSUES);
   }
 
-  window.BeanDetector = { detect };
+  // Compose overlapping deterministic fixes safely by changing one verified,
+  // unique issue at a time and re-detecting against the new string. For
+  // example, `works,tommorow` has a punctuation issue that shares the `t` with
+  // the spelling issue; both can be fixed without trusting stale offsets.
+  function fixObvious(text) {
+    let result = String(text || "");
+    for (let pass = 0; pass < MAX_ISSUES; pass++) {
+      const candidates = detect(result)
+        .map((issue) => {
+          const start = result.indexOf(issue.original);
+          if (start < 0 || result.indexOf(issue.original, start + 1) >= 0) return null;
+          return { issue, start };
+        })
+        .filter(Boolean)
+        .sort((left, right) => right.start - left.start);
+      const candidate = candidates[0];
+      if (!candidate) break;
+      const { issue, start } = candidate;
+      const next = result.slice(0, start) + issue.suggestion +
+        result.slice(start + issue.original.length);
+      if (next === result) break;
+      result = next;
+    }
+    return result;
+  }
+
+  window.BeanDetector = { detect, fixObvious };
 })();

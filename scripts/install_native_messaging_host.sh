@@ -1,5 +1,7 @@
 #!/bin/bash
-# Installs the Bean Native Messaging host manifest for Chrome/Brave/Edge.
+# Advanced fallback: installs Bean's Native Messaging host manifest and records
+# one explicit extension approval for signed Chrome/Brave/Edge. The in-app
+# Settings → Browser flow is the normal installation path.
 #
 #   ./scripts/install_native_messaging_host.sh <extension-id> [path-to-Bean.app]
 #
@@ -14,9 +16,37 @@
 set -euo pipefail
 
 HOST_NAME="com.bean.nativehost"
+PREFERENCE_DOMAIN="com.bean.app"
+APPROVAL_KEY="browserBridgeApprovedManualExtensionIDs"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 fail() { echo "error: $1" >&2; exit 1; }
+
+# Refuse a path when any existing directory component below the chosen anchor is
+# a symbolic link. Checking only the final Chrome/NativeMessagingHosts entries
+# is insufficient: an intermediate component such as `Google` could otherwise
+# redirect this advanced fallback into an unrelated tree.
+safe_directory_chain() {
+    local anchor="$1" target="$2" current relative component
+    case "$target" in
+        "$anchor"|"$anchor"/*) ;;
+        *) return 1 ;;
+    esac
+    [[ -d "$anchor" && ! -L "$anchor" ]] || return 1
+    [[ "$target" == "$anchor" ]] && return 0
+    relative="${target#"$anchor"/}"
+    current="$anchor"
+    while [[ -n "$relative" ]]; do
+        component="${relative%%/*}"
+        if [[ "$relative" == */* ]]; then
+            relative="${relative#*/}"
+        else
+            relative=""
+        fi
+        current="$current/$component"
+        [[ -d "$current" && ! -L "$current" ]] || return 1
+    done
+}
 
 EXT_ID="${1:-}"
 if [[ -z "$EXT_ID" ]]; then
@@ -47,28 +77,62 @@ fi
 HOST_BIN="$APP/Contents/MacOS/Bean"
 [[ -x "$HOST_BIN" ]] || fail "Bean host binary not found/executable at: $HOST_BIN"
 
-read -r -d '' MANIFEST_JSON <<EOF || true
-{
-  "name": "$HOST_NAME",
-  "description": "Bean native messaging host (browser extension <-> Bean Mac app).",
-  "path": "$HOST_BIN",
-  "type": "stdio",
-  "allowed_origins": [ "chrome-extension://$EXT_ID/" ]
-}
-EOF
-
 installed=0
 install_to() {
-    local browser="$1" dir="$2"
-    [[ -d "$(dirname "$dir")" ]] || return 0   # browser not installed; skip silently
-    if ! mkdir -p "$dir" 2>/dev/null; then
-        echo "  ! could not create $dir (permission?) — skipped $browser" >&2
+    local browser="$1" root="$2" dir="$2/NativeMessagingHosts"
+    local manifest temp
+    [[ -d "$root" ]] || return 0   # browser not installed; skip silently
+    if ! safe_directory_chain "$HOME" "$root"; then
+        echo "  ! $browser: unsafe browser directory chain — skipped" >&2
         return 0
     fi
-    if printf '%s\n' "$MANIFEST_JSON" > "$dir/$HOST_NAME.json" 2>/dev/null; then
-        echo "  ✓ $browser: $dir/$HOST_NAME.json"
+    if [[ -e "$dir" || -L "$dir" ]]; then
+        if ! safe_directory_chain "$HOME" "$dir"; then
+            echo "  ! $browser: unsafe NativeMessagingHosts directory chain — skipped" >&2
+            return 0
+        fi
+    else
+        if ! mkdir "$dir" 2>/dev/null || ! safe_directory_chain "$HOME" "$dir"; then
+            echo "  ! could not safely create $dir (permission?) — skipped $browser" >&2
+            return 0
+        fi
+    fi
+    manifest="$dir/$HOST_NAME.json"
+    if [[ -L "$manifest" || ( -e "$manifest" && ! -f "$manifest" ) ]]; then
+        echo "  ! $browser: unsafe existing manifest target — skipped" >&2
+        return 0
+    fi
+    if ! temp=$(mktemp "$dir/.$HOST_NAME.json.XXXXXX"); then
+        echo "  ! $browser: could not create a temporary manifest — skipped" >&2
+        return 0
+    fi
+    chmod 600 "$temp"
+    if ! /usr/bin/plutil -create xml1 "$temp" \
+        || ! /usr/bin/plutil -insert name -string "$HOST_NAME" "$temp" \
+        || ! /usr/bin/plutil -insert description -string "Bean native messaging host (browser extension <-> Bean Mac app)." "$temp" \
+        || ! /usr/bin/plutil -insert path -string "$HOST_BIN" "$temp" \
+        || ! /usr/bin/plutil -insert type -string "stdio" "$temp" \
+        || ! /usr/bin/plutil -insert allowed_origins -array "$temp" \
+        || ! /usr/bin/plutil -insert allowed_origins.0 -string "chrome-extension://$EXT_ID/" "$temp" \
+        || ! /usr/bin/plutil -convert json "$temp"; then
+        rm -f "$temp"
+        echo "  ! $browser: failed to encode manifest JSON — skipped" >&2
+        return 0
+    fi
+    chmod 600 "$temp"
+    # Recheck after encoding. `mv` renames the complete 0600 file atomically;
+    # it never streams JSON through the final path or a symbolic link.
+    if [[ -L "$manifest" || ( -e "$manifest" && ! -f "$manifest" ) ]]; then
+        rm -f "$temp"
+        echo "  ! $browser: unsafe existing manifest target — skipped" >&2
+        return 0
+    fi
+    if /bin/mv -f "$temp" "$manifest" 2>/dev/null \
+        && [[ -f "$manifest" && ! -L "$manifest" ]]; then
+        echo "  ✓ $browser: $manifest"
         installed=1
     else
+        rm -f "$temp"
         echo "  ! $browser: failed to write manifest (permission?)" >&2
     fi
 }
@@ -76,18 +140,25 @@ install_to() {
 echo "==> Installing Bean native host manifest"
 echo "    extension : $EXT_ID"
 echo "    host bin  : $HOST_BIN"
-install_to "Chrome" "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
-install_to "Brave"  "$HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"
-install_to "Edge"   "$HOME/Library/Application Support/Microsoft Edge/NativeMessagingHosts"
+install_to "Chrome" "$HOME/Library/Application Support/Google/Chrome"
+install_to "Brave"  "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"
+install_to "Edge"   "$HOME/Library/Application Support/Microsoft Edge"
 
 if [[ "$installed" -eq 0 ]]; then
-    fail "no supported browser profile found (Chrome/Brave/Edge). Is the browser installed and launched once?"
+    fail "no supported signed browser profile found (Chrome/Brave/Edge). Is the browser installed and launched once?"
+fi
+
+# The hardened Bean host accepts a manually supplied extension ID only when the
+# same exact ID is present in Bean's approval store. A manifest alone is not an
+# authorization source. Replace (do not accumulate) the prior manual approval.
+if ! defaults write "$PREFERENCE_DOMAIN" "$APPROVAL_KEY" -array "$EXT_ID"; then
+    fail "the manifest was written, but Bean's exact extension approval could not be saved. Open Bean → Settings → Browser and choose Repair Connection."
 fi
 
 cat <<EOF
 
 Done. Next:
   • Restart the browser if it was open.
-  • In the extension's Options, click "Test Connection" — it should say Connected.
-  • Enable "Web Inline Support" in Bean Settings so detection is allowed.
+  • In the extension's Options, click "Check again" — App connection should say Connected.
+  • Optional AI: turn on "Allow deeper AI checks from the browser" in Bean Settings → Browser.
 EOF

@@ -4,6 +4,9 @@ Automated checks are necessary but cannot fully exercise macOS Accessibility,
 clipboard replacement, or third-party editor geometry. Every public beta should
 pass both the automated suite and the focused manual matrix below.
 
+The complete phase-by-phase release-candidate protocol and sign-off record live
+in [QA_TEST_PLAN.md](QA_TEST_PLAN.md).
+
 Use synthetic text only. Never place real API keys or private writing in test
 logs, screenshots, fixtures, or issues.
 
@@ -87,34 +90,57 @@ repeatable compatibility boundary changes.
 - Pausing after typing makes no provider request with defaults.
 - “Disable automatic AI checks” turns off passive, provider inline, fallback,
   and web inline paths while preserving explicit actions.
+- Reach the daily automatic-call limit, clear usage/history, and confirm the
+  visible ledgers clear while today's private limit remains reached.
+- If private accounting is unavailable or corrupt, AI & Usage shows a warning
+  instead of reporting a misleading zero; automatic provider checks fail closed.
+- Clear usage/history with a request in flight, then let it finish; neither
+  visible ledger may be recreated by the late result.
+- A native Live-suggestion preview's explicit **Try Again** remains available
+  after the automatic cap and is recorded as a manual call. Browser **Fix Paragraph**
+  remains capped because a webpage cannot prove a trusted native user gesture.
 - Diagnostics are off by default and contain no source or output text when on.
 - API keys never appear in UserDefaults, Application Support, logs, diagnostics,
   browser storage, packaged resources, or Git history.
-- Context cards and dictionary terms are sent only when relevant to the selected
+- Writing Context items and dictionary terms are sent only when relevant to the selected
   action as documented in [PRIVACY.md](PRIVACY.md).
 
 ## Browser extension gate
 
-- A fresh install enables local checks across ordinary websites, has no blocked
-  sites, and has provider bridge use disabled.
+- A fresh install enables local checks across ordinary websites and has no
+  blocked sites. Deeper AI remains governed by the Bean app's provider and
+  browser-AI settings; the extension has no redundant global switch.
 - Saving an exact blocked hostname stops Bean there immediately and excludes
   that hostname and its subdomains from future registration.
 - Reloading an ordinary, unblocked site activates plain text inputs, textareas,
   and simple contenteditable editors.
 - **Disable on this field** stops Bean on that DOM field for the page session;
   **Disable on this website** persists the current hostname in the blocklist.
+- Disable two fields, return to each one, and verify its own **Re-enable**
+  control restores that field only. A failed blocklist write must leave Bean
+  active and announce that the website could not be blocked.
 - Hovering a paragraph Bean icon opens its actions, including both disable
   controls.
-- Password/search/email/read-only/code fields and Google Docs canvas are skipped.
+- Activate issue underlines and paragraph icons with VoiceOver/AXPress as well
+  as pointer, Enter, and Space. Next, Ignore, Apply, and Review one by one must
+  keep a sensible focus target or return focus to the source field.
+- Password, search/ARIA-search, email, one-time-code, card-number,
+  numeric-secret, read-only, and code fields plus Google Docs canvas are skipped.
 - Local checks work with no native host and make no network request.
-- Provider checks require both extension bridge opt-in and **Allow deeper AI
-  checks from the browser** in the Bean app.
+- Provider checks require a compatible local bridge, a configured provider,
+  and **Allow deeper AI checks from the browser** in the Bean app.
+- Sender hostname and field type are validated inside the extension, then
+  omitted from the native payload. Provider prompts use only Bean's fixed
+  `Browser` / `web editor` labels.
 - Applying an issue verifies the exact live substring and preserves line breaks.
-- Options reports all-site coverage and the number of blocked websites.
+- Options reports all-site coverage, lists blocked websites, and saves changes
+  automatically.
 - A review-required paragraph shows the before/after approval card and is not
   applied until approved.
-- Test Connection reports the automatic daily-call count and limit.
-- Test Connection reaches a final Connected/Error state within seven seconds;
+- **Check again** reports the automatic daily-call count and limit.
+- All provider-backed browser requests, including **Fix Paragraph**, stop at the
+  reported automatic limit; local issue application remains available.
+- **Check again** reaches a final Connected/Error state within seven seconds;
   it never remains on Checking indefinitely.
 - Settings discovers a loaded Bean extension and Connect/Repair writes an exact
   per-user host manifest without Terminal.
@@ -126,8 +152,8 @@ Use `BrowserExtension/test/fixtures/editor.html` for deterministic manual cases.
 
 ## Update and navigation gate
 
-- Settings has exactly six primary destinations: General, Writing, AI & Usage,
-  Personalization, Browser, and Privacy & Support.
+- Settings has exactly five primary destinations: General, Writing, AI & Usage,
+  Browser, and Privacy & Help. Personalization lives within Writing.
 - Troubleshooting details, field metadata, and operation history appear only
   inside Advanced diagnostics; the menu bar keeps only everyday actions.
 - First launch shows the guided onboarding flow. Closing it early does not mark
@@ -140,6 +166,50 @@ Use `BrowserExtension/test/fixtures/editor.html` for deterministic manual cases.
 - The release button is offered only for an HTTPS URL below
   `github.com/aneesio/bean/releases/` and opens the browser without downloading
   or installing an asset.
+
+## Support and full-reset gate
+
+Use a disposable macOS account or a purpose-built test profile. Never run the
+manual reset gate against personal API keys, personalization, or browser data.
+
+- Privacy & Help shows repair cards only for actionable setup findings. An
+  optional, absent browser extension must not be presented as a broken setup.
+- **Copy Diagnostics Summary** copies only the diagnostics block and does not
+  open GitHub. **Preview Support Report** shows the complete report before any
+  clipboard or browser action.
+- Simulate failed pasteboard and GitHub-open results. Neither action may show
+  success, and each error must remain visible in the surface where it occurred.
+- After a successful copy, the preview says the report was copied but not saved
+  or sent; it must no longer claim that Bean never copied it.
+- Opening the GitHub bug form does not copy, save, or upload the report. Copying
+  the report does not open a browser. Review both clipboard payloads for source
+  text, transformed text, prompts, API keys, clipboard content, and field labels.
+- Diagnostics use current Writing Context/Live suggestions names, classify the
+  active style as a canonical built-in or `custom`, and omit custom profile
+  names, personalization text, full app/native-host paths, hostnames, and field
+  labels.
+- About shows Bean 1.6.0 (8), identifies the community-supported public beta,
+  and opens only the canonical `aneesio/bean` GitHub, Support, Privacy, License,
+  Changelog, and manual update-check destinations. At the minimum width and
+  larger Accessibility text sizes, links reflow and **Open Update Check…** lands
+  on the visible Updates section in General.
+- Cancel **Full Reset Bean…** and verify nothing changes.
+- Both visible **Clear usage and operation history** controls require a
+  destructive confirmation and preserve today's private automatic-call count.
+- On a disposable profile, confirm Full Reset removes both provider Keychain
+  entries, all Bean user-content artifacts/generated backups, visible usage and
+  operation history, private automatic-call state, onboarding/preferences,
+  launch-at-login registration, exact `com.bean.nativehost.json` manifests, and
+  Bean's manual extension approval. Unrelated Keychain items, preference
+  domains, files, browser profiles, extensions, and neighboring native hosts
+  must remain untouched.
+- A successful reset quits Bean. Reopen it and verify Welcome appears with safe
+  defaults. A failed cleanup must keep Bean open, name the failed area, list any
+  protected steps not attempted, and never say the reset completed.
+- Accessibility authorization remains until the tester removes or disables Bean
+  in System Settings → Privacy & Security → Accessibility. The Chrome extension
+  and its local settings/blocked-sites list also remain until cleared or removed
+  in the browser. Reset copy must state both boundaries.
 
 ## Release artifact gate
 
@@ -154,7 +224,8 @@ Verify:
 - the app is universal (`arm64` and `x86_64`);
 - the ZIP and DMG names include `-unnotarized`;
 - the SHA-256 file matches both artifacts;
-- the app contains current README, PRIVACY, LICENSE, and extension resources;
+- the app contains current README, TESTING, QA_TEST_PLAN, SUPPORT, PRIVACY, LICENSE, CHANGELOG,
+  and extension resources;
 - the repository remains clean except for intended source changes;
 - installation from the DMG preserves shortcuts, Keychain access, and settings.
 - app/build/changelog/tag versions match, and the extension version was

@@ -1,5 +1,21 @@
 import Foundation
 
+/// Usage values are persisted counters and may be read from an older or
+/// externally modified preferences domain. Saturating at the display/accounting
+/// boundary keeps one extreme but valid counter from trapping the process.
+private func saturatingNonnegativeUsageAdd(_ left: Int, _ right: Int) -> Int {
+    let addition = max(0, left).addingReportingOverflow(max(0, right))
+    return addition.overflow ? Int.max : addition.partialValue
+}
+
+private func saturatingUsageCostAdd(_ left: Double, _ right: Double) -> Double {
+    guard left.isFinite, right.isFinite, left >= 0, right >= 0 else {
+        return Double.greatestFiniteMagnitude
+    }
+    let total = left + right
+    return total.isFinite ? total : Double.greatestFiniteMagnitude
+}
+
 struct DailyUsageBucket: Codable, Equatable, Identifiable {
     let day: Date
     let source: OperationSource
@@ -10,8 +26,57 @@ struct DailyUsageBucket: Codable, Equatable, Identifiable {
     var operationCount: Int
     var estimatedOperationCount: Int
 
+    private enum CodingKeys: String, CodingKey {
+        case day, source, provider, model, inputTokens, outputTokens
+        case operationCount, estimatedOperationCount
+    }
+
+    init(day: Date, source: OperationSource, provider: String, model: String,
+         inputTokens: Int, outputTokens: Int, operationCount: Int,
+         estimatedOperationCount: Int) {
+        self.day = day
+        self.source = source
+        self.provider = OperationalMetadataSanitizer.required(
+            provider,
+            maximumScalars: OperationalMetadataSanitizer.providerMaximumScalars
+        )
+        self.model = OperationalMetadataSanitizer.required(
+            model,
+            maximumScalars: OperationalMetadataSanitizer.modelMaximumScalars
+        )
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.operationCount = operationCount
+        self.estimatedOperationCount = estimatedOperationCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            day: try container.decode(Date.self, forKey: .day),
+            source: try container.decode(OperationSource.self, forKey: .source),
+            provider: try container.decode(String.self, forKey: .provider),
+            model: try container.decode(String.self, forKey: .model),
+            inputTokens: try container.decode(Int.self, forKey: .inputTokens),
+            outputTokens: try container.decode(Int.self, forKey: .outputTokens),
+            operationCount: try container.decode(Int.self, forKey: .operationCount),
+            estimatedOperationCount: try container.decode(
+                Int.self, forKey: .estimatedOperationCount
+            )
+        )
+    }
+
     var id: String {
         "\(day.timeIntervalSince1970)|\(source.rawValue)|\(provider)|\(model)"
+    }
+
+    var persistenceSanitized: DailyUsageBucket {
+        DailyUsageBucket(
+            day: day, source: source, provider: provider, model: model,
+            inputTokens: inputTokens, outputTokens: outputTokens,
+            operationCount: operationCount,
+            estimatedOperationCount: estimatedOperationCount
+        )
     }
 }
 
@@ -24,9 +89,11 @@ struct UsageSummary: Equatable {
     let estimatedCostUSD: Double
     let unpricedOperationCount: Int
 
-    var totalTokens: Int { inputTokens + outputTokens }
+    var totalTokens: Int {
+        saturatingNonnegativeUsageAdd(inputTokens, outputTokens)
+    }
     var averageTokensPerOperation: Int {
-        operationCount == 0 ? 0 : totalTokens / operationCount
+        operationCount > 0 ? totalTokens / operationCount : 0
     }
 }
 
@@ -50,8 +117,12 @@ enum UsageCostEstimator {
 
     static func costUSD(inputTokens: Int, outputTokens: Int,
                         provider: String, model: String) -> Double? {
-        guard let rates = rates(provider: provider, model: model) else { return nil }
-        return (Double(inputTokens) * rates.input + Double(outputTokens) * rates.output) / 1_000_000
+        guard inputTokens >= 0, outputTokens >= 0,
+              let rates = rates(provider: provider, model: model) else { return nil }
+        let inputCost = Double(inputTokens) * rates.input
+        let outputCost = Double(outputTokens) * rates.output
+        let cost = saturatingUsageCostAdd(inputCost, outputCost) / 1_000_000
+        return cost.isFinite ? cost : Double.greatestFiniteMagnitude
     }
 }
 
@@ -66,45 +137,97 @@ final class UsageLedgerStore: ObservableObject {
     private let defaults: UserDefaults
     private let storageKey: String
     private let calendar: Calendar
+    private let crossProcessLock: BeanCrossProcessStoreLock
 
     init(defaults: UserDefaults = .standard, storageKey: String = "usageLedgerV1",
-         calendar: Calendar = .current) {
+         calendar: Calendar = .current,
+         coordinationDirectoryURL: URL = BeanCrossProcessStoreLock.defaultDirectoryURL) {
         self.defaults = defaults
         self.storageKey = storageKey
         self.calendar = calendar
-        if let data = defaults.data(forKey: storageKey),
-           let decoded = try? JSONDecoder().decode([DailyUsageBucket].self, from: data) {
-            self.buckets = decoded
-        } else {
-            self.buckets = []
+        let lock = BeanCrossProcessStoreLock(directoryURL: coordinationDirectoryURL)
+        self.crossProcessLock = lock
+
+        let now = Date()
+        var loaded: [DailyUsageBucket] = []
+        var enteredLock = false
+        _ = lock.withExclusiveLock {
+            enteredLock = true
+            loaded = Self.loadBuckets(
+                defaults: defaults,
+                storageKey: storageKey,
+                calendar: calendar,
+                now: now,
+                persistSanitizedForm: true
+            ) ?? []
+            return true
         }
-        prune(now: Date())
+        if !enteredLock {
+            // Do not migrate or prune a stale snapshot unless the same lock used
+            // by the native host is held. A read-only copy is still useful in UI.
+            loaded = Self.loadBuckets(
+                defaults: defaults,
+                storageKey: storageKey,
+                calendar: calendar,
+                now: now,
+                persistSanitizedForm: false
+            ) ?? []
+        }
+        self.buckets = loaded
     }
 
     func record(_ usage: LLMUsage, source: OperationSource,
                 provider: String, model: String, at date: Date = Date()) {
-        // The Chrome native host is a separate process using the same defaults.
-        // Merge its latest buckets before every write so neither process can
-        // silently overwrite the other's usage.
-        refresh()
-        let day = calendar.startOfDay(for: date)
-        if let index = buckets.firstIndex(where: {
-            calendar.isDate($0.day, inSameDayAs: day)
-                && $0.source == source && $0.provider == provider && $0.model == model
-        }) {
-            buckets[index].inputTokens += usage.inputTokens
-            buckets[index].outputTokens += usage.outputTokens
-            buckets[index].operationCount += 1
-            if usage.isEstimated { buckets[index].estimatedOperationCount += 1 }
-        } else {
-            buckets.append(DailyUsageBucket(
-                day: day, source: source, provider: provider, model: model,
-                inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
-                operationCount: 1, estimatedOperationCount: usage.isEstimated ? 1 : 0
-            ))
+        guard date.timeIntervalSinceReferenceDate.isFinite else { return }
+        // Manual calls are intentionally not capped, but their read/modify/write
+        // must share the same lock as automatic app/native-host settlements so
+        // neither process can overwrite the other's content-free accounting.
+        _ = crossProcessLock.withExclusiveLock {
+            guard self.refreshAssumingLock(now: date) else { return false }
+            let day = self.calendar.startOfDay(for: date)
+            let safeProvider = OperationalMetadataSanitizer.required(
+                provider,
+                maximumScalars: OperationalMetadataSanitizer.providerMaximumScalars
+            )
+            let safeModel = OperationalMetadataSanitizer.required(
+                model,
+                maximumScalars: OperationalMetadataSanitizer.modelMaximumScalars
+            )
+            if let index = self.buckets.firstIndex(where: {
+                self.calendar.isDate($0.day, inSameDayAs: day)
+                    && $0.source == source
+                    && $0.provider == safeProvider
+                    && $0.model == safeModel
+            }) {
+                self.buckets[index].inputTokens = saturatingNonnegativeUsageAdd(
+                    self.buckets[index].inputTokens,
+                    usage.inputTokens
+                )
+                self.buckets[index].outputTokens = saturatingNonnegativeUsageAdd(
+                    self.buckets[index].outputTokens,
+                    usage.outputTokens
+                )
+                self.buckets[index].operationCount = saturatingNonnegativeUsageAdd(
+                    self.buckets[index].operationCount,
+                    1
+                )
+                if usage.isEstimated {
+                    self.buckets[index].estimatedOperationCount =
+                        saturatingNonnegativeUsageAdd(
+                            self.buckets[index].estimatedOperationCount,
+                            1
+                        )
+                }
+            } else {
+                self.buckets.append(DailyUsageBucket(
+                    day: day, source: source, provider: safeProvider, model: safeModel,
+                    inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+                    operationCount: 1, estimatedOperationCount: usage.isEstimated ? 1 : 0
+                ))
+            }
+            self.prune(now: date)
+            return self.persistAssumingLock()
         }
-        prune(now: date)
-        persist()
     }
 
     func summary(days: Int, source: OperationSource? = nil,
@@ -120,18 +243,29 @@ final class UsageLedgerStore: ObservableObject {
             if let bucketCost = UsageCostEstimator.costUSD(
                 inputTokens: bucket.inputTokens, outputTokens: bucket.outputTokens,
                 provider: bucket.provider, model: bucket.model) {
-                cost += bucketCost
+                cost = saturatingUsageCostAdd(cost, bucketCost)
             } else {
-                unpriced += bucket.operationCount
+                unpriced = saturatingNonnegativeUsageAdd(
+                    unpriced,
+                    bucket.operationCount
+                )
             }
         }
         return UsageSummary(
-            inputTokens: selected.reduce(0) { $0 + $1.inputTokens },
-            outputTokens: selected.reduce(0) { $0 + $1.outputTokens },
-            operationCount: selected.reduce(0) { $0 + $1.operationCount },
+            inputTokens: selected.reduce(0) {
+                saturatingNonnegativeUsageAdd($0, $1.inputTokens)
+            },
+            outputTokens: selected.reduce(0) {
+                saturatingNonnegativeUsageAdd($0, $1.outputTokens)
+            },
+            operationCount: selected.reduce(0) {
+                saturatingNonnegativeUsageAdd($0, $1.operationCount)
+            },
             automaticOperationCount: selected.filter { $0.source.isAutomaticProviderPath }
-                .reduce(0) { $0 + $1.operationCount },
-            estimatedOperationCount: selected.reduce(0) { $0 + $1.estimatedOperationCount },
+                .reduce(0) { saturatingNonnegativeUsageAdd($0, $1.operationCount) },
+            estimatedOperationCount: selected.reduce(0) {
+                saturatingNonnegativeUsageAdd($0, $1.estimatedOperationCount)
+            },
             estimatedCostUSD: cost,
             unpricedOperationCount: unpriced
         )
@@ -140,7 +274,7 @@ final class UsageLedgerStore: ObservableObject {
     func automaticCallsToday(now: Date = Date()) -> Int {
         buckets.filter {
             calendar.isDate($0.day, inSameDayAs: now) && $0.source.isAutomaticProviderPath
-        }.reduce(0) { $0 + $1.operationCount }
+        }.reduce(0) { saturatingNonnegativeUsageAdd($0, $1.operationCount) }
     }
 
     func allowsAutomaticCall(dailyLimit: Int, now: Date = Date()) -> Bool {
@@ -148,18 +282,30 @@ final class UsageLedgerStore: ObservableObject {
     }
 
     func clear() {
-        buckets = []
-        defaults.removeObject(forKey: storageKey)
-        defaults.synchronize()
+        _ = crossProcessLock.withExclusiveLock {
+            self.buckets = []
+            self.defaults.removeObject(forKey: self.storageKey)
+            self.defaults.synchronize()
+            return true
+        }
     }
 
     func refresh() {
-        defaults.synchronize()
-        guard let data = defaults.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([DailyUsageBucket].self, from: data),
-              decoded != buckets else { return }
-        buckets = decoded
-        prune(now: Date())
+        let now = Date()
+        var enteredLock = false
+        _ = crossProcessLock.withExclusiveLock {
+            enteredLock = true
+            return self.refreshAssumingLock(now: now)
+        }
+        if !enteredLock, let decoded = Self.loadBuckets(
+            defaults: defaults,
+            storageKey: storageKey,
+            calendar: calendar,
+            now: now,
+            persistSanitizedForm: false
+        ), decoded != buckets {
+            buckets = decoded
+        }
     }
 
     private func prune(now: Date) {
@@ -168,9 +314,58 @@ final class UsageLedgerStore: ObservableObject {
         buckets.removeAll { $0.day < cutoff }
     }
 
-    private func persist() {
-        guard let data = try? JSONEncoder().encode(buckets) else { return }
+    private func refreshAssumingLock(now: Date) -> Bool {
+        guard let decoded = Self.loadBuckets(
+            defaults: defaults,
+            storageKey: storageKey,
+            calendar: calendar,
+            now: now,
+            persistSanitizedForm: true
+        ) else { return false }
+        if decoded != buckets { buckets = decoded }
+        return true
+    }
+
+    private static func loadBuckets(
+        defaults: UserDefaults,
+        storageKey: String,
+        calendar: Calendar,
+        now: Date,
+        persistSanitizedForm: Bool
+    ) -> [DailyUsageBucket]? {
+        defaults.synchronize()
+        guard let data = defaults.data(forKey: storageKey) else { return [] }
+        guard !data.isEmpty,
+              let decoded = try? JSONDecoder().decode([DailyUsageBucket].self, from: data),
+              decoded.allSatisfy({
+                  $0.day.timeIntervalSinceReferenceDate.isFinite
+                      && $0.inputTokens >= 0 && $0.outputTokens >= 0
+                      && $0.operationCount >= 0 && $0.estimatedOperationCount >= 0
+                      && $0.estimatedOperationCount <= $0.operationCount
+              }) else { return nil }
+
+        var sanitized = decoded.map(\.persistenceSanitized)
+        if let cutoff = calendar.date(
+            byAdding: .day,
+            value: -Self.retentionDays,
+            to: calendar.startOfDay(for: now)
+        ) {
+            sanitized.removeAll { $0.day < cutoff }
+        }
+        if persistSanitizedForm,
+           let encoded = try? JSONEncoder().encode(sanitized),
+           encoded != data {
+            defaults.set(encoded, forKey: storageKey)
+            defaults.synchronize()
+        }
+        return sanitized
+    }
+
+    /// Call only while `crossProcessLock` is held.
+    private func persistAssumingLock() -> Bool {
+        guard let data = try? JSONEncoder().encode(buckets) else { return false }
         defaults.set(data, forKey: storageKey)
         defaults.synchronize()
+        return true
     }
 }

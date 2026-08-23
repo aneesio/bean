@@ -50,6 +50,22 @@ enum WritingAction: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// The small, stable set shown when Bean first opens. Everything else is
+    /// deliberately one level deeper so the menu is a decision, not a catalog.
+    static let primaryActions: [WritingAction] = [
+        .localQuickCheck,
+        .proofread,
+        .makeClearer,
+        .makeConcise,
+        .draftReply
+    ]
+
+    /// Secondary actions retain their CaseIterable order and never duplicate a
+    /// primary action. This is shared by the full and contextual menus.
+    static var moreActions: [WritingAction] {
+        allCases.filter { !primaryActions.contains($0) }
+    }
+
     var category: ActionCategory {
         switch self {
         case .localQuickCheck, .proofread: return .proofread
@@ -61,7 +77,7 @@ enum WritingAction: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .localQuickCheck: return "Local Quick Check"
+        case .localQuickCheck: return "Quick Fix"
         case .proofread: return "AI Proofread"
         case .makeClearer: return "Make Clearer"
         case .makeConcise: return "Make Concise"
@@ -120,6 +136,12 @@ enum WritingAction: String, CaseIterable, Identifiable {
     var requiresPreview: Bool { category != .proofread }
     var allowsDirectReplace: Bool { category == .proofread }
     var usesProvider: Bool { self != .localQuickCheck }
+
+    /// Menu availability is intentionally based on content-free setup metadata;
+    /// rendering a menu must never unlock or read the user's Keychain secret.
+    func requiresAISetup(aiAvailable: Bool) -> Bool {
+        usesProvider && !aiAvailable
+    }
 
     /// Whether the preview offers a Replace button. Reply actions are copy-first
     /// — they draft a *response*, so replacing the source message is never the

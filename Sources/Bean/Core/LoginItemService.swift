@@ -29,6 +29,33 @@ enum LoginItemService {
         }
     }
 
+    /// Removes both an enabled registration and one still awaiting approval.
+    /// Full Reset uses this stricter form so a pending login item cannot survive
+    /// merely because `isEnabled` is false until the user approves it.
+    static func resetRegistration() throws {
+        let service = SMAppService.mainApp
+        switch service.status {
+        case .enabled, .requiresApproval:
+            try service.unregister()
+        case .notRegistered, .notFound:
+            return
+        @unknown default:
+            throw NSError(
+                domain: "com.bean.app.login-item",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Bean couldn't verify its launch-at-login registration."]
+            )
+        }
+
+        if service.status == .enabled || service.status == .requiresApproval {
+            throw NSError(
+                domain: "com.bean.app.login-item",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Bean is still listed as a login item. Remove it in System Settings → General → Login Items, then retry."]
+            )
+        }
+    }
+
     /// Human-readable status for display/troubleshooting.
     static var statusDescription: String {
         switch SMAppService.mainApp.status {

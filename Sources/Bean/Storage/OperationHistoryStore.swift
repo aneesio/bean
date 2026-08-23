@@ -48,6 +48,13 @@ struct OperationRecord: Codable, Identifiable, Equatable {
     let outputTokens: Int?
     let usageEstimated: Bool
 
+    private enum CodingKeys: String, CodingKey {
+        case id, timestamp, source, appName, appBundleIdentifier, appCategory
+        case action, inputMode, inputLength, outputLength, provider, model
+        case durationMilliseconds, safetyResult, outcome, inputTokens, outputTokens
+        case usageEstimated
+    }
+
     init(
         id: UUID = UUID(),
         timestamp: Date = Date(),
@@ -71,40 +78,126 @@ struct OperationRecord: Codable, Identifiable, Equatable {
         self.id = id
         self.timestamp = timestamp
         self.source = source
-        self.appName = appName
-        self.appBundleIdentifier = appBundleIdentifier
-        self.appCategory = appCategory
-        self.action = action
-        self.inputMode = inputMode
+        self.appName = OperationalMetadataSanitizer.optional(
+            appName,
+            maximumScalars: OperationalMetadataSanitizer.appNameMaximumScalars
+        )
+        self.appBundleIdentifier = OperationalMetadataSanitizer.optional(
+            appBundleIdentifier,
+            maximumScalars: OperationalMetadataSanitizer.bundleIdentifierMaximumScalars
+        )
+        self.appCategory = OperationalMetadataSanitizer.required(
+            appCategory,
+            maximumScalars: OperationalMetadataSanitizer.categoryMaximumScalars
+        )
+        self.action = OperationalMetadataSanitizer.required(
+            action,
+            maximumScalars: OperationalMetadataSanitizer.operationLabelMaximumScalars
+        )
+        self.inputMode = OperationalMetadataSanitizer.required(
+            inputMode,
+            maximumScalars: OperationalMetadataSanitizer.operationLabelMaximumScalars
+        )
         self.inputLength = max(0, inputLength)
         self.outputLength = outputLength.map { max(0, $0) }
-        self.provider = provider
-        self.model = model
+        self.provider = OperationalMetadataSanitizer.optional(
+            provider,
+            maximumScalars: OperationalMetadataSanitizer.providerMaximumScalars
+        )
+        self.model = OperationalMetadataSanitizer.optional(
+            model,
+            maximumScalars: OperationalMetadataSanitizer.modelMaximumScalars
+        )
         self.durationMilliseconds = durationMilliseconds.map { max(0, $0) }
-        self.safetyResult = safetyResult
-        self.outcome = outcome
+        self.safetyResult = OperationalMetadataSanitizer.required(
+            safetyResult,
+            maximumScalars: OperationalMetadataSanitizer.operationLabelMaximumScalars
+        )
+        self.outcome = OperationalMetadataSanitizer.required(
+            outcome,
+            maximumScalars: OperationalMetadataSanitizer.operationLabelMaximumScalars
+        )
         self.inputTokens = inputTokens.map { max(0, $0) }
         self.outputTokens = outputTokens.map { max(0, $0) }
         self.usageEstimated = usageEstimated
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(UUID.self, forKey: .id),
+            timestamp: try container.decode(Date.self, forKey: .timestamp),
+            source: try container.decode(OperationSource.self, forKey: .source),
+            appName: try container.decodeIfPresent(String.self, forKey: .appName),
+            appBundleIdentifier: try container.decodeIfPresent(
+                String.self, forKey: .appBundleIdentifier
+            ),
+            appCategory: try container.decode(String.self, forKey: .appCategory),
+            action: try container.decode(String.self, forKey: .action),
+            inputMode: try container.decode(String.self, forKey: .inputMode),
+            inputLength: try container.decode(Int.self, forKey: .inputLength),
+            outputLength: try container.decodeIfPresent(Int.self, forKey: .outputLength),
+            provider: try container.decodeIfPresent(String.self, forKey: .provider),
+            model: try container.decodeIfPresent(String.self, forKey: .model),
+            durationMilliseconds: try container.decodeIfPresent(
+                Int.self, forKey: .durationMilliseconds
+            ),
+            safetyResult: try container.decode(String.self, forKey: .safetyResult),
+            outcome: try container.decode(String.self, forKey: .outcome),
+            inputTokens: try container.decodeIfPresent(Int.self, forKey: .inputTokens),
+            outputTokens: try container.decodeIfPresent(Int.self, forKey: .outputTokens),
+            usageEstimated: try container.decodeIfPresent(
+                Bool.self, forKey: .usageEstimated
+            ) ?? false
+        )
     }
 
     var isConfirmedExternalReplacement: Bool {
         outcome == "replacedConfirmed" && appBundleIdentifier != "com.bean.app"
     }
 
+    /// Browser hostnames and field semantics are useful only in memory while a
+    /// request is being built. Persisted browser accounting is intentionally
+    /// generic so diagnostics cannot reveal a sensitive website after the fact.
+    var persistenceSanitized: OperationRecord {
+        return OperationRecord(
+            id: id,
+            timestamp: timestamp,
+            source: source,
+            appName: source == .webInline ? nil : appName,
+            appBundleIdentifier: source == .webInline ? nil : appBundleIdentifier,
+            appCategory: source == .webInline ? "browser" : appCategory,
+            action: action,
+            inputMode: source == .webInline ? "browser" : inputMode,
+            inputLength: inputLength,
+            outputLength: outputLength,
+            provider: provider,
+            model: model,
+            durationMilliseconds: durationMilliseconds,
+            safetyResult: safetyResult,
+            outcome: outcome,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            usageEstimated: usageEstimated
+        )
+    }
+
     var diagnosticsLine: String {
+        // Re-sanitize at the rendering boundary as defense in depth for any
+        // record supplied outside the normal stores.
+        let safe = persistenceSanitized
         let date = ISO8601DateFormatter().string(from: timestamp)
-        let app = appName ?? appCategory
-        let duration = durationMilliseconds.map { " durationMs=\($0)" } ?? ""
+        let app = safe.appName ?? safe.appCategory
+        let duration = safe.durationMilliseconds.map { " durationMs=\($0)" } ?? ""
         let usage: String
-        if let inputTokens, let outputTokens {
-            usage = " tokens=\(inputTokens)+\(outputTokens)\(usageEstimated ? "(estimated)" : "")"
+        if let inputTokens = safe.inputTokens, let outputTokens = safe.outputTokens {
+            usage = " tokens=\(inputTokens)+\(outputTokens)\(safe.usageEstimated ? "(estimated)" : "")"
         } else {
             usage = ""
         }
-        return "\(date) source=\(source.rawValue) app=\(app) action=\(action) "
-            + "mode=\(inputMode) lengths=\(inputLength)/\(outputLength ?? 0) "
-            + "safety=\(safetyResult) outcome=\(outcome)\(duration)\(usage)"
+        return "\(date) source=\(safe.source.rawValue) app=\(app) action=\(safe.action) "
+            + "mode=\(safe.inputMode) lengths=\(safe.inputLength)/\(safe.outputLength ?? 0) "
+            + "safety=\(safe.safetyResult) outcome=\(safe.outcome)\(duration)\(usage)"
     }
 }
 
@@ -119,40 +212,74 @@ final class OperationHistoryStore: ObservableObject {
 
     private let defaults: UserDefaults
     private let storageKey: String
+    private let crossProcessLock: BeanCrossProcessStoreLock
 
-    init(defaults: UserDefaults = .standard, storageKey: String = "operationHistoryV1") {
+    init(defaults: UserDefaults = .standard, storageKey: String = "operationHistoryV1",
+         coordinationDirectoryURL: URL = BeanCrossProcessStoreLock.defaultDirectoryURL) {
         self.defaults = defaults
         self.storageKey = storageKey
-        if let data = defaults.data(forKey: storageKey),
-           let decoded = try? JSONDecoder().decode([OperationRecord].self, from: data) {
-            self.records = Array(decoded.prefix(Self.maximumRecords))
-        } else {
-            self.records = []
+        let lock = BeanCrossProcessStoreLock(directoryURL: coordinationDirectoryURL)
+        self.crossProcessLock = lock
+
+        var loaded: [OperationRecord] = []
+        var enteredLock = false
+        _ = lock.withExclusiveLock {
+            enteredLock = true
+            loaded = Self.loadRecords(
+                defaults: defaults,
+                storageKey: storageKey,
+                persistSanitizedForm: true
+            ) ?? []
+            return true
         }
+        if !enteredLock {
+            // A read-only fallback keeps the local UI useful in a restricted
+            // environment, but it must never rewrite a stale snapshot without
+            // the same lock used by the browser native-host process.
+            loaded = Self.loadRecords(
+                defaults: defaults,
+                storageKey: storageKey,
+                persistSanitizedForm: false
+            ) ?? []
+        }
+        self.records = loaded
     }
 
     func record(_ record: OperationRecord) {
-        refresh()
-        records.insert(record, at: 0)
-        if records.count > Self.maximumRecords {
-            records.removeLast(records.count - Self.maximumRecords)
+        let safeRecord = record.persistenceSanitized
+        _ = crossProcessLock.withExclusiveLock {
+            guard self.refreshAssumingLock() else { return false }
+            self.records.insert(safeRecord, at: 0)
+            if self.records.count > Self.maximumRecords {
+                self.records.removeLast(self.records.count - Self.maximumRecords)
+            }
+            return self.persistAssumingLock()
         }
-        persist()
     }
 
     func clear() {
-        records = []
-        defaults.removeObject(forKey: storageKey)
-        defaults.synchronize()
+        _ = crossProcessLock.withExclusiveLock {
+            self.records = []
+            self.defaults.removeObject(forKey: self.storageKey)
+            self.defaults.synchronize()
+            return true
+        }
     }
 
     /// Refreshes metadata written by the separate Chrome native-host process.
     func refresh() {
-        defaults.synchronize()
-        guard let data = defaults.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([OperationRecord].self, from: data),
-              decoded != records else { return }
-        records = Array(decoded.prefix(Self.maximumRecords))
+        var enteredLock = false
+        _ = crossProcessLock.withExclusiveLock {
+            enteredLock = true
+            return self.refreshAssumingLock()
+        }
+        if !enteredLock, let decoded = Self.loadRecords(
+            defaults: defaults,
+            storageKey: storageKey,
+            persistSanitizedForm: false
+        ), decoded != records {
+            records = decoded
+        }
     }
 
     var hasConfirmedExternalReplacement: Bool {
@@ -163,9 +290,43 @@ final class OperationHistoryStore: ObservableObject {
         records.prefix(10).map(\.diagnosticsLine)
     }
 
-    private func persist() {
-        guard let data = try? JSONEncoder().encode(records) else { return }
+    private func refreshAssumingLock() -> Bool {
+        guard let decoded = Self.loadRecords(
+            defaults: defaults,
+            storageKey: storageKey,
+            persistSanitizedForm: true
+        ) else { return false }
+        if decoded != records { records = decoded }
+        return true
+    }
+
+    private static func loadRecords(
+        defaults: UserDefaults,
+        storageKey: String,
+        persistSanitizedForm: Bool
+    ) -> [OperationRecord]? {
+        defaults.synchronize()
+        guard let data = defaults.data(forKey: storageKey) else { return [] }
+        guard let decoded = try? JSONDecoder().decode([OperationRecord].self, from: data) else {
+            return nil
+        }
+        let sanitized = Array(
+            decoded.lazy.map(\.persistenceSanitized).prefix(Self.maximumRecords)
+        )
+        if persistSanitizedForm,
+           let encoded = try? JSONEncoder().encode(sanitized),
+           encoded != data {
+            defaults.set(encoded, forKey: storageKey)
+            defaults.synchronize()
+        }
+        return sanitized
+    }
+
+    /// Call only while `crossProcessLock` is held.
+    private func persistAssumingLock() -> Bool {
+        guard let data = try? JSONEncoder().encode(records) else { return false }
         defaults.set(data, forKey: storageKey)
         defaults.synchronize()
+        return true
     }
 }
