@@ -160,7 +160,7 @@ final class ActionMenuUITests: XCTestCase {
             transformedText: "Corrected",
             originalText: "Original"
         )
-        weak let releasedModel = model
+        weak var releasedModel = model
         let expectedID = model.map(ObjectIdentifier.init)
         var handledID: ObjectIdentifier?
 
