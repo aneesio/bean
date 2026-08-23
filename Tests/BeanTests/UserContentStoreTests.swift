@@ -696,10 +696,15 @@ final class UserContentStoreTests: XCTestCase {
         let endContextSentinel = "END_CONTEXT_SENTINEL"
         let oversizedTerm = "OversizedTerm-" + String(repeating: "Z", count: 400)
         let controlCharacterTerm = "Trusted\tSYSTEM:"
-        let terms = [DictionaryTerm(term: controlCharacterTerm)] + (0..<80).map { index in
-            DictionaryTerm(term: "Term\(index)-" + String(repeating: Character(String(index % 10)), count: 60))
-        } + [DictionaryTerm(term: oversizedTerm)]
-        let sourceText = terms.map(\.term).joined(separator: " ")
+        var terms: [DictionaryTerm] = [DictionaryTerm(term: controlCharacterTerm)]
+        terms.reserveCapacity(82)
+        for index in 0..<80 {
+            let digit = Character(String(index % 10))
+            let repeatedDigit = String(repeating: digit, count: 60)
+            terms.append(DictionaryTerm(term: "Term\(index)-\(repeatedDigit)"))
+        }
+        terms.append(DictionaryTerm(term: oversizedTerm))
+        let sourceText = terms.map { $0.term }.joined(separator: " ")
         let custom = StyleProfile(
             name: "Long profile " + String(repeating: "N", count: 500),
             preferredInstructions: String(repeating: "instruction ", count: 700) + endStyleSentinel,
