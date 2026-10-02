@@ -14,20 +14,30 @@ enum TextRangeLocator {
         guard range.length > 0, let axRect = boundsForRange(range, in: element) else { return [] }
         // Reject empty/degenerate rects.
         guard axRect.width > 0.5, axRect.height > 0.5 else { return [] }
-        return [flipToCocoa(axRect)]
+        let rect = flipToCocoa(axRect)
+        // AX can return geometry for text scrolled outside its editor. Never
+        // draw an underline over another control or another app's window.
+        if let frame = elementFrame(element), !frame.contains(rect) { return [] }
+        guard NSScreen.screens.contains(where: { $0.frame.intersects(rect) }) else { return [] }
+        return [rect]
     }
 
     /// Probes whether bounds are reliable for this element (used by support
-    /// detection). Tries the first character's bounds.
-    static func boundsAreReliable(for element: AXUIElement, valueLength: Int) -> Bool {
-        guard valueLength > 0 else { return false }
-        guard let rect = boundsForRange(NSRange(location: 0, length: 1), in: element) else { return false }
-        guard rect.width > 0.5, rect.height > 0.5 else { return false }
-        // The probe rect should sit inside the element's own frame, if exposed.
-        if let frame = elementFrame(element) {
-            return frame.intersects(rect)
+    /// detection). Probe a composed character near the caret before trying the
+    /// start, which may be scrolled offscreen or begin with a multi-unit emoji.
+    static func boundsAreReliable(for element: AXUIElement, value: String) -> Bool {
+        let text = value as NSString
+        guard text.length > 0 else { return false }
+        let location = min(max(AccessibilityService.selectedRange(of: element)?.location ?? 0, 0), text.length - 1)
+        let ranges = [text.rangeOfComposedCharacterSequence(at: location),
+                      text.rangeOfComposedCharacterSequence(at: 0)]
+        for range in ranges {
+            guard let rect = boundsForRange(range, in: element),
+                  rect.width > 0.5, rect.height > 0.5 else { continue }
+            if let frame = elementFrame(element), !frame.intersects(flipToCocoa(rect)) { continue }
+            return true
         }
-        return true
+        return false
     }
 
     /// Cocoa screen rect of the current selection in `element`, or nil.
@@ -35,6 +45,17 @@ enum TextRangeLocator {
         guard let sel = AccessibilityService.selectedRange(of: element), sel.length > 0 else { return nil }
         guard let rect = boundsForRange(sel, in: element), rect.width > 0.5, rect.height > 0.5 else { return nil }
         return flipToCocoa(rect)
+    }
+
+    /// A zero-length range locates the insertion point without selecting text.
+    static func caretRect(for element: AXUIElement) -> CGRect? {
+        guard let selection = AccessibilityService.selectedRange(of: element),
+              selection.length == 0,
+              let bounds = boundsForRange(selection, in: element), bounds.height > 0.5 else { return nil }
+        let rect = flipToCocoa(CGRect(x: bounds.minX, y: bounds.minY,
+                                      width: max(bounds.width, 1), height: bounds.height))
+        if let frame = elementFrame(element), !frame.intersects(rect) { return nil }
+        return rect
     }
 
     /// Cocoa screen rect of the focused element's frame, or nil.

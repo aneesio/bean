@@ -11,6 +11,8 @@
     if (beanQAParams.get("beanqa") === "1") {
       document.documentElement.dataset.beanQaMode = "mock";
       const qaReviewMode = beanQAParams.get("beanreview") === "1";
+      const qaActionMode = beanQAParams.get("beanactions") === "1";
+      const qaLocalMode = beanQAParams.get("beanlocal") !== "0";
       const qaSettings = { blockedSites: [] };
       window.chrome = {
         storage: {
@@ -31,9 +33,25 @@
             if (!callback) return;
             if (message && message.type === "getStatus") {
               callback({ ok: true, bridgeAvailable: true, protocolVersion: 1, compatible: true,
-                         providerConfigured: qaReviewMode, webInlineEnabled: true,
+                         localCheckAvailable:qaLocalMode,fieldOwnershipAvailable:true,performActionAvailable:true,
+                         providerConfigured: qaReviewMode || qaActionMode, webInlineEnabled: qaReviewMode,
                          automaticAccountingAvailable: true,
                          browserAIEnabled: qaReviewMode, requestTimeoutSeconds: 30 });
+            } else if (message && message.type === "fieldOwnership") {
+              callback({ok:true,ownershipAccepted:true});
+            } else if (qaLocalMode && message && message.type === "localCheck") {
+              const text = String(message.request && message.request.text || "");
+              const issues = [];
+              for (const match of text.matchAll(/\btme\b/g)) {
+                issues.push({original:"tme",suggestion:"time",start:match.index,end:match.index + 3,
+                  category:"spelling",message:"Did you mean ‘time’?",confidence:0.65,alternatives:["tame","tome"]});
+              }
+              setTimeout(() => callback({ok:true,issues,localSpellingAvailable:true}),200);
+            } else if (qaActionMode && message && message.type === "performAction") {
+              const text = String(message.request && message.request.text || "");
+              const corrected = text.replace(/\brecieve\b/g,"receive").replace(/\bteh\b/g,"the")
+                .replace(/\btommorow\b/g,"tomorrow").replace(/\btme\b/g,"time");
+              setTimeout(() => callback({ok:true,text:corrected,reviewRequired:false}),350);
             } else if (qaReviewMode && message && message.type === "detectIssues") {
               callback({ ok: true, issues: [] });
             } else if (qaReviewMode && message && message.type === "proofreadParagraph") {
@@ -58,7 +76,7 @@
   <style>
     body { font: 15px -apple-system, system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1d1d1f; }
     h2 { font-size: 14px; margin: 24px 0 6px; color: #555; }
-    textarea, input { width: 100%; box-sizing: border-box; font: 15px inherit; padding: 8px; border: 1px solid #ccc; border-radius: 8px; }
+    textarea, input { width: 100%; box-sizing: border-box; font: 15px -apple-system, system-ui, sans-serif; padding: 8px; border: 1px solid #ccc; border-radius: 8px; }
     textarea { min-height: 90px; }
     .ce { border: 1px solid #ccc; border-radius: 8px; padding: 8px; min-height: 70px; }
     .codeish { font-family: ui-monospace, Menlo, monospace; white-space: pre; }
@@ -71,8 +89,8 @@
 </head>
 <body>
   <h1>Bean extension test fixture</h1>
-  <div class="qa-banner" role="status"><strong>Local QA mode.</strong> Production scripts are running with a no-storage mock, so page text cannot leave this fixture. Focus the first field, wait for underlines, open a correction, Apply, Undo, then use More → Disable on this field → Re-enable. Add <code>&amp;beanreview=1</code>, make one edit, and choose AI Proofread Paragraph to test the busy and before/after review states locally.</div>
-  <p class="note">Open <code>editor.html?beanqa=1</code> for self-running local QA—no extension setup required. Without that query, load the extension normally, edit below, and wait ~1.2s. Hover or click an underline to see the correction card. <strong>No real data here.</strong></p>
+  <div class="qa-banner" role="status"><strong>Mock QA mode.</strong> Production scripts use a local-only browser API mock. No text leaves this fixture. The mock Mac checker adds exact <code>tme → time</code> findings and alternatives; uncertain guesses need review. Accept, Undo, then open the single Bean badge to Proofread or Rewrite. Add <code>&amp;beanactions=1</code> to test direct explicit actions, or <code>&amp;beanlocal=0</code> to test honest limited spelling coverage. <code>&amp;beanreview=1</code> retains the legacy review-required regression fixture.</div>
+  <p class="note">Open <code>editor.html?beanqa=1</code> for mock QA with no extension setup. Without that query, the installed extension uses the actual Mac connection. Local checks start after a 450 ms pause. <strong>No real data here.</strong></p>
 
   <h2>Textarea (supported)</h2>
   <textarea id="ta" autofocus>i has a apple and  it dont work,next we will recieve teh package tommorow.</textarea>
@@ -80,19 +98,24 @@
   <h2>Text input (supported)</h2>
   <input type="text" id="ti" value="this  is definately a calender issue" />
 
+  <h2>Mac spelling and alternatives — repeated exact occurrences</h2>
+  <textarea id="native-spell">Can you get back to me in tme with these updates? I need tme to review.</textarea>
+
   <h2>Contenteditable (supported)</h2>
   <div class="ce" contenteditable="true">She dont know weather the meeting is tommorow or not.</div>
 
   <h2>Gmail-like contenteditable — multi-block (range-mismatch regression)</h2>
-  <p class="note">Reproduces the corruption case. innerText inserts newlines between these blocks; mapping/apply must use the verified text-node range. Expected: <code>better. and keeps → better. And keeps</code> and <code>forwaforward → forward</code>, applied at the right spot (no "bettebetter", no swallowed letters).</p>
+  <p class="note">innerText inserts newlines between blocks. Accepting <code>tme → time</code> must edit the exact occurrence and keep the signature. The assistant states <strong>current paragraph</strong> for rich drafts; selected text takes precedence.</p>
   <div class="ce" contenteditable="true">
     <div>Okay, let's see if it works this time around.</div>
     <div><br></div>
-    <div>This is definitely so much better. and keeps going forwaforward the fixes. Quite impressive, actually.</div>
+    <div>Can you get back to me in tme with these updates?</div>
+    <div><br></div>
+    <div>Thanks,</div><div>Test user</div>
   </div>
 
   <h2>Paragraph action — textarea</h2>
-  <p class="note">The first line has multiple issues → a tiny Bean icon appears at the line's left. Before a user edit, <strong>Fix Obvious Issues</strong> runs locally and sends no text. After editing that paragraph, <strong>AI Proofread Paragraph</strong> may send only that changed paragraph through the Bean app. If AI is unavailable, Bean says so and applies only obvious local fixes. The single-issue last line gets <em>no</em> icon.</p>
+  <p class="note">One Bean badge contains suggestions, <strong>Proofread draft</strong>, and rewrite styles. Proofread works without a key using confident local fixes. Uncertain spelling stays reviewable. Explicit AI actions apply directly to an unchanged source and offer Undo.</p>
   <textarea id="para-ta">okay here's teh next attempt. let's see if it shows its magic,tommorow.
 
 this paragraph is fine.
@@ -105,8 +128,8 @@ just one typo: tommorow.</textarea>
 
 this is the next paragraf .</textarea>
 
-  <h2>Paragraph control — contenteditable blocks (icon per multi-issue block)</h2>
-  <p class="note">Each block with ≥2 issues gets its own paragraph icon; blocks group by DOM boundary (div/p), never across blocks.</p>
+  <h2>Paragraph control — contenteditable blocks</h2>
+  <p class="note">One badge opens review for the field; paragraph actions group by DOM boundary (div/p), never across blocks.</p>
   <div class="ce" contenteditable="true">
     <div>She dont know weather the meeting is tommorow or not.</div>
     <div><br></div>
@@ -114,15 +137,21 @@ this is the next paragraf .</textarea>
   </div>
 
   <h2>Line-break safety (fixing the last word must NOT merge paragraphs)</h2>
-  <p class="note">Apply the fix on <code>recieve</code> / <code>tommorow</code> at the end of a line; the newline before the next paragraph must remain. No issue range may ever contain a newline.</p>
+  <p class="note">Accept the fix on <code>recieve</code> / <code>tommorow</code> at the end of a line; the newline before the next paragraph must remain. No issue range may ever contain a newline.</p>
   <textarea id="linebreak-ta">we will recieve the package tommorow
 the next paragraph must stay separate.</textarea>
 
   <h2>Repeated substring (ambiguous → should be skipped, not mis-highlighted)</h2>
   <div class="ce" contenteditable="true">better. and keeps going. better. and keeps going again.</div>
 
-  <h2>Repeated typo in textarea (ambiguous → skipped)</h2>
+  <h2>Repeated typo in textarea (each occurrence can be reviewed)</h2>
   <textarea id="dup">teh cat sat on teh mat near teh door.</textarea>
+
+  <h2>Valid references and repeated grammar (no false positives)</h2>
+  <textarea id="valid">I had had enough and knew that that mattered. Visit https://teh.example.com/a,b or email teh@example.com. Open node.js and example.com.</textarea>
+
+  <h2>One-letter capitalization</h2>
+  <input id="one-letter" type="text" value="i" />
 
   <h2>Inline spans (apply only if range matches exactly)</h2>
   <div class="ce" contenteditable="true">This has an <span style="color:#06c">forwaforward</span> inside a span.</div>

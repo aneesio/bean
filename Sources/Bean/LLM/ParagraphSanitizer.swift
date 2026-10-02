@@ -19,9 +19,9 @@ enum ParagraphSanitizer {
     // Zero-width space, ZWNJ, ZWJ, and BOM — model artifacts, never user intent.
     private static let zeroWidthScalars: Set<UInt32> = [0x200B, 0x200C, 0x200D, 0xFEFF]
 
-    static func sanitize(_ raw: String) -> Result {
+    static func sanitize(_ raw: String, preservingWrappingQuotes: Bool = false) -> Result {
         var s = stripCodeFence(raw)
-        s = stripWrappingQuotes(s)
+        if !preservingWrappingQuotes { s = stripWrappingQuotes(s) }
 
         var stripped = 0
         var scalars = String.UnicodeScalarView()

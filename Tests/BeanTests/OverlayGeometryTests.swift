@@ -109,6 +109,37 @@ final class OverlayGeometryTests: XCTestCase {
 
     func testOnlyExplicitActivationRequestsKeyboardInteraction() {
         XCTAssertFalse(OverlayActivationIntent.passiveHover.allowsKeyboardInteraction)
+        XCTAssertFalse(OverlayActivationIntent.pointer.allowsKeyboardInteraction,
+                       "Accept must not activate Bean or move focus away from the writing field")
         XCTAssertTrue(OverlayActivationIntent.explicit.allowsKeyboardInteraction)
+    }
+
+    func testLiveIssueTrayStaysOutsideTheTypingAreaWhenThereIsRoom() {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let size = CGSize(width: 260, height: 36)
+        let origin = OverlayGeometry.issueTrayOrigin(anchoredTo: field, panelSize: size,
+                                                     in: main.visibleFrame)
+        let tray = CGRect(origin: origin, size: size)
+        XCTAssertFalse(field.intersects(tray))
+        XCTAssertTrue(main.visibleFrame.contains(tray))
+        XCTAssertEqual(tray.maxX, field.maxX, accuracy: 0.001)
+    }
+
+    func testLiveIssueTrayRemainsVisibleInFullScreenAndWithoutFieldBounds() {
+        let size = CGSize(width: 260, height: 36)
+        let origin = OverlayGeometry.issueTrayOrigin(anchoredTo: left.visibleFrame, panelSize: size,
+                                                     in: left.visibleFrame)
+        XCTAssertTrue(left.visibleFrame.contains(CGRect(origin: origin, size: size)))
+        XCTAssertEqual(OverlayGeometry.issueTrayOrigin(anchoredTo: nil, panelSize: size,
+                                                       in: left.visibleFrame),
+                       OverlayGeometry.topRightOrigin(panelSize: size, in: left.visibleFrame))
+    }
+
+    func testInlineCardMakesInvisibleSpacingAndDeletionUnderstandable() {
+        XCTAssertEqual(InlineSuggestionDisplay.text("  "), "2 spaces")
+        XCTAssertEqual(InlineSuggestionDisplay.text(" "), "1 space")
+        XCTAssertEqual(InlineSuggestionDisplay.text(". "), ".␣")
+        XCTAssertEqual(InlineSuggestionDisplay.text(""), "Remove")
+        XCTAssertEqual(InlineSuggestionDisplay.text("the message"), "the message")
     }
 }

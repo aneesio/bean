@@ -3,6 +3,7 @@ import ApplicationServices
 
 enum OverlayActivationIntent: Equatable {
     case passiveHover
+    case pointer
     case explicit
 
     var allowsKeyboardInteraction: Bool { self == .explicit }
@@ -131,6 +132,26 @@ enum OverlayGeometry {
         )
     }
 
+    /// Keep the live issue control beside the editor, outside the typing area
+    /// when space permits. Small/full-screen fields use a clamped corner.
+    static func issueTrayOrigin(anchoredTo fieldRect: CGRect?, panelSize: CGSize,
+                                in visibleFrame: CGRect, gap: CGFloat = 6) -> CGPoint {
+        guard let fieldRect else {
+            return topRightOrigin(panelSize: panelSize, in: visibleFrame)
+        }
+        let field = fieldRect.standardized
+        let visible = visibleFrame.standardized
+        let proposed: CGPoint
+        if field.minY - panelSize.height - gap >= visible.minY + 8 {
+            proposed = CGPoint(x: field.maxX - panelSize.width, y: field.minY - panelSize.height - gap)
+        } else if field.maxX + gap + panelSize.width <= visible.maxX - 8 {
+            proposed = CGPoint(x: field.maxX + gap, y: field.minY)
+        } else {
+            proposed = CGPoint(x: field.maxX - panelSize.width - 8, y: field.minY + 8)
+        }
+        return clampedOrigin(proposed, panelSize: panelSize, in: visible, inset: 8)
+    }
+
     /// Only the underline and a two-point overlap with the glyph box receive
     /// mouse events. The rest of the text rect remains available for caret and
     /// selection interaction in the source application.
@@ -177,10 +198,14 @@ enum OverlayGeometry {
 final class OverlaySourceFocusSession {
     private let sourceApplication: NSRunningApplication?
     private let focusedElement: AXUIElement?
+    private let sourceValue: String?
+    private let selectedRange: NSRange?
 
     private init(sourceApplication: NSRunningApplication?, focusedElement: AXUIElement?) {
         self.sourceApplication = sourceApplication
         self.focusedElement = focusedElement
+        self.sourceValue = focusedElement.flatMap { AccessibilityService.value(of: $0) }
+        self.selectedRange = focusedElement.flatMap { AccessibilityService.selectedRange(of: $0) }
     }
 
     static func capture() -> OverlaySourceFocusSession {
@@ -211,11 +236,20 @@ final class OverlaySourceFocusSession {
             }
         }
         if let focusedElement {
+            // A source-field click can dismiss an overlay after focus has
+            // already moved. Never pull that click back to the previous field.
+            if currentPID == sourceApplication.processIdentifier,
+               let current = AccessibilityService.focusedElement(),
+               !AccessibilityService.isSameElement(current, focusedElement) { return }
             AXUIElementSetAttributeValue(
                 focusedElement,
                 kAXFocusedAttribute as CFString,
                 kCFBooleanTrue
             )
+            if let sourceValue, AccessibilityService.value(of: focusedElement) == sourceValue,
+               let selectedRange {
+                AccessibilityService.setSelectedRange(selectedRange, on: focusedElement)
+            }
         }
     }
 }

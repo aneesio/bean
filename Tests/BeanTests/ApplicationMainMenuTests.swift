@@ -4,6 +4,21 @@ import XCTest
 
 @MainActor
 final class ApplicationMainMenuTests: XCTestCase {
+    func testWriterHasAnAccessibleFileMenuEntry() throws {
+        let target = MainMenuTarget()
+        let result = ApplicationMainMenuBuilder.build(
+            target: target,
+            aboutAction: #selector(MainMenuTarget.performAction(_:)),
+            settingsAction: #selector(MainMenuTarget.performAction(_:)),
+            quitAction: #selector(MainMenuTarget.performAction(_:)),
+            writerAction: #selector(MainMenuTarget.performAction(_:))
+        )
+        let fileMenu = try XCTUnwrap(result.menu.item(withTitle: "File")?.submenu)
+        let writer = try XCTUnwrap(fileMenu.item(withTitle: "Open Bean Writer"))
+        XCTAssertEqual(writer.keyEquivalent, "1")
+        XCTAssertTrue(writer.target === target)
+    }
+
     func testMainMenuContainsStandardBeanAndEditCommands() throws {
         let target = MainMenuTarget()
         let result = ApplicationMainMenuBuilder.build(

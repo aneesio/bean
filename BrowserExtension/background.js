@@ -507,6 +507,29 @@ function blockedByStatus(status) {
   return errorCode ? Object.assign({}, status, { ok: false, errorCode, message }) : null;
 }
 
+function blockedByLocalStatus(status) {
+  if (!status || !status.ok || !status.bridgeAvailable || !status.compatible
+      || status.protocolVersion !== BRIDGE_PROTOCOL_VERSION) {
+    return Object.assign({},status,{ok:false,errorCode:status && (status.errorCode || status.compatibilityCode) || "bridgeUnavailable",
+      message:status && status.message || "Open Bean to connect local spelling checks."});
+  }
+  return status.localCheckAvailable === true ? null
+    : errorResponse(null, "localCheckerUnavailable", "Update Bean to connect local spelling checks.");
+}
+
+function blockedByExplicitStatus(status) {
+  if (!status || !status.ok || !status.bridgeAvailable || !status.compatible
+      || status.protocolVersion !== BRIDGE_PROTOCOL_VERSION) {
+    return Object.assign({},status,{ok:false,errorCode:status && (status.errorCode || status.compatibilityCode) || "bridgeUnavailable",
+      message:status && status.message || "Open Bean to connect writing actions."});
+  }
+  if (status.performActionAvailable !== true) {
+    return errorResponse(null, "actionUnavailable", "Update Bean to use writing actions here.");
+  }
+  return status.providerConfigured ? null
+    : errorResponse(null, "missingApiKey", "Add and verify an API key in Bean Settings to use AI writing actions.");
+}
+
 function errorResponse(id, errorCode, message) {
   return { id: typeof id === "string" ? id : null, ok: false, errorCode, message };
 }
@@ -754,7 +777,7 @@ function validateAndBuildTextRequest(message, sender) {
     return { error: errorResponse(null, "invalidRequest", "Bean received an invalid browser request.") };
   }
   if (rawRequest.type !== message.type
-      || (message.type !== "detectIssues" && message.type !== "proofreadParagraph")) {
+      || !["detectIssues", "proofreadParagraph", "localCheck", "performAction"].includes(message.type)) {
     return { error: errorResponse(candidateID, "invalidRequestType", "Bean received a mismatched browser request.") };
   }
   if (typeof candidateID !== "string" || candidateID.length < 1
@@ -765,7 +788,7 @@ function validateAndBuildTextRequest(message, sender) {
   if (typeof rawRequest.text !== "string" || !rawRequest.text.trim()) {
     return { error: errorResponse(candidateID, "emptyText", "There is no text to check.") };
   }
-  const textLimit = message.type === "detectIssues" ? MAX_DETECT_TEXT_CHARS : MAX_PROOFREAD_TEXT_CHARS;
+  const textLimit = ["detectIssues", "localCheck", "performAction"].includes(message.type) ? MAX_DETECT_TEXT_CHARS : MAX_PROOFREAD_TEXT_CHARS;
   if (rawRequest.text.length > textLimit || utf8ByteLength(rawRequest.text) > MAX_TEXT_BYTES) {
     return { error: errorResponse(candidateID, "textTooLong", "This text is too long for browser AI.") };
   }
@@ -784,13 +807,14 @@ function validateAndBuildTextRequest(message, sender) {
   }
 
   let maxIssues = 8;
-  if (message.type === "detectIssues" && rawRequest.settings !== undefined) {
+  if (["detectIssues", "localCheck"].includes(message.type) && rawRequest.settings !== undefined) {
     if (!rawRequest.settings || typeof rawRequest.settings !== "object" || Array.isArray(rawRequest.settings)) {
       return { error: errorResponse(candidateID, "invalidSettings", "Bean received invalid issue settings.") };
     }
     if (rawRequest.settings.maxIssues !== undefined) {
+      const limit = message.type === "localCheck" ? 32 : 8;
       if (!Number.isInteger(rawRequest.settings.maxIssues)
-          || rawRequest.settings.maxIssues < 1 || rawRequest.settings.maxIssues > 8) {
+          || rawRequest.settings.maxIssues < 1 || rawRequest.settings.maxIssues > limit) {
         return { error: errorResponse(candidateID, "invalidSettings", "Issue count must be between 1 and 8.") };
       }
       maxIssues = rawRequest.settings.maxIssues;
@@ -802,7 +826,13 @@ function validateAndBuildTextRequest(message, sender) {
     type: message.type,
     text: rawRequest.text
   };
-  if (message.type === "detectIssues") request.settings = { maxIssues };
+  if (["detectIssues", "localCheck"].includes(message.type)) request.settings = { maxIssues };
+  if (message.type === "performAction") {
+    if (!["proofread", "makeCasual", "makeProfessional", "makeConcise", "makeClearer"].includes(rawRequest.action)) {
+      return { error:errorResponse(candidateID, "invalidAction", "Choose a supported writing action.") };
+    }
+    request.action = rawRequest.action;
+  }
   return {
     request,
     host: page.host,
@@ -887,7 +917,7 @@ function revalidateTextJobDocument(job, expectedPolicyRevision, completion) {
   }
   chrome.tabs.sendMessage(
     job.tabID,
-    { type: "revalidateTextRequest", requestId: job.request.id },
+    { type: "revalidateTextRequest", requestId: job.request.id, purpose:job.request.type },
     { frameId: 0, documentId: job.documentID },
     (response) => {
       const runtimeError = chrome.runtime.lastError;
@@ -945,14 +975,14 @@ function readLocalPolicy(completion) {
   );
 }
 
-function localPolicyError(policy, host, id) {
+function localPolicyError(policy, host, id, automaticAI = true) {
   if (!policy.ok) {
     return errorResponse(id, "settingsUnavailable", "Bean could not verify browser privacy settings.");
   }
   if (policy.blockedSites.some((blockedHost) => hostIsBlocked(host, blockedHost))) {
     return errorResponse(id, "siteBlocked", "Bean is disabled on this website.");
   }
-  if (policy.legacyAIOptOut) {
+  if (automaticAI && policy.legacyAIOptOut) {
     return errorResponse(
       id,
       "browserAIConsentRequired",
@@ -964,7 +994,10 @@ function localPolicyError(policy, host, id) {
 
 function sendTextAfterStatus(job, completion) {
   getLiveStatus((status) => {
-    const blocked = blockedByStatus(status);
+    const offline = job.request.type === "localCheck";
+    const explicit = job.request.type === "performAction";
+    const blocked = offline ? blockedByLocalStatus(status)
+      : explicit ? blockedByExplicitStatus(status) : blockedByStatus(status);
     if (blocked) {
       completion(blocked);
       return;
@@ -973,7 +1006,7 @@ function sendTextAfterStatus(job, completion) {
     // have blocked the site or retained an old AI opt-out while status was in
     // flight; in either case no text is allowed to cross the native boundary.
     readLocalPolicy((policy) => {
-      const policyError = localPolicyError(policy, job.host, job.request.id);
+      const policyError = localPolicyError(policy, job.host, job.request.id, !offline && !explicit);
       if (policyError) {
         completion(policyError);
         return;
@@ -996,7 +1029,7 @@ function sendTextAfterStatus(job, completion) {
             extensionVersion: extensionVersion(),
             minimumAppVersion: MINIMUM_APP_VERSION
           });
-          sendNativeText(nativeRequest, textRequestTimeoutMs(status), completion);
+          sendNativeText(nativeRequest, offline ? 8000 : textRequestTimeoutMs(status), completion);
         });
       });
     });
@@ -1004,13 +1037,15 @@ function sendTextAfterStatus(job, completion) {
 }
 
 let textRequestInFlight = false;
+let localRequestInFlight = false;
 const activeRequestIDs = new Set();
 
 function startTextRequest(job) {
   sendTextAfterStatus(job, (response) => {
     try { job.sendResponse(response); } catch (_error) {}
     activeRequestIDs.delete(job.request.id);
-    textRequestInFlight = false;
+    if (job.request.type === "localCheck") localRequestInFlight = false;
+    else textRequestInFlight = false;
   });
 }
 
@@ -1019,7 +1054,8 @@ function enqueueTextRequest(job) {
     job.sendResponse(errorResponse(job.request.id, "duplicateRequest", "This browser AI request is already running."));
     return;
   }
-  if (textRequestInFlight) {
+  const offline = job.request.type === "localCheck";
+  if (offline ? localRequestInFlight : textRequestInFlight) {
     job.sendResponse(errorResponse(
       job.request.id,
       "bridgeBusy",
@@ -1027,7 +1063,8 @@ function enqueueTextRequest(job) {
     ));
     return;
   }
-  textRequestInFlight = true;
+  if (offline) localRequestInFlight = true;
+  else textRequestInFlight = true;
   activeRequestIDs.add(job.request.id);
   startTextRequest(job);
 }
@@ -1067,7 +1104,84 @@ function statusWithLocalPolicy(status, completion) {
   });
 }
 
+let ownershipTimestamp = 0;
+let ownershipSequence = 0;
+const latestOwnershipByTab = new Map();
+
+function forwardFieldOwnership(message, sender, completion) {
+  // Timestamp before asynchronous policy/tab/window checks. A slow old focus
+  // claim must never replace a newer field or its release.
+  ownershipTimestamp = Math.max(Date.now(), ownershipTimestamp + 1);
+  const observedAtMilliseconds = ownershipTimestamp;
+  const ownership = message.ownership;
+  if (!ownership || typeof ownership.active !== "boolean" ||
+      typeof ownership.fieldToken !== "string" ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(ownership.fieldToken)) {
+    completion(errorResponse(null,"invalidOwnership","Bean could not verify this writing field."));
+    return;
+  }
+  let page;
+  if (ownership.active) {
+    page = senderPage(sender);
+    if (page.error) { completion(page.error); return; }
+  } else {
+    // A departing document can release its own token after its tab navigates.
+    // Its identity was recorded at promotion; a URL is never needed to revoke.
+    const identity = sender && sender.tab && latestOwnershipByTab.get(sender.tab.id);
+    if (!sender || sender.id !== chrome.runtime.id || (sender.frameId !== undefined && sender.frameId !== 0) ||
+        !identity || identity.token !== ownership.fieldToken || identity.documentID !== sender.documentId) {
+      completion({ok:false,ownershipAccepted:false}); return;
+    }
+    page = {tabID:sender.tab.id,documentID:sender.documentId};
+  }
+  const identity = {token:ownership.fieldToken,documentID:page.documentID,active:ownership.active,time:observedAtMilliseconds};
+  latestOwnershipByTab.set(page.tabID,identity);
+  if (latestOwnershipByTab.size > 128) latestOwnershipByTab.delete(latestOwnershipByTab.keys().next().value);
+  const current = () => latestOwnershipByTab.get(page.tabID) === identity;
+  const reject = () => completion({ ok:false, ownershipAccepted:false });
+  const send = () => {
+    if (!current()) { reject(); return; }
+    ownershipSequence++;
+    sendNative({ id:`field-${observedAtMilliseconds}-${ownershipSequence}`,
+      type:"fieldOwnership", protocolVersion:BRIDGE_PROTOCOL_VERSION,
+      extensionVersion:extensionVersion(), minimumAppVersion:MINIMUM_APP_VERSION,
+      ownership:{ fieldToken:ownership.fieldToken, active:ownership.active, observedAtMilliseconds }
+    }, { timeoutMs:STATUS_TIMEOUT_MS, notInstalledCode:"notInstalled" }, (response) => completion(response));
+  };
+  // Releases cannot promote any field and must still reach the host after blur
+  // or a tab switch. Native token checks ensure they only revoke their own lease.
+  if (!ownership.active) { send(); return; }
+  readLocalPolicy((policy) => {
+    if (!current() || localPolicyError(policy, page.host, null, false)) { reject(); return; }
+    const job = { ...page, request:{id:ownership.fieldToken} };
+    revalidateTextJobPage(job, policy.revision, (error) => {
+      if (error || !current()) { reject(); return; }
+      chrome.tabs.get(page.tabID, (tab) => {
+        if (chrome.runtime.lastError || !current() || !tab || tab.active !== true ||
+            !Number.isInteger(tab.windowId) || !chrome.windows || typeof chrome.windows.get !== "function") {
+          reject(); return;
+        }
+        chrome.windows.get(tab.windowId, (window) => {
+          if (chrome.runtime.lastError || !current() || !window || window.focused !== true) { reject(); return; }
+          chrome.tabs.sendMessage(page.tabID,
+            {type:"revalidateFieldOwnership",fieldToken:ownership.fieldToken},
+            {frameId:0,documentId:page.documentID}, (response) => {
+              if (chrome.runtime.lastError || !current() || !response || response.ok !== true ||
+                  response.fieldToken !== ownership.fieldToken || localPolicyRevision !== policy.revision ||
+                  blocklistMutationRunning || blocklistMutationQueue.length) { reject(); return; }
+              send();
+            });
+        });
+      });
+    });
+  });
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message && message.type === "fieldOwnership") {
+    forwardFieldOwnership(message, sender, sendResponse);
+    return true;
+  }
   if (message && message.type === "mutateBlockedSites") {
     const validated = validatedBlocklistMutation(message, sender);
     if (validated.error) {
@@ -1105,14 +1219,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getLiveStatus((status) => statusWithLocalPolicy(status, sendResponse));
     return true;
   }
-  if (message && (message.type === "detectIssues" || message.type === "proofreadParagraph")) {
+  if (message && ["detectIssues", "proofreadParagraph", "localCheck", "performAction"].includes(message.type)) {
     const validated = validateAndBuildTextRequest(message, sender);
     if (validated.error) {
       sendResponse(validated.error);
       return true;
     }
     readLocalPolicy((policy) => {
-      const policyError = localPolicyError(policy, validated.host, validated.request.id);
+      const policyError = localPolicyError(policy, validated.host, validated.request.id,
+        !["localCheck", "performAction"].includes(message.type));
       if (policyError) {
         sendResponse(policyError);
         return;

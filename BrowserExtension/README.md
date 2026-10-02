@@ -8,13 +8,22 @@ release.
 
 - Local writing help is enabled on ordinary websites after install.
 - Add websites to the blocked list when you do not want Bean there.
+- A single Bean badge beside the active writing field shows the suggestion
+  count and opens suggestions, **Proofread**, and **Rewrite**. Underlines stay
+  quiet until you hover or click. The native Mac badge yields while the extension
+  owns a supported, focused page field; Mac keyboard shortcuts remain available.
 - Correction cards offer **Disable on this field** and **Disable on this
   website**. Field blocking lasts for the current page session; website
   blocking is saved locally.
-- Local deterministic checks by default; no provider or token cost.
-- Provider-backed checks require a configured provider, browser AI enabled in
-  the Bean app, and a compatible local Bean bridge. The extension has no
-  separate global AI switch.
+- Common typo, spacing, capitalization, and repeated-word checks work without a
+  connection. Full macOS spelling and basic grammar require **Install Mac
+  Connection**, with no API key, provider request, or token cost. An unavailable
+  connection is labeled **Basic checks only**; an empty tiny dictionary result
+  never claims the writing is free of spelling errors.
+- Automatic AI suggestions require a configured provider and browser AI enabled
+  in the Bean app. Explicit **Proofread** and rewrite styles use the configured
+  provider when available, independently of the automatic AI switch. Proofread
+  also works locally without an API key.
 - No API key, page text, or correction history is stored by the extension.
 
 Chrome displays a broad website-access warning because universal coverage is
@@ -37,17 +46,17 @@ Blocked hostnames and their subdomains are excluded from future content-script
 registration. If a site is blocked while already open, Bean stops there
 immediately; reload once to unload the dormant script.
 
-## Optional native bridge
+## Mac spelling connection and optional AI
 
-The local detector requires no Mac app connection. For deeper provider-backed
-issues and whole-paragraph proofreading, use **Install Mac Connection** in Bean
+The small deterministic detector requires no Mac app connection. For full
+offline macOS spelling and basic grammar, use **Install Mac Connection** in Bean
 Settings. Bean reads only Chromium extension ID/path metadata, validates that
 the loaded extension is Bean, and restricts the native host to the detected ID.
 The command-line installer remains available only as a developer/recovery tool.
-The native AI bridge is installed only for vendor-signed Chrome, Brave, and
+The native bridge is installed only for vendor-signed Chrome, Brave, and
 Edge. Generic/ad-hoc-signed Chromium has no stable Team ID Bean can strongly
-authenticate, so offline extension checks remain available there while native
-AI fails closed.
+authenticate, so basic deterministic checks remain available there while the
+Mac bridge fails closed.
 
 Enable **Allow deeper AI checks from the browser** in Bean Settings → Browser.
 That app setting is the single ongoing browser-AI control; extension Options
@@ -55,9 +64,12 @@ only shows readiness and blocked websites. Users upgrading from an older
 explicit opt-out may see one confirmation that preserves that privacy choice.
 AI checks can incur provider API charges after typing pauses, are rate-limited
 by the extension, contribute to Bean's content-free Web Inline usage total, and
-stop at Bean's daily automatic-call limit. That limit covers every browser AI
-request, including the user-facing **Fix Paragraph** control, because a webpage
-cannot provide the Mac app with a trustworthy native user-gesture signal.
+stop at Bean's daily automatic-call limit. Explicit **Proofread** and rewrite
+buttons require a real user activation in Bean's closed shadow controls and a
+single-use authorization tied to the unchanged source document and field. They
+are recorded as manual actions. Offline spelling and UI ownership messages do
+not call a provider or consume either usage limit, and remain responsive while
+an AI request is running.
 
 The install manifest accepts only validated Bean extension IDs. See
 [`NativeMessaging/README.md`](../NativeMessaging/README.md).
@@ -84,14 +96,22 @@ one exact live range. That refusal is intentional.
 
 ## Safety behavior
 
-- Suggestions map only when the original substring occurs exactly once.
+- Local suggestions carry exact, verified occurrence offsets, so repeated typos
+  can be reviewed individually. Provider suggestions map only when the original
+  substring occurs exactly once.
 - Apply re-verifies the live substring immediately before editing.
+- Mac spelling suggestions include alternatives where available. Accepting any
+  alternative uses the same exact range and Undo. Bulk local Proofread applies
+  only deterministic or high-confidence fixes; uncertain guesses need review.
 - Value-field replacement preserves everything outside the target range exactly.
 - Whole-paragraph replacement rechecks the paragraph and refuses rich blocks
   containing markup that cannot be preserved safely.
 - Provider wrappers, wrapping quotes, and zero-width artifacts are sanitized.
-- Unusual-but-plausible whole-paragraph results show a before/after approval
-  card and are never applied automatically.
+- Explicit writing actions apply safe output directly to an unchanged source and
+  offer **Undo**. Fact-changing or suspicious output is refused. The card states
+  its scope: selected text, draft, or current paragraph. Rich multi-block editors
+  retain their structure by proofreading the current safely editable paragraph
+  or selection; the native Mac shortcut remains available for whole-field work.
 - Typing invalidates outstanding requests and stale overlays.
 
 ## Tests
@@ -101,9 +121,14 @@ node test/run-tests.js
 open test/fixtures/editor.html
 ```
 
-The automated tests cover migrations, local detection, range/sanitization
-helpers, universal coverage/blocklist behavior, and permission rules. The fixture covers browser layout
-and interaction behavior manually.
+The automated tests cover migrations, exact Mac spelling ranges, alternatives,
+offline/AI independence, stale results, live ownership leases, direct writing
+actions and Undo, IME composition, range/sanitization helpers, universal
+coverage/blocklist behavior, and permission rules. The fixture covers layout and
+interaction without private text. Serve it locally and use `?beanqa=1` for a
+local-only API mock, `&beanactions=1` for simulated explicit AI actions, or
+`&beanlocal=0` for disconnected spelling coverage. Omit `beanqa` to test the real
+installed extension and Mac host.
 
 ## Files
 

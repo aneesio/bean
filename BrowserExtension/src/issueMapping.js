@@ -35,6 +35,29 @@
     return { start: first, end: first + original.length };
   }
 
+  // Rich editors insert visual newlines between blocks in innerText. Local
+  // findings carry exact rendered offsets; translate them only when removing
+  // CR/LF proves both whole-field representations contain the same characters.
+  // Space normalization, hidden text, or other differences keep the unique rule.
+  function alignTextOffset(nodeText, renderedText, start, end) {
+    if (typeof nodeText !== "string" || typeof renderedText !== "string" ||
+        !Number.isInteger(start) || !Number.isInteger(end) || start < 0 ||
+        end <= start || end > renderedText.length) return null;
+    const original = renderedText.slice(start, end);
+    if (/[\r\n]/.test(original)) return null;
+    if (nodeText === renderedText) return { start, end };
+    if (nodeText.replace(/[\r\n]/g, "") !== renderedText.replace(/[\r\n]/g, "")) return null;
+    const beforeLength = renderedText.slice(0, start).replace(/[\r\n]/g, "").length;
+    let position = 0, count = 0;
+    while (position < nodeText.length && count < beforeLength) {
+      if (!/[\r\n]/.test(nodeText[position])) count++;
+      position++;
+    }
+    while (position < nodeText.length && /[\r\n]/.test(nodeText[position])) position++;
+    return nodeText.slice(position, position + original.length) === original
+      ? { start:position, end:position + original.length } : null;
+  }
+
   function nativeValueSetter(el) {
     const own = Object.getOwnPropertyDescriptor(el, "value");
     let proto = Object.getPrototypeOf(el);
@@ -390,7 +413,7 @@
   }
 
   window.BeanMapping = {
-    uniqueOffset, applyTextControlRange, textareaRects, rectsFromRange,
+    uniqueOffset, alignTextOffset, applyTextControlRange, textareaRects, rectsFromRange,
     findUniqueRange, rangeOffsets, rangeFromOffsets, applyRange, applyContentEditableRange,
     replaceRangePreservingBoundaries, hasMatchingLineBreakStructure,
     sanitizeProofreadParagraphOutput,

@@ -3,6 +3,56 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## Unreleased — system-wide writing assistance
+
+- Made local live checking and field-side writing actions the default; Bean no
+  longer opens the Writer during ordinary launch or setup completion.
+- Check focused fields after app/focus switches, paste, and programmatic changes,
+  including apps without useful Accessibility notifications.
+- Recognize paste-editable fields without a direct AX value setter, resolve text
+  ancestors/descendants, and enable application-provided Accessibility trees.
+- Recognize editable WebKit surfaces by capabilities and read text through text
+  markers when ordinary text attributes are missing, across apps using that
+  editor framework.
+- Keep the original editor focused after an unsuccessful shortcut read, with
+  an accurate warning instead of a blocking “No Editable Text Found” dialog.
+- Verify source, clipboard and replacement using exact UTF-16 content, including
+  normalization and grapheme boundaries. Never undo an opaque selection by
+  replacing the whole document, or apply a single WebKit issue through a
+  whole-document fallback that could remove unrelated rich formatting.
+- Replace routine proofreading and rewrites in one action, including whole
+  fields, with exact source validation and an Undo action. Failures use a compact
+  notice instead of a comparison window.
+- Use normal edit/paste events for replacement so rich editors update their
+  document model and native undo history.
+- Add offline grammar checks, safe repeated-word/pronoun corrections, and a
+  compact issue tray for fields without exact underline geometry.
+- Give supported browser fields one Bean control for suggestions, direct
+  Proofread, and Rewrite; the native assistant yields only while the extension
+  actively owns that web field.
+- Add offline macOS spelling to browser checks without requiring paid AI, rank
+  ambiguous spelling guesses using nearby prose, and offer alternate spellings.
+  Missing bridge coverage is shown explicitly.
+
+## Earlier unreleased — product and writing-quality review
+
+- Added Bean Writer as a first-class writing workspace: native editing, linked
+  underlines and review cards, Accept/Dismiss, personal dictionary, undo,
+  word/character counts, and text/Markdown open/save with unsaved-work protection.
+- Added explicit AI review and previewed rewrites in the Writer, with revision
+  guards so delayed results cannot replace newer typing.
+- Improved setup, app reopening, menu navigation, and Settings sizing so the
+  writing experience is easy to find and works without permission or AI setup.
+- Rebuilt browser assistance around a single quiet field badge, sequential
+  review, reversible corrections, and before/after AI paragraph previews.
+  Site controls no longer reload a page containing an unsaved draft.
+- Fixed repeated-typo mapping, composition handling, stale native suggestions,
+  highlight coordinates, caret preservation, focus recovery, and native undo.
+- Made Quick Fix deterministic; protected URLs, email, code, indentation,
+  Markdown, identifiers, dictionary phrases, and meaningful repeated words.
+  Improved AI candidate confidence, numeric preservation, output parsing, and
+  failure reporting without enabling paid background checks.
+
 ## 1.6.0 — 2026-08-22 (public beta)
 
 - Rebuilt Bean's web experience around all-site local help, a simple blocklist,

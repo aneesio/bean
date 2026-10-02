@@ -20,6 +20,8 @@ final class BeanBubbleService {
     // element identity (no text, no window title) — privacy-safe.
     private var bubbleOffset: CGSize = .zero
     private var offsetElement: AXUIElement?
+    private var sourcePID: pid_t?
+    private var dismissedElement: AXUIElement?
 
     init(settings: AppSettings, statusHUD: StatusHUD,
          runAction: @escaping (WritingAction) -> Void,
@@ -33,12 +35,34 @@ final class BeanBubbleService {
     }
 
     var isShowing: Bool { controller.isShowing }
+    var ownsUIInteraction: Bool { controller.ownsKeyboardInteraction }
 
     func hide(_ reason: String? = nil) {
         // Log the decision even when the bubble never became visible. This is
         // content-free and makes unsupported Electron fields diagnosable.
         if let reason { diag(["bubbleShown": "false", "bubbleHiddenReason": reason]) }
         controller.hide()
+        sourcePID = nil
+    }
+
+    func refreshVisibleTarget() {
+        guard controller.isShowing else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier == sourcePID else { hide("sourceChanged"); return }
+        guard let offsetElement else {
+            if ElectronTextFocusEvidence.validAnchor(for: app) == nil { hide("typingEvidenceExpired") }
+            return
+        }
+        guard let field = AccessibilityService.focusedField(in: app),
+              AccessibilityService.isSameElement(field.element, offsetElement),
+              !field.isSecure,
+              let origin = bubbleOrigin(for: field) else { hide("fieldChanged"); return }
+        if !controller.isMenuOpen { controller.moveBubble(to: origin) }
+    }
+
+    private func dismissForCurrentField() {
+        dismissedElement = offsetElement
+        hide("dismissed")
     }
 
     // MARK: - Evaluate (called by the dispatcher on focus/selection)
@@ -51,6 +75,10 @@ final class BeanBubbleService {
             return hide("noField")
         }
         guard !field.isSecure else { return hide("secureField") }
+        if let dismissedElement {
+            if AccessibilityService.isSameElement(dismissedElement, field.element) { return hide("dismissedField") }
+            self.dismissedElement = nil
+        }
         let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let origin = bubbleOrigin(for: field)
         let capabilities = FieldCapabilityPolicy.evaluate(
@@ -76,12 +104,13 @@ final class BeanBubbleService {
             offsetElement = field.element
         }
 
+        sourcePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         controller.showBubble(
             at: origin,
             savedOffset: bubbleOffset,
             openOnHover: settings.bubbleOpenOnHover,
             onOpen: { [weak self] intent in self?.openMenu(intent: intent) },
-            onDismiss: { [weak self] in self?.hide("dismissed") },
+            onDismiss: { [weak self] in self?.dismissForCurrentField() },
             onCommitOffset: { [weak self] off in self?.bubbleOffset = off; self?.diag(["bubbleDragged": "true"]) },
             onReset: { [weak self] in self?.bubbleOffset = .zero; self?.diag(["bubbleReset": "true"]) }
         )
@@ -113,12 +142,13 @@ final class BeanBubbleService {
             in: screen.visibleFrame,
             inset: 4
         )
+        sourcePID = app?.processIdentifier
         controller.showBubble(
             at: origin,
             savedOffset: .zero,
             openOnHover: settings.bubbleOpenOnHover,
             onOpen: { [weak self] intent in self?.openMenu(intent: intent) },
-            onDismiss: { [weak self] in self?.hide("dismissed") },
+            onDismiss: { [weak self] in self?.dismissForCurrentField() },
             onCommitOffset: { [weak self] off in self?.bubbleOffset = off; self?.diag(["bubbleDragged": "true"]) },
             onReset: { [weak self] in self?.bubbleOffset = .zero; self?.diag(["bubbleReset": "true"]) }
         )
@@ -135,7 +165,9 @@ final class BeanBubbleService {
             aiAvailable: settings.hasAPIKey,
             onSelect: { [weak self] action in self?.choose(action) },
             onSetUpAI: { [weak self] _ in self?.showAISetup() },
-            onMore: { [weak self] in self?.hide("more"); self?.openFullMenu() },
+            onMore: { [weak self] in
+                self?.performInSourceApp(afterHiding: "more") { [weak self] in self?.openFullMenu() }
+            },
             onCancel: { [weak self] in self?.hide("cancel") }
         )
     }
@@ -143,13 +175,45 @@ final class BeanBubbleService {
     private func choose(_ action: WritingAction) {
         // Re-acquisition + validation happens inside the coordinator's pipeline.
         diag(["menuActionChosen": action.rawValue])
-        hide("actionChosen")
-        runAction(action)
+        performInSourceApp(afterHiding: "actionChosen") { [weak self] in self?.runAction(action) }
     }
 
     private func showAISetup() {
         hide("aiSetup")
         openAISettings()
+    }
+
+    private func performInSourceApp(afterHiding reason: String, action: @escaping () -> Void) {
+        guard let sourcePID, let app = NSRunningApplication(processIdentifier: sourcePID), !app.isTerminated else {
+            hide(reason)
+            return
+        }
+        let element = offsetElement
+        hide(reason)
+        Task { [weak self] in
+            guard let self else { return }
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier != sourcePID {
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier else {
+                    self.statusHUD.show(.warning, "Return to your writing app, then choose Bean again.")
+                    return
+                }
+                if #available(macOS 14.0, *) { app.activate() }
+                else { app.activate(options: []) }
+                await Task.pause(Timing.afterActivate)
+            }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == sourcePID else {
+                self.statusHUD.show(.warning, "Return to your writing app, then choose Bean again.")
+                return
+            }
+            if let element {
+                guard let field = AccessibilityService.focusedField(in: app),
+                      AccessibilityService.isSameElement(field.element, element) else {
+                    self.statusHUD.show(.warning, "Return to the original field, then choose Bean again.")
+                    return
+                }
+            }
+            action()
+        }
     }
 
     // MARK: - Positioning

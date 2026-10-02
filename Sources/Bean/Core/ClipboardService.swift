@@ -75,6 +75,8 @@ enum ClipboardService {
     private static let keyA: CGKeyCode = 0x00
     private static let keyC: CGKeyCode = 0x08
     private static let keyV: CGKeyCode = 0x09
+    private static let keyDelete: CGKeyCode = 0x33
+    private static let keyRight: CGKeyCode = 0x7C
 
     /// Simulates Cmd+C in the frontmost app.
     static func simulateCopy() {
@@ -93,6 +95,19 @@ enum ClipboardService {
         postCommandKey(keyA)
     }
 
+    /// Deletes an exactly verified non-empty selection. Empty clipboard text
+    /// is ignored by several editors, so inline punctuation deletion needs a
+    /// normal Delete event instead of a nominal empty Paste.
+    static func simulateDelete() {
+        postKey(keyDelete, flags: [])
+    }
+
+    /// Clears a temporary Select All without changing text in an editor that
+    /// does not expose a writable AX selection range.
+    static func simulateCollapseSelectionToEnd() {
+        postKey(keyRight, flags: [])
+    }
+
     static func isBeanSyntheticKeyboardEvent(_ event: NSEvent) -> Bool {
         event.cgEvent?.getIntegerValueField(.eventSourceUserData) == syntheticEventUserData
     }
@@ -101,6 +116,10 @@ enum ClipboardService {
     /// Requires Accessibility permission; without it the events are silently
     /// dropped by the system.
     private static func postCommandKey(_ key: CGKeyCode) {
+        postKey(key, flags: .maskCommand)
+    }
+
+    private static func postKey(_ key: CGKeyCode, flags: CGEventFlags) {
         let source = CGEventSource(stateID: .combinedSessionState)
 
         guard
@@ -108,8 +127,8 @@ enum ClipboardService {
             let keyUp = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
         else { return }
 
-        keyDown.flags = .maskCommand
-        keyUp.flags = .maskCommand
+        keyDown.flags = flags
+        keyUp.flags = flags
         keyDown.setIntegerValueField(.eventSourceUserData, value: syntheticEventUserData)
         keyUp.setIntegerValueField(.eventSourceUserData, value: syntheticEventUserData)
 

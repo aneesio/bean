@@ -51,11 +51,11 @@ Exercise selected text and focused-field mode with short synthetic samples:
 | --- | --- |
 | `i has a apple` → Proofread | Small grammatical correction; no commentary footer. |
 | Already-correct sentence | No replacement or a clear no-changes result. |
-| Make Clearer/Concise/Professional/Casual | Preview appears before replacement. |
+| Make Clearer/Concise/Professional/Casual | Safe output replaces the unchanged source directly; Bean Undo appears only when safe restoration is available. |
 | Reply actions | Draft is copy-first and never replaces the source message. |
 | Provider returns a label/fence/footer | Wrapper is removed or unsafe output is rejected. |
 | Field changes while request is running | Bean refuses stale replacement and preserves the correction safely. |
-| Paste cannot be verified | UI says the correction is on the clipboard; it never falsely says “fixed.” |
+| Paste cannot be verified | UI reports an unconfirmed replacement or the actual clipboard recovery state; it never falsely says “fixed.” |
 
 After every replacement test, verify text before and after the intended range is
 unchanged and the prior clipboard is restored unless the UI explicitly reports a
@@ -73,11 +73,12 @@ tested.
 | Apple Notes | Correct selection | Preserve note structure | No button/control anchors | Native or passive fallback | Formatting outside target unchanged |
 | Apple Mail | Correct in composer | Preserve greeting/sign-off | Composer only | Native or passive fallback | Displayed mail excluded |
 | Slack desktop | Correct selection | Composer replacement or honest fallback | Composer/evidence only | Passive/manual; no fake native inline | Channel buttons excluded |
-| Chromium (Gmail + Slack web) | Manual path best effort | Honest AX fallback | Editable DOM field only | Extension on by default unless blocked | Search/email-address/buttons excluded |
+| Chromium (Gmail + Slack web) | Manual path best effort | Honest AX fallback | Native controls or supported DOM field | Local extension checks on by default unless blocked; complex editors may use the native path | Extension skips search/email-address fields; ordinary buttons excluded |
 
 Also test one code editor, a search field, password field, disabled field,
-read-only field, and ordinary button. Focused-field replacement, Bubble, and
-inline UI must fail closed according to [SUPPORTED_APPS.md](SUPPORTED_APPS.md).
+read-only field, and ordinary button. Eligible editable controls in code apps
+and search fields use the native capability policy; secure, disabled, read-only,
+and non-text controls fail closed according to [SUPPORTED_APPS.md](SUPPORTED_APPS.md).
 
 Record macOS version, app version, acquisition path, replacement result, and any
 content-free diagnostics. Update [SUPPORTED_APPS.md](SUPPORTED_APPS.md) when a
@@ -85,7 +86,8 @@ repeatable compatibility boundary changes.
 
 ## Cost and privacy gate
 
-- Fresh preferences show native automatic writing features and diagnostics: Off.
+- Fresh preferences enable local live suggestions and the Bean button;
+  diagnostics remain Off.
 - Fresh preferences show Automatic provider checks: Off.
 - Pausing after typing makes no provider request with defaults.
 - “Disable automatic AI checks” turns off passive, provider inline, fallback,
@@ -97,8 +99,9 @@ repeatable compatibility boundary changes.
 - Clear usage/history with a request in flight, then let it finish; neither
   visible ledger may be recreated by the late result.
 - A native Live-suggestion preview's explicit **Try Again** remains available
-  after the automatic cap and is recorded as a manual call. Browser **Fix Paragraph**
-  remains capped because a webpage cannot prove a trusted native user gesture.
+  after the automatic cap and is recorded as a manual call. Browser field-control
+  **Proofread** and **Rewrite** also remain available as manual calls; the paragraph
+  **Fix Paragraph** path remains automatically capped.
 - Diagnostics are off by default and contain no source or output text when on.
 - API keys never appear in UserDefaults, Application Support, logs, diagnostics,
   browser storage, packaged resources, or Git history.
@@ -119,16 +122,16 @@ repeatable compatibility boundary changes.
 - Disable two fields, return to each one, and verify its own **Re-enable**
   control restores that field only. A failed blocklist write must leave Bean
   active and announce that the website could not be blocked.
-- Hovering a paragraph Bean icon opens its actions, including both disable
-  controls.
-- Activate issue underlines and paragraph icons with VoiceOver/AXPress as well
+- Activating the single Bean field control opens review and writing actions,
+  including both disable controls.
+- Activate issue underlines and the field control with VoiceOver/AXPress as well
   as pointer, Enter, and Space. Next, Ignore, Apply, and Review one by one must
   keep a sensible focus target or return focus to the source field.
 - Password, search/ARIA-search, email, one-time-code, card-number,
   numeric-secret, read-only, and code fields plus Google Docs canvas are skipped.
 - Local checks work with no native host and make no network request.
-- Provider checks require a compatible local bridge, a configured provider,
-  and **Allow deeper AI checks from the browser** in the Bean app.
+- Automatic provider checks require a compatible local bridge, a configured
+  provider, and **Allow deeper AI checks from the browser** in the Bean app.
 - Sender hostname and field type are validated inside the extension, then
   omitted from the native payload. Provider prompts use only Bean's fixed
   `Browser` / `web editor` labels.
@@ -138,8 +141,10 @@ repeatable compatibility boundary changes.
 - A review-required paragraph shows the before/after approval card and is not
   applied until approved.
 - **Check again** reports the automatic daily-call count and limit.
-- All provider-backed browser requests, including **Fix Paragraph**, stop at the
-  reported automatic limit; local issue application remains available.
+- Automatic browser checks and **Fix Paragraph** stop at the reported automatic
+  limit. Explicit field-control **Proofread** and **Rewrite** remain available
+  with a verified provider and bridge even when automatic checks are off or capped;
+  local issue application remains available.
 - **Check again** reaches a final Connected/Error state within seven seconds;
   it never remains on Checking indefinitely.
 - Settings discovers a loaded Bean extension and Connect/Repair writes an exact
@@ -188,7 +193,7 @@ manual reset gate against personal API keys, personalization, or browser data.
   active style as a canonical built-in or `custom`, and omit custom profile
   names, personalization text, full app/native-host paths, hostnames, and field
   labels.
-- About shows Bean 1.6.0 (8), identifies the community-supported public beta,
+- About shows Bean 1.6.0 (11), identifies the community-supported public beta,
   and opens only the canonical `aneesio/bean` GitHub, Support, Privacy, License,
   Changelog, and manual update-check destinations. At the minimum width and
   larger Accessibility text sizes, links reflow and **Open Update Check…** lands

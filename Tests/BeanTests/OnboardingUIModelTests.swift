@@ -14,7 +14,7 @@ final class OnboardingUIModelTests: XCTestCase {
         )
     }
 
-    func testAccessibilityStepPromisesApprovalBeforeReplacement() throws {
+    func testAccessibilityStepExplainsUserTriggeredDirectReplacement() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -25,7 +25,7 @@ final class OnboardingUIModelTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("Bean never replaces text until you approve it."))
+        XCTAssertTrue(source.contains("Accept a suggestion, or run Proofread to replace the current text in one action."))
         XCTAssertFalse(source.contains("Bean only acts when you ask it to."))
     }
 

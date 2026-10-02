@@ -122,7 +122,8 @@ assert.deepEqual(JSON.parse(JSON.stringify(saved.blockedSites)), ["newly-blocked
   "the authoritative background mutation preserves a concurrent rule");
 assert.equal(mutationMessages.at(-1).operation, "allowHost");
 assert.equal(mutationMessages.at(-1).host, "mail.example.com");
-assert.equal(reloadedTab, 42);
+assert.equal(reloadedTab, null, "changing website preferences never reloads or discards an active draft");
+assert.match(element("message").textContent, /draft is saved/);
 assert.match(element("message").textContent, /enabled for example\.com and its subdomains/);
 
 statusCallback(readyStatus);
@@ -150,6 +151,13 @@ registrationUpdated = true;
 storageChangedListener({ blockedSites: { newValue: ["mail.example.com"] } }, "local");
 assert.equal(element("site-state").textContent, "Blocked",
   "an external blocklist change updates the open popup");
+
+storageChangedListener({ blockedSites: { newValue: ["bad host"] } }, "local");
+assert.equal(element("site-state").textContent, "Unavailable");
+assert.equal(element("site-action").disabled, true,
+  "malformed website preferences never produce a misleading Active state");
+storageChangedListener({ blockedSites: { newValue: [] } }, "local");
+assert.equal(element("site-state").textContent, "Active");
 
 element("open-settings").listeners.click();
 assert.equal(optionsOpened, true);
@@ -187,8 +195,8 @@ assert.equal(accountingUnavailable.app[0], "Connected");
 assert.equal(accountingUnavailable.ai[0], "Usage safety unavailable");
 assert.match(accountingUnavailable.message, /Local checks still work/);
 assert.match(accountingUnavailable.message, /Check Accounting Again/);
-assert.match(accountingUnavailable.message, /Full Reset in Privacy & Help is a data-erasing last resort/);
-assert.match(accountingUnavailable.message, /contact Support if reset fails/);
+assert.doesNotMatch(accountingUnavailable.message, /Full Reset/, "a routine connection warning never recommends deleting user data");
+
 assert.doesNotMatch(accountingUnavailable.message, /clear usage|clear usage\/history/i);
 assert.equal(context.assessBridgeStatus({
   ok: false, errorCode: "nativeHostForbidden", nativeHostInstalled: true

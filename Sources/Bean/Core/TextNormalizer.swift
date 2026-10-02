@@ -98,10 +98,11 @@ enum TextNormalizer {
     }
 
     /// Full provider-output cleanup used by every desktop/web-host transform.
-    /// ParagraphSanitizer handles code fences, wrapping quotes, and zero-width
-    /// artifacts; the logic above then handles Bean's envelope and model prose.
+    /// ParagraphSanitizer handles code fences and zero-width artifacts. Keep
+    /// wrapping quotes until the source-aware cleanup above can distinguish
+    /// legitimate quoted text from a provider wrapper.
     static func sanitizeModelOutput(_ output: String, originalCore: String) -> String {
-        let cleaned = ParagraphSanitizer.sanitize(output).text
+        let cleaned = ParagraphSanitizer.sanitize(output, preservingWrappingQuotes: true).text
         return stripArtifacts(cleaned, originalCore: originalCore)
     }
 

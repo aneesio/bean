@@ -3,8 +3,8 @@ import AppKit
 // Orchestrates every writing action. Two entry points share one pipeline:
 //   • fixSelectedText()  — deterministic, offline Quick Fix (shortcut/menu).
 //   • proofreadWithAI()  — explicit provider-backed proofreading.
-//   • showActionMenu()   — acquire text, then present the action menu; rewrite
-//                          actions go through a preview before replacing.
+//   • showActionMenu()   — acquire text, then choose an action. Proofread and
+//                          rewrite apply directly to the unchanged source.
 //
 // Acquisition always happens FIRST (while the user's app is frontmost), so the
 // action menu/preview can safely take focus — the replacement pipeline
@@ -60,10 +60,10 @@ final class TextActionCoordinator {
         action.usesProvider && EngineConfig.exceedsProviderInputLimit(text)
     }
 
-    /// Provider-backed proofreading may replace an explicit selection after
-    /// verification, but whole-field AI output always needs user review first.
+    /// Selected text and whole fields share the same one-action improvement
+    /// policy. Replacement still verifies the source has not changed.
     static func requiresPreview(for action: WritingAction, mode: TextInputMode) -> Bool {
-        action.requiresPreview || (action == .proofread && mode == .focusedFieldFullText)
+        action.requiresPreview
     }
 
     /// Plain-language scope shown before the user chooses an action. The menu
@@ -165,7 +165,7 @@ final class TextActionCoordinator {
     }
 
     /// Explicit AI entry point used by the menu bar. Unlike Quick Fix, this is
-    /// visibly provider-backed and follows the AI preview policy.
+    /// visibly provider-backed and replaces the verified source directly.
     func proofreadWithAI() {
         runAction(.proofread)
     }
@@ -417,10 +417,21 @@ final class TextActionCoordinator {
                        mode: mode, context: context,
                        sourceAnchorRect: currentSourceAnchorRect(for: mode, context: context))
         case .noSelectionOrFocusedField:
-            recordPreflight(action: requestedAction, outcome: "noSelectionOrFocusedField")
-            presentAcquisitionNotice(
-                title: "No Editable Text Found",
-                message: "Select text or place the cursor in an editable field, then try Quick Fix again."
+            recordPreflight(
+                action: requestedAction,
+                outcome: selection.lastAcquisitionFailureReason.map { "capture_\($0.rawValue)" }
+                    ?? "noSelectionOrFocusedField"
+            )
+            // A failed read needs no acknowledgement and must not move focus
+            // away from the editor the user is already working in.
+            let sourceAppName = NSWorkspace.shared.frontmostApplication?.localizedName
+            let sourceAnchorRect = currentSourceNoticeAnchorRect()
+            selection.cancel()
+            sessionActive = false
+            statusHUD.showWarning(
+                "Bean couldn’t read this editor",
+                sourceAppName: sourceAppName,
+                sourceAnchorRect: sourceAnchorRect
             )
             return nil
         case .tooLong:
@@ -431,7 +442,11 @@ final class TextActionCoordinator {
             )
             return nil
         case .failed(let reason):
-            recordPreflight(action: requestedAction, outcome: "acquisitionFailed")
+            recordPreflight(
+                action: requestedAction,
+                outcome: selection.lastAcquisitionFailureReason.map { "capture_\($0.rawValue)" }
+                    ?? "acquisitionFailed"
+            )
             presentAcquisitionNotice(title: "Bean Couldn’t Read This Field", message: reason, kind: .danger)
             return nil
         }
@@ -612,9 +627,13 @@ final class TextActionCoordinator {
                 diagnostics(job: job, action: action, outLen: outCore.count, validator: reason,
                             replacement: "reviewRequired", startedAt: operationStartedAt,
                             usage: completion.usage)
-                presentPreview(job: job, action: action, outCore: outCore,
-                               explicitProfile: explicitProfile, personalization: personalization,
-                               reviewReason: reason)
+                if action.allowsDirectReplace {
+                    presentSafetyNotice(job: job)
+                } else {
+                    presentPreview(job: job, action: action, outCore: outCore,
+                                   explicitProfile: explicitProfile, personalization: personalization,
+                                   reviewReason: reason)
+                }
             }
             return
         }
@@ -784,6 +803,26 @@ final class TextActionCoordinator {
                                             result: TextSelectionService.ReplacementResult,
                                             model existingModel: PreviewModel?) {
         sessionActive = true
+        if existingModel == nil, action.allowsDirectReplace {
+            statusHUD.dismiss()
+            actionMenu.presentNotice(ActionNotice(
+                title: "Couldn’t Apply the Change",
+                message: recoveryMessage(for: result),
+                kind: .warning,
+                primaryAction: .init("Copy Result") { [weak self] in
+                    guard let self else { return }
+                    ClipboardService.writeString(job.leading + outCore + job.trailing)
+                    self.selection.discard()
+                    self.finishNotice(restoreAcquisition: false)
+                    self.statusHUD.showConfirmedSuccess("Result copied", sourceAppName: job.context.appName)
+                },
+                secondaryAction: .init("Return to Writing") { [weak self] in
+                    self?.finishNotice(restoreAcquisition: true)
+                },
+                onDismiss: { [weak self] in self?.finishNotice(restoreAcquisition: true) }
+            ), sourceAnchorRect: job.sourceAnchorRect)
+            return
+        }
         let model = existingModel ?? PreviewModel(
             actionName: "Replacement Recovery",
             transformedText: outCore,
@@ -864,10 +903,13 @@ final class TextActionCoordinator {
     private func report(_ result: TextSelectionService.ReplacementResult, job: Job) {
         switch result {
         case .replacedConfirmed:
+            let undo: (() -> Void)? = undoStore.isAvailable
+                ? { [weak self] in self?.undoLastChange() } : nil
             statusHUD.showConfirmedSuccess(
                 job.mode == .focusedFieldFullText ? "Whole field fixed" : "Selected text fixed",
                 sourceAppName: job.context.appName,
-                sourceAnchorRect: job.sourceAnchorRect
+                sourceAnchorRect: job.sourceAnchorRect,
+                onUndo: undo
             )
         case .noChangesNeeded:
             statusHUD.showConfirmedSuccess(

@@ -4,11 +4,11 @@
 // Supports textarea, text inputs, and contenteditable. Skips password/search
 // fields, code editors, and Google Docs. Applying one fix continues to the next.
 //
-// PRIVACY: no text is logged or stored by this script. Local checks never leave
-// the page. After a real user edit, optional AI checks may send only the changed
+// PRIVACY: no text is logged or stored by this script. Spelling checks run on
+// this Mac, without a provider. After a real user edit, optional AI checks send only the changed
 // paragraph/block through the local Bean app—not the whole field.
 (function () {
-  const DEBOUNCE_MS = 1200;
+  const DEBOUNCE_MS = 450;
   const BRIDGE_MIN_INTERVAL_MS = 15000;
   const BRIDGE_STATUS_TIMEOUT_MS = 6500;
   const TEXT_AUTHORIZATION_TTL_MS = 10000;
@@ -27,15 +27,20 @@
   window.__beanInlineContentScriptLoaded = true;
 
   const state = { active: null, entries: [], selectedId: null, fingerprint: 0, shownFingerprint: 0,
-                  ignored: new Set(), reqGen: 0, groups: [], selectedGroupId: null,
+                  ignored: [], ignoredText: "", reqGen: 0, groups: [], selectedGroupId: null,
                   correctedFps: new Set(), fixingGroup: false,
                   disabledFields: new WeakSet(),
                   aiContext: null, aiDetectionFingerprint: 0,
                   pendingTextAuthorizations: new Map(),
                   blockedSites: [], settingsAvailable: false,
                   undoRecord: null, applyingEdit: false,
-                  disabledControlTarget: null };
+                  disabledControlTarget: null, checkStatus: "localLimited", composing: false,
+                  bridgeStatus:null, localSpellingAvailable:false, fieldToken:null, assistantVisible:false,
+                  actionTarget:null,actionSourceText:null };
   let debounce = null, scrollThrottle = null, focusoutTimer = null;
+  let ownershipHeartbeat = null;
+  let ownershipSupported = false;
+  let ownershipRequestSequence = 0;
   let keyboardBridgeEl = null, keyboardBridgeResumeTimer = null;
   let lastBridgeAt = 0;
 
@@ -100,7 +105,7 @@
   // Sets a cooldown for missing-key / web-inline-disabled so we don't spam.
   let bridgeCooldownUntil = 0, bridgeCooldownCode = "bridgeFallbackLocal";
 
-  function requestBridgeStatus() {
+  function requestBridgeStatus(purpose) {
     return new Promise((resolve) => {
       let done = false;
       const finish = (status) => {
@@ -111,7 +116,7 @@
       };
       const timer = setTimeout(() => finish(null), BRIDGE_STATUS_TIMEOUT_MS);
       try {
-        chrome.runtime.sendMessage({ type: "getStatus" }, (status) => {
+        chrome.runtime.sendMessage(purpose ? {type:"getStatus",purpose} : {type:"getStatus"}, (status) => {
           void chrome.runtime.lastError;
           finish(status || null);
         });
@@ -128,6 +133,54 @@
       ? Math.min(120000, Math.max(1000, Math.ceil(seconds * 1000)))
       : 30000;
     return providerMilliseconds + 12000;
+  }
+
+  function fieldSnapshotMatches(el, text, generation) {
+    if (state.active === el && state.reqGen === generation && eligibleEditableSurface(el) !== el) {
+      teardown(); return false;
+    }
+    return state.active === el && state.reqGen === generation && !state.composing &&
+      document.contains(el) && siteAllowed() && eligibleEditableSurface(el) === el && getText(el) === text;
+  }
+
+  // Offline spelling is independent of provider consent, paid usage, and the
+  // trusted-edit AI scope. Every chunk is bound to the unchanged live field.
+  async function bridgeLocalIssues(el, text, generation, fieldType, checkedText = text, stillMatches = () => true) {
+    const status = await requestBridgeStatus("localCheck");
+    if (!fieldSnapshotMatches(el, text, generation)) return {issues:[],complete:false};
+    state.bridgeStatus = status;
+    const readiness = BeanTrustPolicy.localBridgeReadiness
+      ? BeanTrustPolicy.localBridgeReadiness(status) : {ready:false};
+    if (!readiness.ready) return {issues:[],complete:false};
+    const issues = [];
+    const chunks = BeanTrustPolicy.localCheckChunks(checkedText);
+    let complete = true;
+    for (const chunk of chunks) {
+      if (!fieldSnapshotMatches(el, text, generation)) return {issues:[],complete:false};
+      if (!chunk.text.trim()) continue;
+      const requestId = uuid();
+      const context = {text:chunk.text, stillMatches:() => fieldSnapshotMatches(el,text,generation) && stillMatches()};
+      if (!registerTextAuthorization(requestId, chunk.text, "localCheck", context)) return {issues:[],complete:false};
+      const response = await new Promise((resolve) => {
+        let done = false;
+        const finish = (value) => {
+          if (done) return;
+          done = true; clearTimeout(timer); revokeTextAuthorization(requestId); resolve(value);
+        };
+        const timer = setTimeout(() => finish(null), 10000);
+        try {
+          chrome.runtime.sendMessage({type:"localCheck",request:{id:requestId,type:"localCheck",
+            source:{surface:"browserExtension",urlHost:host(),fieldType},settings:{maxIssues:32},text:chunk.text}},
+            (result) => { void chrome.runtime.lastError; finish(result); });
+        } catch (_error) { finish(null); }
+      });
+      if (!fieldSnapshotMatches(el, text, generation)) return {issues:[],complete:false};
+      if (!response || response.ok !== true || !Array.isArray(response.issues)) return {issues,complete:false};
+      if (response.localSpellingAvailable !== true) complete = false;
+      const mapped = BeanTrustPolicy.mergeLocalIssues(chunk.text,[],response.issues,32);
+      issues.push(...mapped.map((issue) => ({...issue,start:issue.start + chunk.start,end:issue.end + chunk.start})));
+    }
+    return {issues,complete};
   }
 
   function rememberBridgeUnavailable(code, now) {
@@ -389,12 +442,14 @@
     }
   }
 
-  function registerTextAuthorization(requestId, text) {
-    if (typeof requestId !== "string" || !requestId || !bridgeTextAuthorized(text)) return false;
+  function registerTextAuthorization(requestId, text, purpose = "detectIssues", snapshot = null) {
+    if (typeof requestId !== "string" || !requestId) return false;
     const el = state.active;
+    if (!el || !siteAllowed() || eligibleEditableSurface(el) !== el) return false;
     const fullText = getText(el);
-    const context = eligibleAIContext(el, fullText);
-    if (!context || context.text !== text) return false;
+    const context = snapshot || eligibleAIContext(el, fullText);
+    if (!context || context.text !== text || !context.stillMatches() ||
+        (!snapshot && !bridgeTextAuthorized(text))) return false;
 
     const now = Date.now();
     for (const [id, authorization] of state.pendingTextAuthorizations) {
@@ -410,6 +465,9 @@
     const authorization = {
       element: el,
       context,
+      purpose,
+      explicitSnapshot:!!snapshot,
+      fullText,
       requestGeneration: state.reqGen,
       expiresAt: now + TEXT_AUTHORIZATION_TTL_MS,
       cleanupTimer: null
@@ -423,30 +481,88 @@
     return true;
   }
 
-  function consumeTextAuthorization(requestId) {
+  function consumeTextAuthorization(requestId, purpose) {
     if (typeof requestId !== "string") return false;
     const authorization = state.pendingTextAuthorizations.get(requestId);
     // Every challenge is single-use, including an expired or failed one.
     revokeTextAuthorization(requestId);
-    if (!authorization || authorization.expiresAt <= Date.now()) return false;
+    if (!authorization || authorization.expiresAt <= Date.now() ||
+        (purpose !== undefined && purpose !== authorization.purpose)) return false;
     const el = authorization.element;
     if (authorization.requestGeneration !== state.reqGen || state.active !== el ||
         !document.contains(el) || !siteAllowed() || eligibleEditableSurface(el) !== el) return false;
     const fullText = getText(el);
+    if (authorization.explicitSnapshot) return fullText === authorization.fullText && authorization.context.stillMatches();
     const context = eligibleAIContext(el, fullText);
     return context === authorization.context && context.stillMatches();
   }
 
   if (chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === "function") {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message && message.type === "revalidateFieldOwnership") {
+        const ok = !!sender && sender.id === chrome.runtime.id &&
+          message.fieldToken === state.fieldToken && ownsFocusedField();
+        sendResponse({ok,fieldToken:message.fieldToken}); return false;
+      }
       if (!message || message.type !== "revalidateTextRequest") return false;
       const requestId = typeof message.requestId === "string" ? message.requestId : null;
       const senderIsBean = !!sender && sender.id === chrome.runtime.id;
-      const ok = senderIsBean && requestId !== null && consumeTextAuthorization(requestId);
+      const ok = senderIsBean && requestId !== null && consumeTextAuthorization(requestId, message.purpose);
       sendResponse({ ok, requestId });
       return false;
     });
   }
+
+  function ownsFocusedField() {
+    const el = state.active;
+    return !!el && state.assistantVisible && document.visibilityState !== "hidden" &&
+      (typeof document.hasFocus !== "function" || document.hasFocus()) &&
+      document.contains(el) && siteAllowed() && eligibleEditableSurface(el) === el &&
+      (document.activeElement === el || (el.contains && el.contains(document.activeElement)) ||
+        isBeanOverlayNode(document.activeElement));
+  }
+
+  function sendOwnership(active, token = state.fieldToken) {
+    if (!token) return;
+    const sequence = ++ownershipRequestSequence;
+    try {
+      chrome.runtime.sendMessage({type:"fieldOwnership",ownership:{fieldToken:token,active}},(response) => {
+        const failed = !!chrome.runtime.lastError;
+        if (!active || state.fieldToken !== token || sequence !== ownershipRequestSequence) return;
+        if (response && response.ok === true && typeof response.ownershipAccepted === "boolean") ownershipSupported = true;
+        if (response && response.ownershipAccepted === true) return;
+        if (ownershipSupported || state.bridgeStatus && state.bridgeStatus.fieldOwnershipAvailable === true) {
+          // The native lease will expire soon. Yield the DOM UI now so the Mac
+          // fallback remains the single assistant when this connection fails.
+          reason(failed ? "ownershipDisconnected" : "ownershipRejected");
+          teardown();
+        }
+      });
+    } catch (_error) {}
+  }
+
+  function renewOwnership() {
+    if (ownershipHeartbeat) { clearTimeout(ownershipHeartbeat); ownershipHeartbeat = null; }
+    if (!ownsFocusedField()) { releaseOwnership(); return; }
+    if (!state.fieldToken) state.fieldToken = uuid();
+    sendOwnership(true);
+    ownershipHeartbeat = setTimeout(renewOwnership,1500);
+  }
+
+  function releaseOwnership() {
+    if (ownershipHeartbeat) { clearTimeout(ownershipHeartbeat); ownershipHeartbeat = null; }
+    const token = state.fieldToken;
+    state.fieldToken = null;
+    if (token) sendOwnership(false,token);
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") { releaseOwnership(); clearPendingTextAuthorizations(); }
+    else if (state.active) { renderAssistant(); scheduleCheck(); }
+  });
+  window.addEventListener("blur",releaseOwnership);
+  window.addEventListener("focus",() => { if (state.active) { renderAssistant(); scheduleCheck(); } });
+  window.addEventListener("pagehide",teardown);
 
   // --- Lifecycle ------------------------------------------------------------
   document.addEventListener("focusin", (e) => {
@@ -514,7 +630,7 @@
   }
 
   window.addEventListener("scroll", () => {
-    if (!state.active || !state.entries.length) return;
+    if (!state.active) return;
     if (scrollThrottle) return;
     scrollThrottle = setTimeout(() => { scrollThrottle = null; recomputeRects(); }, 60);
   }, true);
@@ -529,9 +645,17 @@
     state.active = el;
     state.aiContext = null;
     state.aiDetectionFingerprint = 0;
+    state.ignored = [];
+    state.ignoredText = getText(el);
+    state.checkStatus = "waiting";
+    state.localSpellingAvailable = false;
+    state.composing = false;
     el.addEventListener("input", onInput, true);
+    el.addEventListener("compositionstart", onCompositionStart, true);
+    el.addEventListener("compositionend", onCompositionEnd, true);
     document.addEventListener("mousedown", onDocMouseDown, true);
     document.addEventListener("keydown", onDocKeyDown, true);
+    renderAssistant();
     scheduleCheck();
   }
 
@@ -656,7 +780,21 @@
     return true;
   }
 
+  function onCompositionStart() {
+    state.composing = true;
+    state.reqGen++;
+    clearPendingTextAuthorizations();
+    state.aiContext = null;
+    if (debounce) { clearTimeout(debounce); debounce = null; }
+    clearOverlay();
+  }
+  function onCompositionEnd() {
+    state.composing = false;
+    scheduleCheck();
+  }
+
   function onInput(event) {
+    state.actionTarget = null; state.actionSourceText = null;
     // Sites can change autocomplete/role/inputmode after focus (OTP widgets do
     // this often). Re-evaluate semantics before reading or capturing any text.
     if (!state.active || eligibleEditableSurface(state.active) !== state.active) {
@@ -664,6 +802,7 @@
       teardown();
       return;
     }
+    reconcileIgnored(getText(state.active));
     // Typing hides the overlay; invalidate in-flight requests; re-check later.
     state.reqGen++;
     clearPendingTextAuthorizations();
@@ -687,28 +826,44 @@
     BeanOverlay.clear();
     state.entries = []; state.selectedId = null; state.shownFingerprint = 0;
     state.groups = []; state.selectedGroupId = null;
-    scheduleCheck();
+    state.checkStatus = "waiting";
+    renderAssistant();
+    if (!state.composing && !(event && event.isComposing)) scheduleCheck();
   }
   function scheduleCheck() {
     if (debounce) clearTimeout(debounce);
     debounce = setTimeout(check, DEBOUNCE_MS);
   }
   function clearOverlay() {
+    state.assistantVisible = false;
+    releaseOwnership();
     state.entries = []; state.selectedId = null; state.shownFingerprint = 0;
     state.groups = []; state.selectedGroupId = null;
     removeKeyboardBridge();
     BeanOverlay.clear();
+    if (BeanOverlay && typeof BeanOverlay.clearAssistant === "function") BeanOverlay.clearAssistant();
   }
   function teardown() {
+    state.actionTarget = null; state.actionSourceText = null;
+    state.assistantVisible = false;
+    releaseOwnership();
     if (focusoutTimer) { clearTimeout(focusoutTimer); focusoutTimer = null; }
     if (debounce) { clearTimeout(debounce); debounce = null; }
-    if (state.active) state.active.removeEventListener("input", onInput, true);
+    if (state.active) {
+      state.active.removeEventListener("input", onInput, true);
+      state.active.removeEventListener("compositionstart", onCompositionStart, true);
+      state.active.removeEventListener("compositionend", onCompositionEnd, true);
+    }
+    state.composing = false;
     document.removeEventListener("mousedown", onDocMouseDown, true);
     document.removeEventListener("keydown", onDocKeyDown, true);
     state.active = null;
+    state.ignored = [];
+    state.ignoredText = "";
     state.aiContext = null;
     state.aiDetectionFingerprint = 0;
     clearPendingTextAuthorizations();
+    if (BeanOverlay && typeof BeanOverlay.clearAssistant === "function") BeanOverlay.clearAssistant();
     state.undoRecord = null;
     removeKeyboardBridge();
     if (BeanOverlay && typeof BeanOverlay.clearUndo === "function") BeanOverlay.clearUndo();
@@ -730,6 +885,8 @@
   }
   function onDocKeyDown(e) {
     if (isBeanOverlayEvent(e)) return;
+    if (e.key === "Tab" && state.active && (e.target === state.active ||
+        state.active.contains && state.active.contains(e.target))) captureActionTarget(state.active);
     if (e.key === "Tab" && !e.defaultPrevented && !e.shiftKey && !e.ctrlKey &&
         !e.metaKey && !e.altKey && !e.isComposing && state.active &&
         state.active.isContentEditable && keyboardBridgeEl &&
@@ -752,22 +909,34 @@
   }
 
   // --- Detect + map ---------------------------------------------------------
-  function check() {
+  async function check() {
     const el = state.active;
     if (!el || !document.contains(el) || eligibleEditableSurface(el) !== el) {
       teardown(); return;
     }
     const text = getText(el);
-    if (!text || text.length < 4 || text.length > 5000) { clearOverlay(); return; }
+    if (state.composing) return;
+    if (!text || text.length > 50000) { state.checkStatus = text.length > 50000 ? "tooLong" : "empty"; clearOverlay(); renderAssistant(); return; }
     const fp = fingerprint(text);
-    if (fp === state.shownFingerprint && state.entries.length) return; // already showing for this text
     const fieldType = el.isContentEditable ? "contenteditable" : (el.tagName || "").toLowerCase();
     const gen = ++state.reqGen;
-    const localIssues = BeanDetector.detect(text);
+    let localIssues = BeanDetector.detect(text);
     state.fingerprint = fp;
     state.shownFingerprint = fp;
     state.entries = mapEntries(el, text, localIssues);
     state.selectedId = null;
+    state.checkStatus = "checkingLocal";
+    renderOverlay();
+
+    const localResult = await bridgeLocalIssues(el,text,gen,fieldType);
+    if (!fieldSnapshotMatches(el,text,gen)) return;
+    if (BeanTrustPolicy.mergeLocalIssues) localIssues = BeanTrustPolicy.mergeLocalIssues(text,localIssues,localResult.issues,64);
+    state.localSpellingAvailable = localResult.complete;
+    state.entries = mapEntries(el,text,localIssues);
+    state.checkStatus = localResult.complete ? "nativeLocal" : "localLimited";
+    if (!state.entries.length && localIssues.some((issue) => isSafeCandidate(issue) && !isIgnored(text,issue))) {
+      state.checkStatus = "mappingLimited";
+    }
     renderOverlay();
 
     // Focus alone is deliberately local-only. AI becomes eligible only after a
@@ -779,6 +948,8 @@
     // visible issue budget. Avoid spending tokens on a result we would discard.
     if (remainingIssueSlots === 0) { reason("bridgeSkippedLocalIssueCap"); return; }
     state.aiDetectionFingerprint = fp;
+    state.checkStatus = "checking";
+    renderOverlay();
     bridgeIssues(context.text, fieldType, remainingIssueSlots).then((result) => {
       // Stale typing/refocus is harmless, but a live sensitive-state change must
       // be handled before this callback reads the field or renders anything.
@@ -793,7 +964,12 @@
       state.fingerprint = fp;
       state.shownFingerprint = fp;
       state.entries = mapEntries(el, text, candidates);
-      state.selectedId = null;
+      if (state.selectedId && !state.entries.some((entry) => entry.id === state.selectedId)) state.selectedId = null;
+      state.checkStatus = result.issues !== null ? (state.localSpellingAvailable ? "ai" : "aiLimited")
+        : (state.localSpellingAvailable ? "nativeLocal" : "localLimited");
+      if (!state.entries.length && candidates.some((issue) => isSafeCandidate(issue) && !isIgnored(text,issue))) {
+        state.checkStatus = "mappingLimited";
+      }
       renderOverlay();
     });
   }
@@ -801,7 +977,8 @@
   function isSafeCandidate(issue) {
     if (!issue || typeof issue.original !== "string" || typeof issue.suggestion !== "string") return false;
     if (!issue.original || !issue.suggestion || issue.original === issue.suggestion) return false;
-    if (issue.original.length < 2 || issue.original.length > 200) return false; // localized only
+    if (issue.original.length > 200) return false; // localized only
+    if (issue.original.length === 1 && issue.source !== "local") return false;
     if (issue.suggestion.length > 200) return false;
     if (issue.suggestion === issue.original + issue.original) return false; // obvious duplication artifact
     // LINE-BREAK SAFETY: provider output may not add, remove, or change CR/LF
@@ -811,36 +988,95 @@
     }
     return true;
   }
-  function ignoreKey(original) { return original + "::" + state.fingerprint; }
+  // Dismiss one exact occurrence, and keep that decision when unrelated text
+  // changes. Editing through the dismissed span makes it eligible again.
+  function reconcileIgnored(text) {
+    const before = state.ignoredText;
+    if (text === before) return;
+    let prefix = 0, suffix = 0;
+    while (prefix < before.length && prefix < text.length && before[prefix] === text[prefix]) prefix++;
+    while (suffix < before.length - prefix && suffix < text.length - prefix &&
+      before[before.length - suffix - 1] === text[text.length - suffix - 1]) suffix++;
+    const oldEnd = before.length - suffix, delta = text.length - before.length;
+    state.ignored = state.ignored.filter((record) => {
+      if (record.start == null) return false;
+      if (record.end <= prefix) return true;
+      if (record.start < oldEnd) return false;
+      record.start += delta; record.end += delta;
+      return text.slice(record.start, record.end) === record.original;
+    });
+    state.ignoredText = text;
+  }
+
+  function issueOffset(text, issue) {
+    return localOffset(text, issue) || BeanMapping.uniqueOffset(text, issue.original);
+  }
+
+  function isIgnored(text, issue) {
+    const offset = issueOffset(text, issue);
+    return state.ignored.some((record) => record.original === issue.original &&
+      record.suggestion === issue.suggestion &&
+      (record.start == null || (offset && record.start === offset.start && record.end === offset.end)));
+  }
+
+  function dismissEntry(entry) {
+    const text = getText(state.active);
+    reconcileIgnored(text);
+    const offset = issueOffset(text, entry.issue);
+    state.ignored.push({ original:entry.issue.original, suggestion:entry.issue.suggestion,
+      start:offset && offset.start, end:offset && offset.end });
+  }
+
+  function localOffset(text, issue) {
+    if (issue.source !== "local" || !Number.isInteger(issue.start) || !Number.isInteger(issue.end) ||
+        issue.start < 0 || issue.end > text.length || issue.end - issue.start !== issue.original.length ||
+        text.slice(issue.start, issue.end) !== issue.original) return null;
+    return { start: issue.start, end: issue.end };
+  }
+
+  function liveContentRange(el, entry) {
+    if (entry.localRange) {
+      if (el.textContent !== entry.mappedContent) return null;
+      const range = BeanMapping.rangeFromOffsets(el, entry.start, entry.end);
+      return range && range.toString() === entry.original ? range : null;
+    }
+    return BeanMapping.findUniqueRange(el, entry.original);
+  }
 
   // Builds entries whose rects come from the SAME source used to apply:
   //   contenteditable → a unique DOM Range over the text nodes (rects + apply)
   //   textarea/input  → a verified value offset (rects via mirror + apply)
   function mapEntries(el, text, candidates) {
     const kind = el.isContentEditable ? "ce" : "ta";
+    reconcileIgnored(text);
     const entries = [];
     let i = 0;
     for (const issue of candidates) {
       if (!isSafeCandidate(issue)) continue;
-      if (state.ignored.has(ignoreKey(issue.original))) continue;
+      if (isIgnored(text, issue)) continue;
       let entry = null;
       if (kind === "ce") {
-        const range = BeanMapping.findUniqueRange(el, issue.original); // null if missing/ambiguous/mismatch
-        if (!range) { reason("mapMissingSkipped"); continue; }
+        const renderedOffset = localOffset(text, issue);
+        const local = renderedOffset && BeanMapping.alignTextOffset
+          ? BeanMapping.alignTextOffset(el.textContent, text, renderedOffset.start, renderedOffset.end)
+          : (el.textContent === text ? renderedOffset : null);
+        const range = local ? BeanMapping.rangeFromOffsets(el, local.start, local.end)
+          : BeanMapping.findUniqueRange(el, issue.original);
+        if (!range || range.toString() !== issue.original) { reason("mapMissingSkipped"); continue; }
         const rects = BeanMapping.rectsFromRange(range);
-        if (!rects.length) continue;
         // Paragraph = nearest block ancestor (p/div/li/blockquote/heading) inside
         // the editor; null if none (then this issue won't group).
         const block = blockAncestor(range.startContainer, el);
         const paraText = block ? block.innerText : null;
         entry = { id: "i" + i++, issue, kind, original: issue.original, rects, blockEl: block, paraText,
-                  sortKey: rects[0].y * 100000 + rects[0].x };
+                  localRange: !!local, start: local && local.start, end: local && local.end,
+                  mappedContent: local ? el.textContent : null,
+                  sortKey: renderedOffset ? renderedOffset.start : Math.max(0,text.indexOf(issue.original)) };
       } else {
-        const off = BeanMapping.uniqueOffset(text, issue.original);
+        const off = localOffset(text, issue) || BeanMapping.uniqueOffset(text, issue.original);
         if (!off) { reason("mapMissingSkipped"); continue; }
         if (el.value.slice(off.start, off.end) !== issue.original) continue; // exact verify
         const rects = BeanMapping.rectsForRange(el, off.start, off.end);
-        if (!rects.length) continue;
         // Paragraph = the line (run between newlines); key by line-start offset.
         const lb = text.lastIndexOf("\n", off.start - 1);
         const lineStart = lb < 0 ? 0 : lb + 1;
@@ -852,9 +1088,9 @@
       // Suppress issues in a paragraph Bean just fully proofread (until it changes),
       // so Bean's own correction doesn't look like an endless stream of fixes.
       if (entry.paraText != null && state.correctedFps.has(fingerprint(entry.paraText))) { reason("paragraphSuppressed"); continue; }
+      entry.cardAnchor = fieldRect(el);
       reason("mapUniqueMatch");
       entries.push(entry);
-      if (entries.length >= 8) break;
     }
     return entries.sort((a, b) => a.sortKey - b.sortKey);
   }
@@ -864,7 +1100,7 @@
   function verifyTarget(el, entry) {
     if (!el || !document.contains(el)) return null;
     if (entry.kind === "ce") {
-      const range = BeanMapping.findUniqueRange(el, entry.original);
+      const range = liveContentRange(el, entry);
       if (!range || range.toString() !== entry.original) return null;
       return { kind: "ce", range };
     }
@@ -876,18 +1112,17 @@
   function recomputeRects() {
     const el = state.active;
     if (!el) return;
+    if (eligibleEditableSurface(el) !== el) { teardown(); return; }
     const kept = [];
     for (const entry of state.entries) {
       if (entry.kind === "ce") {
-        const range = BeanMapping.findUniqueRange(el, entry.original);
+        const range = liveContentRange(el, entry);
         if (!range || range.toString() !== entry.original) continue; // stale → drop
         const rects = BeanMapping.rectsFromRange(range);
-        if (!rects.length) continue;
         entry.rects = rects;
       } else {
         if (el.value.slice(entry.start, entry.end) !== entry.original) continue;
         const rects = BeanMapping.rectsForRange(el, entry.start, entry.end);
-        if (!rects.length) continue;
         entry.rects = rects;
       }
       kept.push(entry);
@@ -903,6 +1138,7 @@
     state.entries.splice(i, 1);
     if (!state.entries.length) {
       clearOverlay();
+      renderAssistant();
       restoreFieldFocus(state.active);
       return;
     }
@@ -975,7 +1211,7 @@
       return { x: r.left + window.scrollX, y: r.top + window.scrollY, h: Math.min(r.height, 22) };
     }
     const fr = el.getBoundingClientRect();
-    const first = g.entries[0].rects[0];
+    const first = g.entries[0].rects[0] || g.entries[0].cardAnchor;
     if (!first || fr.width < 1) return null;
     return { x: fr.left + window.scrollX, y: first.y, h: first.h };
   }
@@ -1004,10 +1240,11 @@
       onIgnore: (id) => {
         reason("buttonIgnoreClicked");
         const entry = state.entries.find((e) => e.id === id);
-        if (entry) state.ignored.add(ignoreKey(entry.issue.original));
+        if (entry) dismissEntry(entry);
         dropIssue(id);
       },
       onApply: (id) => applyIssue(id),
+      onApplyAlternative:(id,suggestion) => applyIssue(id,suggestion),
       onUndo: () => undoLastApply(),
       onEnableField: () => enableDisabledField(state.disabledControlTarget),
       onDisableField: () => disableCurrentField(),
@@ -1020,6 +1257,7 @@
     if (state.selectedGroupId && !state.groups.some((g) => g.id === state.selectedGroupId)) state.selectedGroupId = null;
     reason("paragraphGroupCount:" + state.groups.length);
     BeanOverlay.renderGroups(state.groups, state.selectedGroupId, {
+      hideIcons: true,
       onActivateGroup: (gid) => {
         const g = state.groups.find((x) => x.id === gid);
         if (!g) return;
@@ -1046,11 +1284,12 @@
         const g = state.groups.find((x) => x.id === gid);
         if (!g) return;
         const ids = g.entries.map((e) => e.id);
-        for (const e of g.entries) state.ignored.add(ignoreKey(e.issue.original));
+        for (const e of g.entries) dismissEntry(e);
         state.selectedGroupId = null;
         state.entries = state.entries.filter((e) => !ids.includes(e.id));
         if (!state.entries.length) {
           clearOverlay();
+          renderAssistant();
           restoreFieldFocus(state.active);
           return;
         }
@@ -1063,7 +1302,184 @@
       onDisableField: () => disableCurrentField(),
       onDisableSite: () => disableCurrentSite()
     });
+    renderAssistant();
+  }
+
+  function renderAssistant() {
+    const el = state.active;
+    if (!el || !BeanOverlay || typeof BeanOverlay.renderAssistant !== "function") return;
+    const shown = BeanOverlay.renderAssistant(fieldRect(el), state.entries.length, state.checkStatus, {
+      onReview: () => {
+        const first = state.entries[0];
+        if (!first || !verifyTarget(el, first)) return;
+        const group = state.groups.find((candidate) => candidate.entries.includes(first));
+        state.selectedGroupId = group ? group.id : null;
+        state.selectedId = group ? null : first.id;
+        renderOverlay();
+      },
+      onClose: () => restoreFieldFocus(el),
+      actionScope:actionScope(el),
+      onPrepareActions:() => {
+        if (document.activeElement === el || el.contains && el.contains(document.activeElement) ||
+            !state.actionTarget || state.actionSourceText !== getText(el)) captureActionTarget(el);
+        return state.actionTarget && state.actionTarget.scope || actionScope(el);
+      },
+      onWritingAction:(action,event) => performWritingAction(action,event),
+      onDisableField: () => disableCurrentField(),
+      onDisableSite: () => disableCurrentSite()
+    });
+    state.assistantVisible = shown !== false;
     syncKeyboardBridge();
+    renewOwnership();
+  }
+
+  function captureActionTarget(el) {
+    state.actionTarget = explicitActionTarget(el);
+    state.actionSourceText = getText(el);
+  }
+
+  function actionScope(el) {
+    if (!el.isContentEditable) {
+      return el.selectionEnd > el.selectionStart ? "selection" : getText(el).length <= 8000 ? "draft" : "paragraph";
+    }
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount && !selection.getRangeAt(0).collapsed &&
+        el.contains(selection.getRangeAt(0).startContainer)) return "selection";
+    return ceBlockReplaceable(el) ? "draft" : "paragraph";
+  }
+
+  function explicitActionTarget(el) {
+    if (!el.isContentEditable) {
+      const before = el.value;
+      let start = Number.isInteger(el.selectionStart) ? el.selectionStart : 0;
+      let end = Number.isInteger(el.selectionEnd) ? el.selectionEnd : start;
+      const scope = end > start ? "selection" : before.length <= 8000 ? "draft" : "paragraph";
+      if (start === end) {
+        if (before.length <= 8000) { start = 0; end = before.length; }
+        else {
+          start = before.lastIndexOf("\n",Math.max(0,start - 1)) + 1;
+          end = before.indexOf("\n",start); if (end < 0) end = before.length;
+        }
+      }
+      const text = before.slice(start,end);
+      return {text,scope,stillMatches:() => el.value === before,
+        replace:(corrected) => {
+          if (el.value !== before || eligibleEditableSurface(el) !== el) return null;
+          const after = BeanMapping.replaceRangePreservingBoundaries(before,start,end,corrected);
+          if (after === null) return null;
+          const result = withBeanEdit(() => BeanMapping.applyTextControlRange(el,start,end,corrected));
+          return result.ok && el.value === after ? valueUndoRecord(el,start,before,after,text,corrected,
+            "field","Undo writing action",fieldRect(el)) : null;
+        }};
+    }
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount) {
+      const selected = selection.getRangeAt(0);
+      if (!selected.collapsed && el.contains(selected.startContainer) && el.contains(selected.endContainer)) {
+        const offsets = BeanMapping.rangeOffsets(el,selected);
+        if (!offsets) return null;
+        const before = el.textContent;
+        const text = before.slice(offsets.start,offsets.end);
+        return {text,scope:"selection",stillMatches:() => el.textContent === before,
+          replace:(corrected) => {
+            if (el.textContent !== before || eligibleEditableSurface(el) !== el) return null;
+            const range = BeanMapping.rangeFromOffsets(el,offsets.start,offsets.end);
+            const after = BeanMapping.replaceRangePreservingBoundaries(before,offsets.start,offsets.end,corrected);
+            if (!range || range.toString() !== text || after === null) return null;
+            const result = withBeanEdit(() => BeanMapping.applyContentEditableRange(el,range,corrected,after));
+            return result.ok && el.textContent === after ? contentEditableUndoRecord(el,offsets.start,before,after,
+              text,corrected,"selection","Undo writing action",fieldRect(el)) : null;
+          }};
+      }
+    }
+    // Whole-field replacement is safe only when literal DOM text matches what
+    // was sent. Rich email editors retain their structure by checking the
+    // current plain paragraph instead.
+    const block = ceBlockReplaceable(el) ? el :
+      (selection && selection.anchorNode ? blockAncestor(selection.anchorNode,el) : null);
+    const target = block && ceBlockReplaceable(block) ? paragraphTarget(el,{kind:"ce",block}) : null;
+    return target ? {...target,scope:block === el ? "draft" : "paragraph"} : null;
+  }
+
+  async function performWritingAction(action,event) {
+    // Only a real activation in Bean's closed shadow root authorizes a provider
+    // action. Focus, page events, and programmatic clicks never grant it.
+    if (!event || event.isTrusted !== true || state.fixingGroup ||
+        !["proofread","makeCasual","makeProfessional","makeConcise","makeClearer"].includes(action)) return;
+    const el = state.active;
+    if (!el || eligibleEditableSurface(el) !== el) { teardown(); return; }
+    const target = state.actionTarget && state.actionSourceText === getText(el)
+      ? state.actionTarget : explicitActionTarget(el);
+    const anchor = fieldRect(el);
+    if (!target || !target.text.trim() || target.text.length > 8000) {
+      BeanOverlay.flash(anchor,"Select the text you want to improve, then try again.");
+      restoreFieldFocus(el); return;
+    }
+    const text = getText(el), generation = ++state.reqGen;
+    clearPendingTextAuthorizations();
+    state.fixingGroup = true;
+    BeanOverlay.clear();
+    BeanOverlay.showParagraphBusy(anchor,action === "proofread" ? "Proofreading…" : "Rewriting…");
+    const current = () => fieldSnapshotMatches(el,text,generation) && target.stillMatches(target.text);
+    let corrected = null, message = "", usedAI = false, uncertainCount = 0;
+    try {
+      const status = await requestBridgeStatus();
+      if (!current()) return;
+      state.bridgeStatus = status;
+      if (status && status.ok && status.compatible !== false && status.performActionAvailable === true && status.providerConfigured === true) {
+        const requestId = uuid();
+        const context = {text:target.text,stillMatches:current};
+        if (!registerTextAuthorization(requestId,target.text,"performAction",context)) return;
+        const result = await new Promise((resolve) => {
+          let done = false;
+          const finish = (response) => {
+            if (done) return; done = true; clearTimeout(timer); revokeTextAuthorization(requestId); resolve(response);
+          };
+          const timer = setTimeout(() => finish(null),bridgeOperationTimeout(status));
+          try {
+            chrome.runtime.sendMessage({type:"performAction",request:{id:requestId,type:"performAction",action,
+              source:{surface:"browserExtension",urlHost:host(),fieldType:el.isContentEditable ? "contenteditable" : el.tagName.toLowerCase()},
+              text:target.text}},(response) => { void chrome.runtime.lastError; finish(response); });
+          } catch (_error) { finish(null); }
+        });
+        if (!current()) return;
+        if (result && result.ok === true && result.reviewRequired !== true && typeof result.text === "string") {
+          const sanitized = BeanMapping.sanitizeProofreadParagraphOutput(result.text);
+          corrected = sanitized && sanitized.text; usedAI = true;
+        } else message = result && result.message || "Bean couldn’t finish this action. Your text is unchanged.";
+      } else if (action === "proofread") {
+        const local = await bridgeLocalIssues(el,text,generation,
+          el.isContentEditable ? "contenteditable" : el.tagName.toLowerCase(),target.text,() => target.stillMatches(target.text));
+        if (!current()) return;
+        const issues = BeanTrustPolicy.mergeLocalIssues
+          ? BeanTrustPolicy.mergeLocalIssues(target.text,BeanDetector.detect(target.text),local.issues,64)
+          : BeanDetector.detect(target.text);
+        corrected = target.text;
+        uncertainCount = issues.filter((issue) => typeof issue.confidence === "number" && issue.confidence < 0.8).length;
+        for (const issue of [...issues].filter((issue) => typeof issue.confidence !== "number" || issue.confidence >= 0.8)
+          .sort((a,b) => b.start - a.start)) {
+          corrected = corrected.slice(0,issue.start) + issue.suggestion + corrected.slice(issue.end);
+        }
+        message = uncertainCount ? `${uncertainCount} spelling ${uncertainCount === 1 ? "suggestion needs" : "suggestions need"} your choice. Review suggestions to pick a correction.`
+          : local.complete ? "No spelling or basic grammar changes found." :
+          "Basic checks found no changes. Connect Bean for full spelling checks.";
+      } else message = "Add and verify an API key in Bean Settings to use Rewrite.";
+      if (!current()) return;
+      if (typeof corrected === "string" && corrected && corrected !== target.text) {
+        const record = target.replace(corrected);
+        if (record) {
+          offerUndo(record);
+          BeanOverlay.flash(anchor,usedAI ? "Writing action applied" :
+            uncertainCount ? `Local fixes applied · ${uncertainCount} suggestions need review` : "Local fixes applied");
+        } else BeanOverlay.flash(anchor,"Bean couldn’t verify the edit. Review the field before trying again.");
+      } else BeanOverlay.flash(anchor,message || "AI found no additional changes.");
+    } finally {
+      state.fixingGroup = false;
+      if (typeof BeanOverlay.clearParagraphBusy === "function") BeanOverlay.clearParagraphBusy();
+      if (state.active === el && eligibleEditableSurface(el) === el) {
+        restoreFieldFocus(el); renderOverlay(); scheduleCheck();
+      }
+    }
   }
 
   function setFieldDisabledOverlay(disabled, field) {
@@ -1182,7 +1598,7 @@
       );
       try {
         requestId = uuid();
-        if (!registerTextAuthorization(requestId, text)) {
+        if (!registerTextAuthorization(requestId, text, "proofreadParagraph")) {
           finish({ text: null, code: "trustedEditRequired", reviewRequired: false });
           return;
         }
@@ -1304,6 +1720,9 @@
   }
 
   function rememberCorrected(text) {
+    // A paragraph response may improve only part of the text. Keep every
+    // remaining local finding visible instead of claiming the paragraph is done.
+    if (BeanDetector.detect(text).length) return;
     state.correctedFps.add(fingerprint(text));
     if (state.correctedFps.size > 32) { // bound the set
       state.correctedFps = new Set(Array.from(state.correctedFps).slice(-16));
@@ -1396,9 +1815,9 @@
       return;
     }
 
-    if (!usedFallback && bridge.reviewRequired) {
+    if (!usedFallback && BeanTrustPolicy.isMeaningfulEdit(sent, corrected)) {
       const approved = await BeanOverlay.reviewParagraph(
-        g.anchor, sent, corrected, bridge.message || "This result is unusually shaped. Review it before applying.");
+        g.anchor, sent, corrected, bridge.message || "Review the proposed changes. Your paragraph changes only when you accept.");
       if (!approved) {
         state.fixingGroup = false;
         reason("paragraphReviewCancelled");
@@ -1473,10 +1892,14 @@
     if (g && g.anchor) BeanOverlay.flash({ x: g.anchor.x, y: g.anchor.y, h: g.anchor.h || 18 }, msg, ms);
   }
 
-  function applyIssue(id) {
+  function applyIssue(id,alternative = null) {
     reason("buttonApplyClicked");
     const el = state.active;
-    const entry = state.entries.find((e) => e.id === id);
+    const originalEntry = state.entries.find((e) => e.id === id);
+    if (alternative !== null && (!originalEntry || !Array.isArray(originalEntry.issue.alternatives) ||
+        !originalEntry.issue.alternatives.includes(alternative))) return;
+    const entry = alternative === null ? originalEntry :
+      {...originalEntry,issue:{...originalEntry.issue,suggestion:alternative}};
     if (!el || !entry || !document.contains(el)) { teardown(); return; }
     if (eligibleEditableSurface(el) !== el) {
       reason("fieldBecameIneligible");
@@ -1550,10 +1973,15 @@
     const newText = getText(el);
     state.fingerprint = fingerprint(newText);
     state.shownFingerprint = state.fingerprint;
-    state.entries = mapEntries(el, newText, remaining);
+    // Re-scan local occurrences after an edit; offsets from the previous text
+    // are stale, and unique-substring remapping would lose repeated misspellings.
+    const updated = BeanTrustPolicy.mergeIssues(BeanDetector.detect(newText),
+      remaining.filter((issue) => issue.source !== "local"), 16);
+    state.entries = mapEntries(el, newText, updated);
     if (!state.entries.length) {
       reason("remapDropped");
       clearOverlay();
+      renderAssistant();
     } else {
       reason("remapSucceeded");
       state.selectedId = state.entries[0].id;

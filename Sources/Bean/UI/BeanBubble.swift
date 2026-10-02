@@ -22,6 +22,7 @@ final class BeanBubbleController {
 
     var isShowing: Bool { bubblePanel != nil || menuPanel != nil }
     var isMenuOpen: Bool { menuPanel != nil }
+    var ownsKeyboardInteraction: Bool { menuPanel?.allowsKeyInteraction == true }
 
     // MARK: - Bubble
 
@@ -36,6 +37,7 @@ final class BeanBubbleController {
         self.onResetOffset = onReset
         let view = BeanBubbleView(
             openOnHover: openOnHover, onOpen: onOpen, onDismiss: onDismiss,
+            onResetPosition: { [weak self] in self?.resetBubblePosition() },
             onDragChanged: { [weak self] t in self?.dragBubble(t) },
             onDragEnded: { [weak self] t, moved in self?.endDragBubble(t, moved: moved, onOpen: onOpen) }
         )
@@ -69,6 +71,15 @@ final class BeanBubbleController {
         )
     }
 
+    func moveBubble(to point: CGPoint) {
+        guard let bubblePanel, menuPanel == nil else { return }
+        bubbleBaseOrigin = point
+        bubblePanel.setFrameOrigin(clampedBubbleOrigin(CGPoint(
+            x: point.x + bubbleSavedOffset.width,
+            y: point.y + bubbleSavedOffset.height
+        )))
+    }
+
     // SwiftUI drag translation is y-DOWN; AppKit origin is y-UP → subtract height.
     private func dragBubble(_ t: CGSize) {
         guard let panel = bubblePanel else { return }
@@ -84,7 +95,7 @@ final class BeanBubbleController {
         onOpen: @escaping (OverlayActivationIntent) -> Void
     ) {
         // A press that didn't move past the threshold is a click → open the menu.
-        guard moved, let panel = bubblePanel else { onOpen(.explicit); return }
+        guard moved, let panel = bubblePanel else { onOpen(.pointer); return }
         let final = panel.frame.origin
         let offset = CGSize(width: final.x - bubbleBaseOrigin.x, height: final.y - bubbleBaseOrigin.y)
         bubbleSavedOffset = offset
@@ -117,10 +128,6 @@ final class BeanBubbleController {
         panel.allowsKeyInteraction = allowsKeyboardInteraction
         let host = NSHostingController(rootView: view)
         panel.contentViewController = host
-        panel.onExplicitInteraction = { [weak self, weak panel] in
-            guard let panel else { return }
-            self?.promoteMenuForExplicitInteraction(panel)
-        }
         panel.setContentSize(host.view.fittingSize)
         positionMenu(panel, near: point)
         menuPanel = panel
@@ -133,11 +140,12 @@ final class BeanBubbleController {
 
     func hideMenu() {
         let shouldRefreshDock = menuPanel?.allowsKeyInteraction == true
+        let shouldRestoreFocus = menuPanel?.isKeyWindow == true
         menuPanel?.orderOut(nil)
         menuPanel = nil
         let focusSession = menuFocusSession
         menuFocusSession = nil
-        focusSession?.restoreIfAppropriate()
+        if shouldRestoreFocus { focusSession?.restoreIfAppropriate() }
         if shouldRefreshDock { DockPresence.refreshAfterWindowChange() }
     }
 
@@ -209,6 +217,7 @@ struct BeanBubbleView: View {
     let openOnHover: Bool
     let onOpen: (OverlayActivationIntent) -> Void
     let onDismiss: () -> Void
+    var onResetPosition: () -> Void = {}
     var onDragChanged: (CGSize) -> Void = { _ in }
     var onDragEnded: (CGSize, Bool) -> Void = { _, _ in }
     @State private var hovering = false
@@ -240,6 +249,10 @@ struct BeanBubbleView: View {
             .accessibilityHint("Shows writing actions")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { onOpen(.explicit) }
+            .contextMenu {
+                Button("Reset launcher position", action: onResetPosition)
+                Button("Hide launcher in this field", action: onDismiss)
+            }
             // minimumDistance 0 so a plain click also routes here: zero movement →
             // treated as a click (open menu); movement past threshold → drag.
             .gesture(

@@ -50,6 +50,9 @@ function normalizeStoredSites(sites) {
 }
 
 function assessBridgeStatus(response) {
+  const localMessage = response && response.localCheckAvailable === true
+    ? "The Mac spelling connection is ready."
+    : "Basic checks only. Update Bean and repair the Mac connection for full spelling checks.";
   if (response && response.errorCode === "nativeHostForbidden") return {
     app: ["Not authorized", "error"], ai: ["Local checks only", "neutral"],
     message: "Repair this extension's connection in Bean Settings."
@@ -60,7 +63,7 @@ function assessBridgeStatus(response) {
   };
   if (!response || !response.ok) return {
     app: ["Not connected", "error"], ai: ["Local checks only", "neutral"],
-    message: "Open the Bean app for optional AI help."
+    message: "Open Bean and connect it for full spelling checks. Basic checks remain available."
   };
   if (response.compatible === false || response.protocolVersion !== BRIDGE_PROTOCOL_VERSION) return {
     app: ["Update required", "error"], ai: ["Unavailable", "error"],
@@ -72,15 +75,15 @@ function assessBridgeStatus(response) {
   };
   if (!response.providerConfigured) return {
     app: ["Connected", "ok"], ai: ["Not set up", "neutral"],
-    message: "Local checks are ready."
+    message: localMessage
   };
   if (!response.webInlineEnabled) return {
     app: ["Connected", "ok"], ai: ["Off in Bean", "neutral"],
-    message: "Local checks are ready."
+    message: `${localMessage} Explicit Proofread and Rewrite remain available.`
   };
   if (response.automaticAccountingAvailable !== true) return {
     app: ["Connected", "ok"], ai: ["Usage safety unavailable", "error"],
-    message: "Local checks still work. Open Bean → Settings → AI & Usage and choose Check Accounting Again. If the warning remains after reopening Bean, Full Reset in Privacy & Help is a data-erasing last resort; contact Support if reset fails."
+    message: "Local checks still work. Open Bean → Settings → AI & Usage and choose Check Accounting Again."
   };
   if (response.browserAIStatusCode === "settingsUnavailable") return {
     app: ["Connected", "ok"], ai: ["Privacy check unavailable", "error"],
@@ -96,6 +99,7 @@ function assessBridgeStatus(response) {
 let currentTab = null;
 let blockedSites = [];
 let siteChangeOwnsMessage = false;
+let siteSettingsAvailable = false;
 
 function byId(id) { return document.getElementById(id); }
 
@@ -124,6 +128,13 @@ function renderSite() {
   if (!currentTab) {
     if (name) name.textContent = "Bean is unavailable here";
     if (detail) detail.textContent = "Browser and extension pages do not allow writing helpers.";
+    if (state) { state.textContent = "Unavailable"; state.className = "pill"; }
+    if (action) { action.disabled = true; action.textContent = "Website controls unavailable"; }
+    return;
+  }
+  if (!siteSettingsAvailable) {
+    if (name) name.textContent = currentTab.host;
+    if (detail) detail.textContent = "Website preferences are unavailable. Reopen this popup to try again.";
     if (state) { state.textContent = "Unavailable"; state.className = "pill"; }
     if (action) { action.disabled = true; action.textContent = "Website controls unavailable"; }
     return;
@@ -170,6 +181,7 @@ function toggleCurrentSite() {
       renderSite();
       return;
     }
+    siteSettingsAvailable = true;
     blockedSites = normalizeStoredSites(result.blockedSites);
     const previousSites = normalizeStoredSites(result.previousBlockedSites);
     const previousMatches = matchingBlocks(intendedHost, previousSites);
@@ -181,13 +193,10 @@ function toggleCurrentSite() {
       ? "Website choice saved. Restart your browser to finish updating Bean."
       : (enabling
         ? (enablingParent
-          ? `Bean enabled for ${coveringRule} and its subdomains. Reloading…`
-          : "Bean enabled. Reloading…")
-        : "Bean blocked. Reloading…"));
+          ? `Bean enabled for ${coveringRule} and its subdomains. Reload this page when your draft is saved.`
+          : "Bean enabled. Reload this page when your draft is saved.")
+        : "Bean is off on this website. Your draft stays where it is."));
     renderSite();
-    if (api.tabs && Number.isInteger(currentTab.id)) {
-      api.tabs.reload(currentTab.id, () => { void api.runtime.lastError; });
-    }
   });
 }
 
@@ -227,7 +236,11 @@ function load() {
     return;
   }
   api.storage.local.get(["blockedSites"], (settings) => {
-    blockedSites = normalizeStoredSites(settings.blockedSites);
+    const readError = api.runtime.lastError;
+    const sites = settings && settings.blockedSites;
+    siteSettingsAvailable = !readError && !!settings && (sites === undefined ||
+      (Array.isArray(sites) && sites.every((value) => !!normalizeStoredHost(value))));
+    blockedSites = siteSettingsAvailable ? normalizeStoredSites(sites) : [];
     if (!api.tabs || typeof api.tabs.query !== "function") { renderSite(); return; }
     api.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       currentTab = normalizeTab(tabs && tabs[0]);
@@ -237,7 +250,10 @@ function load() {
   if (api.storage.onChanged && typeof api.storage.onChanged.addListener === "function") {
     api.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local" || !changes.blockedSites) return;
-      blockedSites = normalizeStoredSites(changes.blockedSites.newValue);
+      const sites = changes.blockedSites.newValue;
+      siteSettingsAvailable = sites === undefined ||
+        (Array.isArray(sites) && sites.every((value) => !!normalizeStoredHost(value)));
+      blockedSites = siteSettingsAvailable ? normalizeStoredSites(sites) : [];
       renderSite();
     });
   }

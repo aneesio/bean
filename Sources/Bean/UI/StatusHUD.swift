@@ -56,6 +56,7 @@ final class StatusHUD {
     private var panel: NSPanel?
     private var dismissWorkItem: DispatchWorkItem?
     private var lastMessage: String?
+    private var undoAction: (() -> Void)?
     private var presentationGeneration = StatusHUDPresentationGeneration()
     private let reduceMotion: () -> Bool
     private let announcementHandler: ((String) -> Void)?
@@ -100,10 +101,26 @@ final class StatusHUD {
     func showConfirmedSuccess(
         _ message: String,
         sourceAppName: String? = nil,
-        sourceAnchorRect: CGRect? = nil
+        sourceAnchorRect: CGRect? = nil,
+        onUndo: (() -> Void)? = nil
     ) {
         show(
             .success,
+            Self.sourceAwareMessage(message, sourceAppName: sourceAppName),
+            sourceAnchorRect: sourceAnchorRect,
+            onUndo: onUndo
+        )
+    }
+
+    /// A read failure has no decision to make. Leave the user's editor focused
+    /// and give them enough time to read the warning without dismissing a modal.
+    func showWarning(
+        _ message: String,
+        sourceAppName: String? = nil,
+        sourceAnchorRect: CGRect? = nil
+    ) {
+        show(
+            .warning,
             Self.sourceAwareMessage(message, sourceAppName: sourceAppName),
             sourceAnchorRect: sourceAnchorRect
         )
@@ -112,13 +129,16 @@ final class StatusHUD {
     /// Compatibility entry point. New flows should use the explicit progress
     /// and confirmed-success methods above; actionable failures use a notice.
     /// Progress messages persist until the next show; all others auto-dismiss.
-    func show(_ style: Style, _ message: String, sourceAnchorRect: CGRect? = nil) {
+    func show(_ style: Style, _ message: String, sourceAnchorRect: CGRect? = nil,
+              onUndo: (() -> Void)? = nil) {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
         let presentation = presentationGeneration.advance()
 
         let panel = panel ?? makePanel()
         self.panel = panel
+        undoAction = onUndo
+        panel.ignoresMouseEvents = onUndo == nil
 
         let isRepeat = (message == lastMessage) && panel.isVisible
         lastMessage = message
@@ -155,7 +175,8 @@ final class StatusHUD {
                 self?.dismiss(ifCurrent: presentation)
             }
             dismissWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+            let duration: TimeInterval = onUndo != nil || style == .warning || style == .error ? 6 : 2.2
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
         }
     }
 
@@ -255,7 +276,14 @@ final class StatusHUD {
         label.translatesAutoresizingMaskIntoConstraints = false
         label.setAccessibilityLabel(message)
 
-        let stack = NSStackView(views: [badge, label])
+        var views: [NSView] = [badge, label]
+        if undoAction != nil {
+            let undo = NSButton(title: "Undo", target: self, action: #selector(undoPressed))
+            undo.bezelStyle = .rounded
+            undo.setAccessibilityLabel("Undo Bean's last change")
+            views.append(undo)
+        }
+        let stack = NSStackView(views: views)
         stack.orientation = .horizontal
         stack.spacing = 10
         stack.alignment = .centerY
@@ -277,6 +305,13 @@ final class StatusHUD {
         let height = max(fitting.height, 44)
         panel.setContentSize(NSSize(width: width, height: height))
         panel.contentView = container
+    }
+
+    @objc private func undoPressed() {
+        let action = undoAction
+        undoAction = nil
+        dismiss()
+        action?()
     }
 
     static func preferredScreenIndex(

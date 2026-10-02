@@ -222,8 +222,8 @@ assert.equal(accountingUnavailable.app[0], "Connected");
 assert.equal(accountingUnavailable.ai[0], "Usage safety unavailable");
 assert.match(accountingUnavailable.detail, /Local checks still work/);
 assert.match(accountingUnavailable.detail, /Check Accounting Again/);
-assert.match(accountingUnavailable.detail, /Full Reset in Privacy & Help is a data-erasing last resort/);
-assert.match(accountingUnavailable.detail, /contact Support if reset fails/);
+assert.doesNotMatch(accountingUnavailable.detail, /Full Reset/, "a routine AI warning never recommends deleting user data");
+
 assert.doesNotMatch(accountingUnavailable.detail, /clear usage|clear usage\/history/i);
 
 const incompatible = context.assessBridgeStatus({

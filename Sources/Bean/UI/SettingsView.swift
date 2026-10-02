@@ -12,6 +12,7 @@ struct SettingsActions {
     /// Validates + registers a new shortcut for the given slot. Returns an error
     /// message to show, or nil on success.
     var applyShortcut: (ShortcutSlot, GlobalShortcut) -> String?
+    var openWriter: () -> Void = {}
 }
 
 // Bean's Settings window — a native, sidebar-organised preferences experience.
@@ -94,7 +95,7 @@ struct SettingsView: View {
                 .controlSize(.large)
                 .navigationTitle(navigation.selection.rawValue)
         }
-        .frame(minWidth: 900, minHeight: 660)
+        .frame(minWidth: 820, minHeight: 600)
         .tint(BeanDesign.accent)
         .onAppear {
             automaticSpentToday = automaticCallBudget.automaticCallsToday()
@@ -206,6 +207,16 @@ struct SettingsView: View {
 
     private var simpleStatusSection: some View {
         Group {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Write in your apps").font(.headline)
+                    Text("Live suggestions appear beside your active field. Proofread and rewrite replace text directly. Bean offers Undo when it can safely restore the original.")
+                        .font(.caption).foregroundColor(BeanDesign.secondaryText)
+                }
+                Spacer()
+                Button("Writing Settings") { navigation.selection = .writing }
+            }
+            Divider()
             HStack(spacing: 12) {
                 IconBadge(symbol: isAccessibilityReady ? "checkmark.seal.fill" : "lock.shield",
                           tint: isAccessibilityReady ? BeanDesign.success : BeanDesign.warning, size: 34)
@@ -245,7 +256,7 @@ struct SettingsView: View {
         Group {
             Toggle("Live suggestions", isOn: liveSuggestionsBinding)
                 .accessibilityHint("Runs local checks and underlines issues in supported fields")
-            Text("Underlines obvious issues while you type in supported fields. Runs locally on your Mac with no token cost.")
+            Text("Checks spelling, grammar, and spacing while you type. Shows underlines where the app exposes text positions, and an issue button beside the field otherwise. Local checks have no token cost.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
 
             Divider()
@@ -665,7 +676,7 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 Text(settings.primaryShortcutAction == .quickFix
                      ? "Corrects obvious typos and spacing privately on your Mac."
-                     : "Runs thorough proofreading with your connected AI provider. Full-field changes are previewed before replacement.")
+                     : "Proofreads and replaces the selected text or active field with your connected AI provider. Undo is available after replacement.")
                     .font(.caption)
                     .foregroundColor(BeanDesign.secondaryText)
             }
@@ -780,7 +791,7 @@ struct SettingsView: View {
             )
             .accessibilityHint("Sets the maximum simultaneous Live suggestion underlines")
             Toggle("Show explanations", isOn: $settings.inlineShowExplanation)
-            Text("Code editors, search fields, secure fields, and fields Bean cannot verify remain excluded.")
+            Text("Checks editable fields across app categories. Passwords are excluded. Apps that hide their text or editing controls may need an app-specific integration.")
                 .font(BeanDesign.Typography.smallCaption())
                 .foregroundColor(BeanDesign.secondaryText)
 

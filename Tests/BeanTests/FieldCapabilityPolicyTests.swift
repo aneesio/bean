@@ -35,7 +35,7 @@ final class FieldCapabilityPolicyTests: XCTestCase {
                                    nativeRangeBoundsReliable: false)
         let slack = evaluate("com.tinyspeck.slackmacgap", .chat, electron)
         XCTAssertEqual(slack.referenceSurface, .slackDesktop)
-        XCTAssertEqual(levels(slack), [.supported, .degraded, .degraded, .degraded])
+        XCTAssertEqual(levels(slack), [.supported, .degraded, .degraded, .unsupported])
         XCTAssertEqual(slack.focusedFieldReplacement.reason, "electronPasteBestEffort")
         XCTAssertEqual(slack.beanBubble.reason, "electronTypingEvidenceFallback")
 
@@ -63,17 +63,17 @@ final class FieldCapabilityPolicyTests: XCTestCase {
         XCTAssertEqual(result.inlineChecking.level, .unsupported)
     }
 
-    func testSearchAndCodeSurfacesFailClosedForWholeFieldAndAutomaticUI() {
+    func testEditableSearchAndCodeFieldsSupportExplicitActionsAndLocalChecking() {
         let search = evaluate("com.apple.Safari", .unknown,
                               FieldTraits(isSearchLike: true))
-        XCTAssertEqual(search.focusedFieldReplacement.reason, "searchFieldDisabled")
+        XCTAssertEqual(search.focusedFieldReplacement.level, .supported)
         XCTAssertEqual(search.beanBubble.reason, "searchFieldDisabled")
-        XCTAssertEqual(search.inlineChecking.reason, "searchFieldDisabled")
+        XCTAssertEqual(search.inlineChecking.level, .supported)
 
         let code = evaluate("com.microsoft.VSCode", .codeEditor, FieldTraits())
-        XCTAssertEqual(code.focusedFieldReplacement.reason, "codeEditorDisabled")
+        XCTAssertEqual(code.focusedFieldReplacement.level, .supported)
         XCTAssertEqual(code.beanBubble.reason, "categoryDisabled")
-        XCTAssertEqual(code.inlineChecking.reason, "codeEditorDisabled")
+        XCTAssertEqual(code.inlineChecking.level, .supported)
     }
 
     func testPermissionNoFieldAndFeatureOffStatesAreExplicit() {

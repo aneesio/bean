@@ -14,11 +14,19 @@ struct TextIssue: Identifiable {
     let id = UUID()
     var range: NSRange
     let original: String
-    let suggestion: String
+    var suggestion: String
     let explanation: String?
     let type: TextIssueType
     let confidence: Double
     let source: TextIssueSource
+    var alternatives: [String] = []
+
+    func choosingSuggestion(_ value: String) -> TextIssue? {
+        guard value == suggestion || alternatives.contains(value) else { return nil }
+        var selected = self
+        selected.suggestion = value
+        return selected
+    }
 }
 
 // In-memory set of issues for one field snapshot. Never persisted.

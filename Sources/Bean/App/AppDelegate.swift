@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Carbon
 
 // Wires together the menu bar, the two global hotkeys (quick proofread + Bean
 // menu), and the coordinator. Owns the long-lived services.
@@ -33,7 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var inlineService = InlineHighlightService(
         settings: settings, userContent: userContent, history: operationHistory,
         usageLedger: usageLedger, automaticCallBudget: automaticCallBudget,
-        statusHUD: statusHUD
+        undoStore: replacementUndo,
+        statusHUD: statusHUD,
+        runAction: { [weak self] action in self?.coordinator.runAction(action) }
     )
 
     private lazy var bubbleService = BeanBubbleService(
@@ -64,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private lazy var menuBarController = MenuBarController(
+        onOpenWriter: { [weak self] in self?.windowPresenter.showWriter() },
         onQuickFix: { [weak self] in self?.coordinator.fixSelectedText() },
         onAIProofread: { [weak self] in self?.coordinator.proofreadWithAI() },
         onOpenBeanMenu: { [weak self] in self?.coordinator.showActionMenu() },
@@ -101,7 +105,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController.install(proofreadShortcut: settings.shortcut,
                                   shortcutAction: settings.primaryShortcutAction,
                                   beanMenuShortcut: settings.beanMenuShortcut)
-        windowPresenter.showOnboardingIfNeeded()
+        // Finder/Dock launches should have an immediate, useful destination.
+        // macOS login launches retain the quiet menu-bar behavior.
+        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
+        let launchedAtLogin = launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAELaunchedAsLogInItem)) != nil
+            || launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == keyAELaunchedAsLogInItem
+        if !launchedAtLogin { windowPresenter.showOnboardingIfNeeded() }
 
         registerHotkeys()
 
@@ -119,6 +128,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }.store(in: &settingsCancellables)
         typingDispatcher.refresh()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if settings.onboardingComplete { windowPresenter.showSettings(section: .writing) }
+        else { windowPresenter.showOnboarding() }
+        return true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        windowPresenter.confirmQuit() ? .terminateNow : .terminateCancel
     }
 
     private func checkCurrentField() {

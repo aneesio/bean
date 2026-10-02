@@ -1,8 +1,7 @@
 import AppKit
 
-/// Keeps one verified whole-field replacement in memory so the user can undo
-/// it safely. Nothing is persisted, and selected-text/unverified writes are
-/// deliberately excluded because Bean cannot prove the exact previous state.
+/// Keeps one confirmed native edit in memory. Undo requires the exact edited
+/// field and value, so it can never overwrite subsequent user writing.
 @MainActor
 final class ReplacementUndoStore {
     static let lifetime: TimeInterval = 5 * 60
@@ -11,6 +10,13 @@ final class ReplacementUndoStore {
         let createdAt: Date
         let targetApp: NSRunningApplication
         let element: AXUIElement
+        let original: String
+        let replacement: String
+        let rangeEdit: RangeEdit?
+    }
+
+    private struct RangeEdit {
+        let range: NSRange
         let original: String
         let replacement: String
     }
@@ -22,15 +28,36 @@ final class ReplacementUndoStore {
         return Date().timeIntervalSince(record.createdAt) <= Self.lifetime
     }
 
+    /// A newer confirmed edit without an exact undoable range must retire the
+    /// previous change, rather than offer Undo for a different operation.
+    func discard() {
+        record = nil
+    }
+
     func registerConfirmedWholeField(
         app: NSRunningApplication?,
         element: AXUIElement?,
         original: String,
         replacement: String
     ) {
-        guard let app, !app.isTerminated, let element, original != replacement else { return }
+        guard let app, !app.isTerminated, let element,
+              !TextSelectionService.exactTextMatches(original, replacement) else { return }
         record = Record(createdAt: Date(), targetApp: app, element: element,
-                        original: original, replacement: replacement)
+                        original: original, replacement: replacement, rangeEdit: nil)
+    }
+
+    func registerConfirmedRange(app: NSRunningApplication?, element: AXUIElement?,
+                                original: String, replacement: String, range: NSRange,
+                                originalRangeText: String, replacementRangeText: String) {
+        guard let app, !app.isTerminated, let element,
+              !TextSelectionService.exactTextMatches(original, replacement),
+              Self.canRegisterRangeUndo(original: original, replacement: replacement, range: range,
+                                        originalRangeText: originalRangeText,
+                                        replacementRangeText: replacementRangeText) else { return }
+        record = Record(createdAt: Date(), targetApp: app, element: element,
+                        original: original, replacement: replacement,
+                        rangeEdit: RangeEdit(range: range, original: originalRangeText,
+                                             replacement: replacementRangeText))
     }
 
     func undo() async -> TextSelectionService.ReplacementResult {
@@ -58,13 +85,38 @@ final class ReplacementUndoStore {
             self.record = nil
             return .failed(reason: "Undo was cancelled because the field changed after Bean edited it.")
         }
-        guard AccessibilityService.isValueSettable(record.element),
-              AccessibilityService.setValue(record.original, on: record.element) else {
-            return .failed(reason: "This field does not support a safe verified undo.")
+        let selection = AccessibilityService.selectedRange(of: record.element)
+        let service = TextSelectionService(undoStore: self)
+        let result: TextSelectionService.ReplacementResult
+        if let edit = record.rangeEdit {
+            let range = NSRange(location: edit.range.location, length: (edit.replacement as NSString).length)
+            if range.length > 0 {
+                result = await service.replaceRange(
+                    app: record.targetApp, element: record.element, valueBefore: record.replacement,
+                    range: range, replacement: edit.original, selectionToRestore: selection
+                )
+            } else {
+                // Undoing a verified deletion inserts the original substring;
+                // restore the proven complete field through normal Paste.
+                result = await service.replaceWholeField(
+                    app: record.targetApp, element: record.element,
+                    valueBefore: record.replacement, replacement: record.original,
+                    selectionToRestore: selection
+                )
+            }
+        } else {
+            result = await service.replaceWholeField(
+                app: record.targetApp, element: record.element,
+                valueBefore: record.replacement, replacement: record.original,
+                selectionToRestore: selection
+            )
         }
-        await Task.pause(Timing.afterActivate)
-        guard AccessibilityService.value(of: record.element) == record.original else {
-            return .failed(reason: "Bean could not verify the undo.")
+        service.cancel()
+        guard result == .replacedConfirmed else {
+            // A retryable clipboard fallback must keep the original undo
+            // record; an uncertain editor result needs a fresh exact check.
+            self.record = record
+            return result
         }
 
         self.record = nil
@@ -72,7 +124,16 @@ final class ReplacementUndoStore {
     }
 
     nonisolated static func currentValueMatches(_ current: String, expectedReplacement: String) -> Bool {
-        current == expectedReplacement
+        TextSelectionService.exactTextMatches(current, expectedReplacement)
+    }
+
+    nonisolated static func canRegisterRangeUndo(original: String, replacement: String, range: NSRange,
+                                                originalRangeText: String, replacementRangeText: String) -> Bool {
+        !TextSelectionService.exactTextMatches(original, replacement)
+            && TextSelectionService.exactTextMatches(TextSelectionService.expectedValueAfterSelectionReplacement(
+            valueBefore: original, selectedRange: range,
+            selectedText: originalRangeText, corrected: replacementRangeText
+        ), replacement)
     }
 
     private func activate(_ app: NSRunningApplication) {

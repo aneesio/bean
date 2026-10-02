@@ -125,9 +125,9 @@ struct OnboardingView: View {
 
             HStack(spacing: BeanDesign.Spacing.md) {
                 BenefitCard(
-                    symbol: "checkmark.circle",
-                    title: "Fix it in place",
-                    subtitle: "Clean up writing without moving it between apps."
+                    symbol: "square.and.pencil",
+                    title: "A place to write",
+                    subtitle: "Review suggestions as you type in Bean Writer."
                 )
                 BenefitCard(
                     symbol: "laptopcomputer",
@@ -141,7 +141,7 @@ struct OnboardingView: View {
                 )
             }
 
-            Text("You can be ready in under a minute. Bean asks for one macOS permission, then lets you try it here.")
+            Text("Start with a draft in Bean Writer. Allow one macOS permission to use Bean in your other apps too.")
                 .font(BeanDesign.Typography.caption())
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -200,7 +200,7 @@ struct OnboardingView: View {
     private var accessibilityStep: some View {
         stepFrame(
             "Allow Bean where you write",
-            "macOS requires Accessibility permission before Bean can read or replace text in another app. Bean never replaces text until you approve it."
+            "macOS requires Accessibility permission to check and fix text in your apps. Accept a suggestion, or run Proofread to replace the current text in one action."
         ) {
             PermissionsSection(compact: true, permission: permission)
 
@@ -236,6 +236,17 @@ struct OnboardingView: View {
             }
 
             tryoutCard
+
+            BeanCard {
+                Text("Suggestions in your other apps").font(.headline)
+                Toggle("Underline issues while I type", isOn: $settings.inlineHighlightsEnabled)
+                    .disabled(!permission.granted)
+                Text(permission.granted
+                     ? "Local checks are on by default. Click an underline or the issue button beside your field to fix a suggestion."
+                     : "Allow Accessibility to activate live checking and direct replacement in your apps.")
+                    .font(BeanDesign.Typography.caption())
+                    .foregroundColor(.secondary)
+            }
 
             Text("Use Bean anywhere")
                 .font(.headline)
@@ -381,7 +392,7 @@ struct OnboardingView: View {
             Spacer()
 
             if step == .ready {
-                Button(permission.granted ? "Start using Bean" : "Use Bean Locally") {
+                Button("Finish Setup") {
                     onClose()
                 }
                 .keyboardShortcut(.defaultAction)

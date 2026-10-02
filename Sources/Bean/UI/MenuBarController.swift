@@ -6,6 +6,7 @@ import SwiftUI
 //   Quick Fix · AI Proofread · Open Bean Menu · Undo · Settings · Help · About · Quit
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
+    private let onOpenWriter: () -> Void
     private let onQuickFix: () -> Void
     private let onAIProofread: () -> Void
     private let onOpenBeanMenu: () -> Void
@@ -23,6 +24,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var beanMenuShortcut: GlobalShortcut = .beanMenuDefault
 
     init(
+        onOpenWriter: @escaping () -> Void,
         onQuickFix: @escaping () -> Void,
         onAIProofread: @escaping () -> Void,
         onOpenBeanMenu: @escaping () -> Void,
@@ -33,6 +35,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         onShowSettings: @escaping () -> Void,
         onShowAbout: @escaping () -> Void
     ) {
+        self.onOpenWriter = onOpenWriter
         self.onQuickFix = onQuickFix
         self.onAIProofread = onAIProofread
         self.onOpenBeanMenu = onOpenBeanMenu
@@ -54,7 +57,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             target: self,
             aboutAction: #selector(handleAbout),
             settingsAction: #selector(handleSettings),
-            quitAction: #selector(handleQuit)
+            quitAction: #selector(handleQuit),
+            writerAction: #selector(handleWriter)
         )
         DockPresence.installMainMenu(applicationMenu.menu, servicesMenu: applicationMenu.servicesMenu)
 
@@ -99,6 +103,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Bean owns enablement because Undo depends on a verified in-memory
         // replacement, not merely on whether its selector has a target.
         menu.autoenablesItems = false
+
+        let writer = NSMenuItem(title: "Open Bean Writer", action: #selector(handleWriter), keyEquivalent: "1")
+        writer.target = self
+        writer.image = Self.icon("square.and.pencil")
+        menu.addItem(writer)
+        menu.addItem(.separator())
 
         // The chosen primary action owns the direct shortcut. The other action
         // remains available without a misleading second key equivalent.
@@ -192,6 +202,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: - Actions
 
+    @objc private func handleWriter() { onOpenWriter() }
+
     func menuWillOpen(_ menu: NSMenu) {
         undoItem?.isEnabled = isUndoAvailable()
     }
@@ -247,7 +259,8 @@ enum ApplicationMainMenuBuilder {
         target: AnyObject,
         aboutAction: Selector,
         settingsAction: Selector,
-        quitAction: Selector
+        quitAction: Selector,
+        writerAction: Selector? = nil
     ) -> Result {
         let mainMenu = NSMenu(title: "Main Menu")
 
@@ -282,6 +295,16 @@ enum ApplicationMainMenuBuilder {
         let quit = NSMenuItem(title: "Quit Bean", action: quitAction, keyEquivalent: "q")
         quit.target = target
         beanMenu.addItem(quit)
+
+        if let writerAction {
+            let fileRoot = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+            let fileMenu = NSMenu(title: "File")
+            let writer = NSMenuItem(title: "Open Bean Writer", action: writerAction, keyEquivalent: "1")
+            writer.target = target
+            fileMenu.addItem(writer)
+            mainMenu.addItem(fileRoot)
+            mainMenu.setSubmenu(fileMenu, for: fileRoot)
+        }
 
         let editRoot = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         let editMenu = NSMenu(title: "Edit")

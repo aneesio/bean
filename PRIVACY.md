@@ -13,7 +13,8 @@ macOS launch warnings; it does not change the data handling described here.
 
 ## Data Bean handles
 
-When you request a provider-backed writing action, Bean handles:
+When you request a provider-backed writing action, including AI Review or a
+rewrite in Bean Writer, Bean handles:
 
 - the selected text or focused editable field text;
 - the action you selected;
@@ -89,10 +90,13 @@ authorized to send it to your selected provider.
   replacement cannot be completed safely, Bean may intentionally leave the
   corrected result on the clipboard so you can paste it manually.
 
-Bean does not intentionally persist text being proofread, rewritten, or drafted,
-provider prompts, or provider responses. This is distinct from personalization
-you explicitly save—styles, Writing Context, examples, and dictionary terms are
-stored locally until you remove or reset them.
+Bean Writer keeps the current draft and suggestion/rewrite state in memory
+while Bean runs. **Save** writes the draft as a UTF-8 text or Markdown file to
+the location you choose. These files belong to you and Full Reset does not
+delete them. Bean does not automatically save drafts, provider prompts, or
+provider responses. Personalization you explicitly save—styles, Writing
+Context, examples, and dictionary terms—is stored locally until you remove or
+reset it.
 
 ## Diagnostics
 
@@ -129,24 +133,37 @@ or installs an update.
 
 ## Browser extension
 
-The extension's default detector runs locally in the web page and does not store
-or transmit editable-field text. After installation it is available across
+The extension's built-in detector runs locally in the web page and does not store
+editable-field text. When connected to Bean, it also sends the focused field's
+text through Chrome Native Messaging for offline macOS spelling and grammar
+checks. Those checks do not contact an AI provider, require a key, or consume
+the automatic AI budget. Without the connection, the built-in rules remain
+available with a limited-coverage status. After installation it is available across
 ordinary HTTP and HTTPS websites, except hostnames the user adds to the blocked
 list. It stores only extension settings and blocked hostnames in
 `chrome.storage.local`. **Disable on this field** lasts only for that page
 session and is not persisted. Password, search, email-address, URL, telephone,
 number, code, disabled, read-only, hidden, and tiny fields are excluded.
 
-If you separately enable the native bridge, focused editable-field text is sent
-through Chrome Native Messaging to the local Bean app. The extension does not
+The extension renews a five-second field-ownership lease while its supported
+field is focused, so the native app yields its overlapping controls. The lease
+contains only the browser process identity, an opaque field token, timestamps,
+and active state; it contains no text, page address, or field label. Expired
+leases are removed and native assistance resumes when the extension releases
+the field or stops responding.
+
+For AI checks and explicit Proofread or Rewrite actions, focused editable-field
+text is sent through Chrome Native Messaging to the local Bean app. The extension does not
 include the site hostname or page-supplied field label in that native request;
 it uses the hostname only inside the extension for sender/page validation and
 blocked-site controls. The Bean app then sends the provider request described
 above using fixed, Bean-authored `Browser` and `web editor` labels. Recent
 operation history may contain only the generic Browser category, action,
-lengths, provider/model, result codes, and token counts. All browser AI—including
-Fix Paragraph—counts toward the daily browser/automatic limit because a webpage
-cannot prove a trusted native user gesture.
+lengths, provider/model, result codes, and token counts. Automatic browser AI
+and Fix Paragraph count toward the daily automatic limit. The assistant's
+explicit Proofread and Rewrite buttons require a trusted click in Bean's
+isolated controls and are accounted as manual actions, like native shortcuts.
+They do not require enabling paid background checks.
 
 ## Deleting your data
 

@@ -16,7 +16,8 @@ final class TestStorageIsolationTests: XCTestCase {
         let contracts = [
             (constructor: "UsageLedgerStore(", requiredLabel: "coordinationDirectoryURL:"),
             (constructor: "OperationHistoryStore(", requiredLabel: "coordinationDirectoryURL:"),
-            (constructor: "AutomaticCallBudgetStore(", requiredLabel: "directoryURL:")
+            (constructor: "AutomaticCallBudgetStore(", requiredLabel: "directoryURL:"),
+            (constructor: "BrowserFieldOwnershipStore(", requiredLabel: "directoryURL:")
         ]
 
         let files = try FileManager.default.contentsOfDirectory(

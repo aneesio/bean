@@ -47,6 +47,9 @@ function normalizeStoredSites(sites) {
 }
 
 function assessBridgeStatus(response) {
+  const localDetail = response && response.localCheckAvailable === true
+    ? "The Mac spelling connection is ready."
+    : "Basic checks only. Update Bean and repair the Mac connection for full spelling checks.";
   if (response && response.errorCode === "nativeHostForbidden") {
     return {
       app: ["Connection not authorized", "error"],
@@ -86,21 +89,21 @@ function assessBridgeStatus(response) {
     return {
       app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
       ai: ["Not set up", "neutral"],
-      detail: "Local checks are ready. Add an AI provider in Bean only if you want deeper suggestions."
+      detail: `${localDetail} Add an AI provider in Bean only if you want deeper suggestions and rewriting.`
     };
   }
   if (!response.webInlineEnabled) {
     return {
       app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
       ai: ["Off in Bean", "neutral"],
-      detail: "Local checks are ready. Turn on browser AI in the Bean app for deeper suggestions."
+      detail: `${localDetail} Explicit Proofread and Rewrite are available. Turn on browser AI in Bean only for automatic deeper suggestions.`
     };
   }
   if (response.automaticAccountingAvailable !== true) {
     return {
       app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
       ai: ["Usage safety unavailable", "error"],
-      detail: "Local checks still work. Open Bean → Settings → AI & Usage and choose Check Accounting Again. If the warning remains after reopening Bean, Full Reset in Privacy & Help is a data-erasing last resort; contact Support if reset fails."
+      detail: "Local checks still work. Open Bean → Settings → AI & Usage and choose Check Accounting Again."
     };
   }
   if (response.browserAIStatusCode === "settingsUnavailable") {
@@ -114,7 +117,7 @@ function assessBridgeStatus(response) {
     return {
       app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
       ai: ["Waiting for you", "warn"],
-      detail: "Local checks are ready. Your previous browser-AI opt-out is preserved; allow it only if you want deeper suggestions."
+      detail: `${localDetail} Your previous automatic browser-AI opt-out is preserved. Explicit writing actions remain available.`
     };
   }
   return {

@@ -124,6 +124,7 @@ final class AppSettings: ObservableObject {
         // previously stored hidden background path once on upgrade so an old
         // preference cannot keep spending tokens after its controls disappear.
         static let liveAssistanceSimplificationVersion = "liveAssistanceSimplificationVersion"
+        static let systemWideLocalAssistanceVersion = "systemWideLocalAssistanceVersion"
         static let dailyAutomaticCallLimit = "dailyAutomaticCallLimit"
         static let monthlyTokenWarningThreshold = "monthlyTokenWarningThreshold"
     }
@@ -388,6 +389,16 @@ final class AppSettings: ObservableObject {
             defaults.set(false, forKey: Keys.inlineFallbackPassive)
             defaults.set(1, forKey: Keys.liveAssistanceSimplificationVersion)
         }
+        // Live local help is the product's primary behavior. Repair the old
+        // lab defaults once, without enabling background provider requests.
+        // Later choices to turn local help off remain respected.
+        if defaults.integer(forKey: Keys.systemWideLocalAssistanceVersion) < 1 {
+            defaults.set(true, forKey: Keys.inlineEnabled)
+            defaults.set(true, forKey: Keys.bubbleEnabled)
+            defaults.set(true, forKey: Keys.bubbleInCode)
+            defaults.set(true, forKey: Keys.bubbleInSearch)
+            defaults.set(1, forKey: Keys.systemWideLocalAssistanceVersion)
+        }
 
         let providerRaw = defaults.string(forKey: Keys.provider) ?? ProviderKind.openai.rawValue
         let resolvedProvider = ProviderKind(rawValue: providerRaw) ?? .openai
@@ -426,15 +437,15 @@ final class AppSettings: ObservableObject {
         let pausedTS = defaults.double(forKey: Keys.passivePausedUntil)
         self.passivePausedUntil = pausedTS > 0 ? Date(timeIntervalSince1970: pausedTS) : nil
 
-        // Inline Highlights — off by default.
+        // Live local suggestions — on by default.
         self.inlineHighlightsEnabled = defaults.bool(forKey: Keys.inlineEnabled)
-        let im = defaults.integer(forKey: Keys.inlineMaxIssues); self.inlineMaxIssues = im > 0 ? im : 5
+        let im = defaults.integer(forKey: Keys.inlineMaxIssues); self.inlineMaxIssues = im > 0 ? im : 8
         self.inlineLocalOnly = defaults.object(forKey: Keys.inlineLocalOnly) == nil ? true : defaults.bool(forKey: Keys.inlineLocalOnly)
         self.inlineIncludeLLM = defaults.bool(forKey: Keys.inlineIncludeLLM) // default false
         self.inlineShowExplanation = defaults.object(forKey: Keys.inlineShowExplanation) == nil ? true : defaults.bool(forKey: Keys.inlineShowExplanation)
         self.inlineFallbackPassive = defaults.bool(forKey: Keys.inlineFallbackPassive) // default false
 
-        // Bean Bubble — off by default; sensible defaults otherwise.
+        // Writing actions stay available beside editable fields by default.
         self.bubbleEnabled = defaults.bool(forKey: Keys.bubbleEnabled)
         self.bubbleOnFocus = defaults.object(forKey: Keys.bubbleOnFocus) == nil ? true : defaults.bool(forKey: Keys.bubbleOnFocus)
         self.bubbleOnSelection = defaults.object(forKey: Keys.bubbleOnSelection) == nil ? true : defaults.bool(forKey: Keys.bubbleOnSelection)

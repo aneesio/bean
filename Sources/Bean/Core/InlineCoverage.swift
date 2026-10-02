@@ -7,6 +7,7 @@ import Foundation
 // back to Passive Suggestions / Bean Bubble / shortcuts.
 enum InlineCoverageMode: String {
     case nativeAccessibility
+    case floatingSuggestions
     case browserExtension
     case appAdapter
     case passiveFallback
@@ -15,6 +16,7 @@ enum InlineCoverageMode: String {
     var displayName: String {
         switch self {
         case .nativeAccessibility: return "Native inline"
+        case .floatingSuggestions: return "Floating suggestions"
         case .browserExtension: return "Browser extension"
         case .appAdapter: return "App adapter"
         case .passiveFallback: return "Passive fallback"

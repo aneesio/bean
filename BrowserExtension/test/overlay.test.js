@@ -22,6 +22,19 @@ assert.equal(typeof overlay.showUndo, "function");
 assert.equal(typeof overlay.clearUndo, "function");
 assert.equal(typeof overlay.setFieldDisabled, "function");
 assert.equal(overlay._test.cap("grammar"), "Grammar");
+assert.equal(overlay._test.visibleCorrectionText("  "), "2 spaces");
+assert.equal(overlay._test.visibleCorrectionText(" "), "1 space");
+assert.equal(overlay._test.visibleCorrectionText("teh"), "teh");
+
+const comparison = overlay._test.paragraphDiff("We recieve teh mail.\nNext line.", "We receive the mail.\nNext line.");
+assert.equal(comparison.before.map((part) => part.text).join(""), "We recieve teh mail.\nNext line.");
+assert.equal(comparison.after.map((part) => part.text).join(""), "We receive the mail.\nNext line.");
+assert.equal(comparison.before.filter((part) => part.changed).map((part) => part.text).join(""), "recieveteh");
+assert.equal(comparison.after.filter((part) => part.changed).map((part) => part.text).join(""), "receivethe");
+assert.equal(overlay._test.paragraphDiff("same", "same").before.some((part) => part.changed), false);
+const punctuationDiff = overlay._test.paragraphDiff("hello,next", "hello, next");
+assert.equal(punctuationDiff.after.map((part) => part.text).join(""), "hello, next",
+  "comparison preserves even whitespace-only changes exactly");
 
 function fakeControl() {
   const listeners = {};
@@ -187,6 +200,7 @@ class DOMElement {
   querySelectorAll(selector) {
     const matches = [];
     const matchesSelector = (element) => {
+      if (selector === "strong") return element.tagName === "STRONG";
       if (selector === "button") return element.tagName === "BUTTON";
       if (selector === "button:not(:disabled)") return element.tagName === "BUTTON" && !element.disabled;
       if (selector.startsWith(".")) return element.classList.contains(selector.slice(1));
@@ -273,6 +287,8 @@ assert.equal(domOverlay.hasKeyboardControls(), true);
 assert.equal(domOverlay.focusFirstControl(), true);
 const firstIssueControl = domDocument.lastShadow.activeElement;
 assert.equal(firstIssueControl.dataset.beanIssue, "issue-1");
+assert.equal(firstIssueControl.style.height, "6px", "underlines only capture the narrow strip below the text");
+assert.equal(firstIssueControl.style.top, "30px", "the text body remains available for caret placement");
 
 domOverlay.render([issue], null, null, {});
 const rerenderedIssueControl = domDocument.lastShadow.activeElement;
@@ -346,6 +362,49 @@ const guardedEvent = {
 };
 for (const listener of domDocument.lastShadow.listeners.keydown) listener(guardedEvent);
 assert.deepEqual(exitDirections, [1, -1], "modified Tab never enters Bean's boundary handoff");
+
+const anchoredCard = { offsetWidth:300, offsetHeight:120, style:{} };
+domOverlay._test.anchor(anchoredCard, { x:504, y:276, h:16 });
+assert.equal(anchoredCard.style.left, "354.5px",
+  "paragraph progress/review anchors do not require a fake width");
+assert.equal(anchoredCard.style.top, "148px");
+
+domOverlay.clear();
+domOverlay.clearAssistant();
+const fieldRect = { x:50, y:100, w:400, h:90 };
+let assistantReviews = 0;
+domOverlay.renderAssistant(fieldRect, 3, "local", { onReview: () => { assistantReviews++; } });
+const assistant = domDocument.lastShadow.querySelectorAll("button").find((button) =>
+  button.dataset.beanAssistant !== undefined);
+assert.ok(assistant, "a single field badge provides a predictable review entry point");
+assert.match(assistant.getAttribute("aria-label"), /3 writing suggestions/);
+assert.equal(assistant.style.top, "195px", "the badge sits outside the source text");
+for (const listener of assistant.listeners.click) listener(fakeEvent({ detail:1 }));
+const assistantCard = domDocument.lastShadow.querySelector(".card");
+assert.equal(assistantCard.getAttribute("aria-label"),"Bean writing assistant");
+assert.ok(assistantCard.querySelector('[data-act="proofread"]'),"the same control includes one-action proofreading");
+assert.ok(assistantCard.querySelector('[data-act="makeConcise"]'),"the same control includes rewriting");
+for (const listener of assistantCard.querySelector('[data-act="review"]').listeners.click) listener(fakeEvent({detail:1}));
+assert.equal(assistantReviews, 1);
+assistant.focus();
+domOverlay.renderAssistant(fieldRect, 0, "checking", {});
+assert.equal(domDocument.lastShadow.activeElement.dataset.beanAssistant, "",
+  "status updates preserve focus on the field assistant");
+assert.match(domDocument.lastShadow.activeElement.getAttribute("aria-label"), /Checking the changed paragraph/);
+domOverlay.renderAssistant(fieldRect, 0, "local", {});
+assert.match(domDocument.lastShadow.activeElement.getAttribute("aria-label"), /Basic checks only/);
+const statusAssistant = domDocument.lastShadow.activeElement;
+for (const listener of statusAssistant.listeners.click) listener(fakeEvent({ detail:1 }));
+assert.equal(domDocument.lastShadow.querySelector(".card").getAttribute("aria-label"), "Bean writing assistant");
+const closeStatus = domDocument.lastShadow.querySelector(".card").querySelector(".x");
+for (const listener of closeStatus.listeners.click) listener(fakeEvent({ detail:1 }));
+for (const listener of statusAssistant.listeners.click) listener(fakeEvent({ detail:1 }));
+assert.ok(domDocument.lastShadow.querySelector(".card"), "the status badge can be reopened after closing");
+domOverlay.clearAssistant();
+assert.equal(domDocument.lastShadow.querySelector(".assistant"), null);
+domOverlay.renderAssistant({ ...fieldRect, y:1000 }, 0, "local", {});
+assert.equal(domDocument.lastShadow.querySelector(".assistant"), null,
+  "an off-screen editor never leaves a stray floating badge");
 
 assert.match(source, /createElement\("img"\)/, "paragraph controls use the official Bean mark");
 assert.match(source, /getURL\("icon128\.png"\)/);

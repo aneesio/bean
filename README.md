@@ -13,20 +13,29 @@ service.
 
 ## What works today
 
-- Proofread selected text or, when enabled, the focused editable field.
-- Rewrite for clarity, concision, professional tone, or casual tone.
-- Draft replies and compose messages through a preview-first workflow.
-- Use global shortcuts or the optional Bean Bubble near supported fields.
-- Keep style profiles, Writing Context, and a personal dictionary locally.
-- Run conservative local inline checks without using provider tokens.
-- Use Local Quick Check for obvious typos and spacing without an API request.
-- Add experimental web inline checks through the unpacked Chrome extension.
+- Checks spelling, grammar, and spacing while you type in editable macOS fields.
+  Local live assistance and the Bean button are on by default.
+- Draws underlines when an app supplies exact text positions, with a compact
+  issue button and correction cards when that geometry is unavailable.
+- Accepts individual corrections without moving you away from your app.
+- Proofreads or rewrites selected text, or the active field when nothing is
+  selected, and replaces it directly. Bean offers Undo when it can safely
+  restore the captured text.
+- Uses global shortcuts and field-side actions for Quick Fix, AI Proofread,
+  clarity, concision, and tone adjustments.
+- Keeps personal dictionary terms and style preferences locally.
+- Offers an optional browser extension for DOM-based web editing support.
+  Its field control includes review, Proofread, and Rewrite. When connected to
+  Bean, offline macOS spelling supplements its built-in rules; only one Bean
+  control appears for a field owned by the extension.
+- Provides an optional Bean Writer for standalone drafts; it is not required
+  for assistance in other apps and no longer opens on every launch.
 
-Automatic provider-backed suggestions, native inline highlights, and the Bean
-Bubble are beta features and are off by default. The browser extension's free
-local checker is on across ordinary websites once installed; browser AI remains
-off until enabled separately. See the
-[support matrix](SUPPORTED_APPS.md) before reporting an app-specific problem.
+Paid background AI checks stay off until explicitly enabled. Local help has no
+API cost. Password fields remain excluded, and custom editors that hide both
+text and editing controls cannot be handled by generic Accessibility access.
+The [support matrix](SUPPORTED_APPS.md) distinguishes tested behavior from
+app-specific limits.
 
 ## Requirements
 
@@ -101,21 +110,32 @@ because it intentionally removes Bean data.
 
 ## First run
 
-1. Keep Bean in `/Applications`, then grant Accessibility permission when macOS
-   asks.
-2. Optionally connect OpenAI or Anthropic. Bean stores your key in Keychain; the
-   free local checker works without one.
-3. Try Quick Fix directly on the final onboarding screen.
-4. In another app, select text and press **⌘⇧G**. It runs Quick Fix by default,
-   free and on-device. In Settings → General, you can instead make it run AI
-   Proofread with your connected provider.
-5. Press **⌃⌥B** to open the writing-action menu. Provider-backed actions are
-   labelled and require optional AI setup.
-6. Keep automatic AI checks off for manual-only API usage.
+1. Keep Bean in `/Applications` and allow its Accessibility access during setup.
+   macOS requires this permission to check and change writing in other apps.
+2. Continue typing in your normal app. Local live suggestions are enabled by
+   default. Click an underline or the issue button beside the field, then choose
+   **Accept** or **Dismiss**. No comparison window is needed for a correction.
+3. Press **⌘⇧G** to fix selected text, or the active editable field when nothing
+   is selected. This shortcut runs free local Quick Fix by default. Choose
+   **AI Proofread** in Settings → General for provider-backed proofreading.
+4. Press **⌃⌥B**, or use the Bean button beside your field, to choose a rewrite.
+   Proofread and rewrite apply directly to the unchanged source, with Bean Undo
+   when a safe restoration path is available.
+   Reply and compose actions create new content and retain their draft review.
+5. Connect an optional AI provider in Settings → AI & Usage. The API key stays
+   in Keychain. Background AI suggestions require a separate opt-in.
 
-If no text is selected, Bean can optionally operate on the focused editable
-field. Search fields, secure fields, code editors, and unusually large fields
-are restricted or excluded.
+Bean checks the capabilities of each focused editable control, including those
+in browsers, Electron apps, code editors, and search fields. It excludes secure
+and read-only controls and bounds unusually large input. Apps that do not expose
+text or usable editing controls still need their own integration. A changed
+source is never overwritten by a delayed result; unsafe provider output is
+rejected without an original-versus-replacement window.
+
+The optional Writer is available from **Open Bean Writer** in the menu bar. Its
+local draft limit is 50,000 characters and AI actions are bounded to 8,000.
+Manual launches after setup stay in the menu bar; reopening Bean shows Writing
+settings rather than taking you into a different editor.
 
 If something behaves unexpectedly, Settings → Privacy & Help shows focused
 repair cards. **Copy Diagnostics Summary** is a separate, content-free clipboard
@@ -128,16 +148,17 @@ Bean ships with paid background paths disabled:
 
 - Deeper AI suggestions: off
 - Provider-backed inline checking: off
-- Browser AI checks: off (the offline browser checker uses no tokens)
+- Automatic browser AI checks: off (the offline browser checker uses no tokens)
 - Native inline checking: local-only when enabled
 
 Settings → AI & Usage shows whether any automatic provider checks are active
 and provides **Disable automatic AI checks**. It also shows today/30-day usage,
 provider-reported or conservatively estimated token counts, an estimated USD
 cost, a daily automatic-call cap, and a configurable 30-day warning. Explicit
-AI actions in the Bean Mac app remain available regardless of the automatic
-cap. All browser AI—including Fix Paragraph—uses the browser/automatic cap
-because a web page cannot prove a trusted native click. Local Quick Check never
+AI actions in the Bean Mac app and the browser field control's **Proofread** and
+**Rewrite** are recorded as manual calls and remain available regardless of the
+automatic cap. Automatic browser issue checks and the paragraph **Fix Paragraph**
+path use that cap and require the browser-AI opt-in. Local Quick Check never
 calls a provider.
 
 The built-in estimate uses public standard list prices captured August 21,

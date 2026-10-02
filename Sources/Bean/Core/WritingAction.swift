@@ -3,7 +3,7 @@ import Foundation
 // Coarse behaviour category for a writing action.
 enum ActionCategory {
     case proofread   // mechanical fixes, can replace directly
-    case rewrite     // transform the same text, preview required
+    case rewrite     // transform the same text, replace directly with undo
     case reply       // GENERATIVE: draft a response to the source; copy-first
     case compose     // GENERATIVE: turn rough notes into a message; preview→replace ok
 
@@ -27,7 +27,7 @@ enum ActionCategory {
 }
 
 // The writing actions Bean can perform. Proofread is the safe default and can
-// replace directly; every other action is previewed first. Reply actions are
+// replace directly, as do rewrites of the existing draft. Reply actions are
 // generative drafts of a *response* and are copy-first (no direct replace).
 enum WritingAction: String, CaseIterable, Identifiable {
     // Improve Text
@@ -132,9 +132,10 @@ enum WritingAction: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Proofread replaces directly; everything else previews first.
-    var requiresPreview: Bool { category != .proofread }
-    var allowsDirectReplace: Bool { category == .proofread }
+    /// Improving an existing draft is one action. New reply/compose drafts
+    /// retain their review surface because they create different content.
+    var requiresPreview: Bool { category == .reply || category == .compose }
+    var allowsDirectReplace: Bool { !requiresPreview }
     var usesProvider: Bool { self != .localQuickCheck }
 
     /// Menu availability is intentionally based on content-free setup metadata;

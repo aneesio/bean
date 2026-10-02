@@ -4,16 +4,16 @@ import Security
 
 @MainActor
 final class AppSettingsDefaultsTests: XCTestCase {
-    func testFreshPublicBetaKeepsEveryLabFeatureOff() throws {
+    func testFreshInstallEnablesLocalSystemWideHelpWithoutAutomaticAI() throws {
         let suite = "AppSettingsDefaultsTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let settings = AppSettings(defaults: defaults)
 
-        XCTAssertFalse(settings.bubbleEnabled)
+        XCTAssertTrue(settings.bubbleEnabled)
         XCTAssertFalse(settings.passiveEnabled)
-        XCTAssertFalse(settings.inlineHighlightsEnabled)
+        XCTAssertTrue(settings.inlineHighlightsEnabled)
         XCTAssertFalse(settings.webInlineEnabled)
         XCTAssertTrue(settings.inlineLocalOnly)
         XCTAssertFalse(settings.inlineIncludeLLM)

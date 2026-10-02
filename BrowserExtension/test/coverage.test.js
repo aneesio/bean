@@ -46,7 +46,7 @@ assert.match(content, /function disableCurrentSite\(\)/);
 assert.match(content, /event\.isTrusted/);
 assert.match(content, /activateInitiallyFocusedField[\s\S]*document\.activeElement/);
 assert.match(content, /function bridgeTextAuthorized\(text\)/);
-assert.match(content, /sendMessage\(\{ type: "getStatus" \}/);
+assert.match(content, /type:\s*"getStatus"/);
 assert.match(content, /BeanTrustPolicy\.bridgeReadiness/);
 assert.match(content, /protocol before the text-bearing request is even constructed\/sent/);
 assert.match(content, /if \(!bridgeTextAuthorized\(text\)\)/);
@@ -78,7 +78,7 @@ assert.match(content, /clearParagraphBusy/);
 assert.match(overlay, /Disable on this field/);
 assert.match(overlay, /Disable on this website/);
 assert.match(overlay, /mouseenter[\s\S]*onActivateGroup/);
-assert.match(overlay, /AI Proofread Paragraph/);
-assert.match(overlay, /Fix Obvious Issues/);
+assert.match(overlay, /Review AI changes/);
+assert.match(overlay, /Fix obvious issues/);
 
 console.log("Browser extension coverage and opt-out tests passed");

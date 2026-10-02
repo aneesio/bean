@@ -24,7 +24,17 @@ final class TypingPauseDispatcher {
     private var pendingDispatch: DispatchWorkItem?
     private var pendingBubble: DispatchWorkItem?
     private var permissionRetry: DispatchWorkItem?
+    private var targetValidationTimer: Timer?
     private var generation = 0
+    private var fieldActivity = TypingPauseActivityTracker()
+    private var lastObservedElement: AXUIElement?
+    private var fieldIdentity = 0
+    private let browserOwnership = BrowserFieldOwnershipStore()
+    private var browserOwnershipWasActive = false
+    private var browserOwnershipTarget: AXUIElement?
+    private var browserOwnershipTargetIsWebContent = false
+    private var browserOwnershipTargetCheckedAt = Date.distantPast
+    private var nextBrowserOwnershipCleanup = Date.distantPast
 
     init(settings: AppSettings, passive: PassiveSuggestionService, inline: InlineHighlightService,
          bubble: BeanBubbleService, coordinatorIsBusy: @escaping () -> Bool) {
@@ -39,12 +49,17 @@ final class TypingPauseDispatcher {
         settings.passiveActive || settings.inlineHighlightsEnabled || settings.bubbleEnabled
     }
 
+    private var isInteractingWithBean: Bool {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            && (inline.ownsUIInteraction || bubble.ownsUIInteraction)
+    }
+
     func refresh() {
-        if wantsMonitor { start() } else { stop() }
+        if wantsMonitor && PermissionService.isAccessibilityGranted { start() } else { stop() }
         // Mouse monitor: needed for the bubble (focus/selection) and to dismiss
         // inline highlights when the user clicks elsewhere in the field.
         if settings.bubbleEnabled || settings.inlineHighlightsEnabled { installMouseMonitor() } else { removeMouseMonitor() }
-        settings.monitorActive = (keyMonitor != nil)
+        settings.monitorActive = (keyMonitor != nil || targetValidationTimer != nil)
         if wantsMonitor, keyMonitor == nil { schedulePermissionRetry() }
         else { permissionRetry?.cancel(); permissionRetry = nil }
     }
@@ -62,6 +77,14 @@ final class TypingPauseDispatcher {
             workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
             ) { [weak self] _ in Task { @MainActor in self?.handleAppSwitch() } }
+        }
+        if targetValidationTimer == nil {
+            let timer = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.pollFocusedField() }
+            }
+            timer.tolerance = 0.08
+            RunLoop.main.add(timer, forMode: .common)
+            targetValidationTimer = timer
         }
     }
 
@@ -82,6 +105,11 @@ final class TypingPauseDispatcher {
         pendingDispatch?.cancel(); pendingDispatch = nil
         pendingBubble?.cancel(); pendingBubble = nil
         permissionRetry?.cancel(); permissionRetry = nil
+        targetValidationTimer?.invalidate(); targetValidationTimer = nil
+        fieldActivity.reset()
+        lastObservedElement = nil
+        browserOwnershipWasActive = false
+        browserOwnershipTarget = nil
         generation += 1
         ElectronTextFocusEvidence.clear()
         hideAll()
@@ -118,10 +146,7 @@ final class TypingPauseDispatcher {
         hideAll()
         generation += 1
         let gen = generation
-        pendingDispatch?.cancel()
-        let work = DispatchWorkItem { [weak self] in Task { @MainActor in await self?.dispatch(generation: gen) } }
-        pendingDispatch = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + settings.passiveDelay, execute: work)
+        scheduleCheck(generation: gen)
     }
 
     private func handleClick() {
@@ -135,14 +160,118 @@ final class TypingPauseDispatcher {
         )
         hideAll()
         generation += 1
+        pendingDispatch?.cancel()
+        // Repositioning the caret must not permanently remove the existing
+        // local suggestions. A delayed check reuses the exact cached snapshot.
+        if settings.inlineHighlightsEnabled {
+            let gen = generation
+            scheduleCheck(generation: gen)
+        }
         scheduleBubble(generation)
     }
 
     private func handleAppSwitch() {
+        if inline.isApplyingCorrection || isInteractingWithBean { return }
         ElectronTextFocusEvidence.clear()
         hideAll()
         generation += 1
+        fieldActivity.reset()
+        lastObservedElement = nil
+        pendingDispatch?.cancel()
+        scheduleCheck(generation: generation)
         if settings.bubbleEnabled { scheduleBubble(generation) }
+    }
+
+    private func scheduleCheck(generation gen: Int) {
+        pendingDispatch?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in await self?.dispatch(generation: gen) }
+        }
+        pendingDispatch = work
+        let delay = settings.inlineHighlightsEnabled ? 0.45 : max(settings.passiveDelay, 0.25)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func pollFocusedField() {
+        guard wantsMonitor else { return }
+        guard PermissionService.isAccessibilityGranted else { refresh(); return }
+        if Date() >= nextBrowserOwnershipCleanup {
+            nextBrowserOwnershipCleanup = Date().addingTimeInterval(30)
+            let ownership = browserOwnership
+            Task.detached { ownership.removeExpiredLeases() }
+        }
+        // Range selection and source reactivation are transient parts of an
+        // accepted correction. Poll after completion rather than hiding its UI
+        // midway through a verified write. Real key events still invalidate it.
+        guard !inline.isApplyingCorrection, !isInteractingWithBean else { return }
+        let app = NSWorkspace.shared.frontmostApplication
+        let field = app?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            ? nil : AccessibilityService.focusedField()
+        let snapshot: TypingPauseActivityTracker.Snapshot?
+        if let app, let field {
+            if lastObservedElement.map({ !AccessibilityService.isSameElement($0, field.element) }) ?? true {
+                fieldIdentity += 1
+            }
+            lastObservedElement = field.element
+            snapshot = .init(processIdentifier: app.processIdentifier,
+                             fieldIdentity: fieldIdentity,
+                             value: field.value,
+                             acceptsTextInput: field.acceptsTextInput)
+        } else {
+            lastObservedElement = nil
+            snapshot = nil
+        }
+        let change = fieldActivity.observe(snapshot)
+        let extensionOwnsField = browserExtensionOwnsField(app: app, field: field)
+        let ownershipChanged = extensionOwnsField != browserOwnershipWasActive
+        browserOwnershipWasActive = extensionOwnsField
+        if extensionOwnsField {
+            if ownershipChanged || change != .unchanged {
+                generation += 1
+                pendingDispatch?.cancel()
+                pendingBubble?.cancel()
+            }
+            if ownershipChanged || change != .unchanged || inline.isShowingUI
+                || passive.isShowingUI || bubble.isShowing {
+                hideAll()
+                setStatus("browserExtension", "activeBrowserFieldOwned")
+            }
+            return
+        }
+        // A confirmed Accept has already updated the inline session and moved
+        // its next card. Acknowledge that exact verified edit without hiding
+        // the remaining suggestions and making them blink on the next poll.
+        let confirmedInlineEdit = change == .textChanged && field.map {
+            inline.matchesCurrentSession(app: app, field: $0)
+        } == true
+        if (change != .unchanged || ownershipChanged), !confirmedInlineEdit {
+            hideAll()
+            generation += 1
+            pendingDispatch?.cancel()
+            if snapshot != nil {
+                scheduleCheck(generation: generation)
+                if settings.bubbleEnabled { scheduleBubble(generation) }
+            }
+        }
+        inline.refreshVisibleTarget()
+        passive.refreshVisibleTarget()
+        if inline.isShowingUI || passive.isShowingUI { bubble.hide() }
+        else { bubble.refreshVisibleTarget() }
+    }
+
+    private func browserExtensionOwnsField(app: NSRunningApplication?,
+                                          field: AccessibilityService.FocusedField? = nil) -> Bool {
+        guard let identity = BrowserFieldOwnershipIdentity.current(for: app),
+              browserOwnership.ownsField(for: identity),
+              let field = field ?? AccessibilityService.focusedField(),
+              field.acceptsTextInput, !field.isSecure else { return false }
+        if browserOwnershipTarget.map({ AccessibilityService.isSameElement($0, field.element) }) != true
+            || (!browserOwnershipTargetIsWebContent && Date().timeIntervalSince(browserOwnershipTargetCheckedAt) > 1) {
+            browserOwnershipTarget = field.element
+            browserOwnershipTargetIsWebContent = AccessibilityService.isBrowserWebContentField(field)
+            browserOwnershipTargetCheckedAt = Date()
+        }
+        return browserOwnershipTargetIsWebContent
     }
 
     private func scheduleBubble(_ gen: Int) {
@@ -154,9 +283,11 @@ final class TypingPauseDispatcher {
 
     private func considerBubble(generation gen: Int) {
         guard gen == generation, settings.bubbleEnabled, !coordinatorIsBusy() else { return }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         // Bubble is lowest priority: yield to passive/inline if they're showing.
         guard !passive.isShowingUI, !inline.isShowingUI else { return }
         let app = NSWorkspace.shared.frontmostApplication
+        if browserExtensionOwnsField(app: app) { bubble.hide(); return }
         bubble.evaluate(fallbackOrigin: ElectronTextFocusEvidence.validAnchor(for: app))
     }
 
@@ -164,6 +295,7 @@ final class TypingPauseDispatcher {
 
     private func dispatch(generation gen: Int) async {
         guard gen == generation, !coordinatorIsBusy() else { return }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         guard settings.passiveActive || settings.inlineHighlightsEnabled else {
             considerBubble(generation: gen)
             return
@@ -175,6 +307,11 @@ final class TypingPauseDispatcher {
         }
 
         let app = NSWorkspace.shared.frontmostApplication
+        if browserExtensionOwnsField(app: app, field: field) {
+            hideAll()
+            setStatus("browserExtension", "activeBrowserFieldOwned")
+            return
+        }
         let context = SourceAppContext.current(app: app, field: field, mode: .focusedFieldFullText)
         let isCurrent: () -> Bool = { [weak self] in self?.generation == gen }
         var reason = ""

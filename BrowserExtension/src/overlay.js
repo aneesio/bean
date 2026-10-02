@@ -10,7 +10,7 @@
   let paragraphReviewResolve = null, paragraphBusyEl = null;
   let undoEl = null, undoTimer = null, fieldDisabledEl = null;
   let keyboardActivationPending = false, keyboardActivationTimer = null;
-  let keyboardExitHandler = null;
+  let keyboardExitHandler = null, assistantEl = null, assistantCardEl = null;
 
   function officialMarkURL() {
     try {
@@ -58,7 +58,7 @@
       button { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
       button:focus-visible { outline:3px solid var(--bean-accent); outline-offset:2px; }
       .ul { position:absolute; pointer-events:auto; cursor:pointer; margin:0; padding:0;
-            border:0; border-bottom:2px dashed var(--bean-accent); background:transparent; box-sizing:border-box; }
+            border:0; border-bottom:2px solid var(--bean-accent); background:transparent; box-sizing:border-box; }
       .ul:hover,.ul:focus-visible { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .card { position:absolute; pointer-events:auto; width:min(300px,calc(100vw - 16px));
               font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -84,6 +84,14 @@
       .pico { position:absolute; pointer-events:auto; cursor:pointer; width:30px; height:30px; padding:2px;
               border-radius:9px; background:var(--bean-surface); border:1px solid var(--bean-line);
               box-shadow:0 2px 8px rgba(0,0,0,.2); box-sizing:border-box; }
+      .assistant { position:absolute; display:flex; align-items:center; gap:5px; min-width:36px;
+                   height:30px; padding:3px 7px; pointer-events:auto; cursor:pointer;
+                   border:1px solid var(--bean-line); border-radius:18px; background:var(--bean-surface);
+                   color:var(--bean-ink); box-shadow:0 2px 9px rgba(0,0,0,.12); font:600 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      .assistant img { width:21px; height:21px; border-radius:50%; }
+      .assistant:hover { border-color:var(--bean-accent); }
+      .assistant-count { min-width:12px; color:var(--bean-accent); text-align:center; }
+      .source { font-size:10px; color:var(--bean-muted); margin:0 0 5px; }
       .pico img { display:block; width:24px; height:24px; border-radius:7px; }
       .pico:hover { border-color:var(--bean-accent); transform:translateY(-1px); }
       .gactions { display:flex; gap:7px; flex-wrap:wrap; margin-top:8px; }
@@ -101,7 +109,9 @@
       .compare label { display:block; font-size:10px; font-weight:650; color:var(--bean-muted); margin-bottom:4px; }
       .compare pre { box-sizing:border-box; height:150px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere;
                      margin:0; padding:9px; border-radius:8px; background:color-mix(in srgb,var(--bean-ink) 5%,transparent);
-                     border:1px solid var(--bean-line); font:12px ui-monospace,monospace; }
+                     border:1px solid var(--bean-line); font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      .diff-remove { background:color-mix(in srgb,#bd514c 17%,transparent); text-decoration:line-through; border-radius:2px; }
+      .diff-add { background:color-mix(in srgb,#30956b 20%,transparent); border-radius:2px; }
       .toast { position:fixed; right:16px; bottom:16px; pointer-events:auto; display:flex; align-items:center; gap:12px;
                min-width:220px; max-width:min(380px,calc(100vw - 32px)); padding:10px 11px 10px 13px;
                border:1px solid var(--bean-line); border-radius:12px; background:var(--bean-surface); color:var(--bean-ink);
@@ -140,7 +150,7 @@
   }
 
   function call(handlers, name, ...args) {
-    if (handlers && typeof handlers[name] === "function") handlers[name](...args);
+    if (handlers && typeof handlers[name] === "function") return handlers[name](...args);
   }
 
   function isPlainTabEvent(event) {
@@ -155,6 +165,7 @@
   // the next page control. Page scripts still cannot query or click Apply/AI.
   function keyboardScope() {
     if (paragraphReviewEl) return paragraphReviewEl;
+    if (assistantCardEl) return assistantCardEl;
     if (cardEl) return cardEl;
     if (groupCardEl) return groupCardEl;
     return shadow;
@@ -231,6 +242,7 @@
     const active = shadow.activeElement;
     const controls = keyboardControls();
     const fallbackIndex = Math.max(0, controls.indexOf(active));
+    if (active === assistantEl) return { kind:"assistant", fallbackIndex };
     if (active.dataset && active.dataset.beanIssue) {
       const matches = [...underlineLayer.querySelectorAll("button")].filter((button) =>
         button.dataset && button.dataset.beanIssue === active.dataset.beanIssue
@@ -255,6 +267,7 @@
   function restoreKeyboardFocus(token) {
     if (!token || !shadow) return;
     let target = null;
+    if (token.kind === "assistant") target = assistantEl;
     if (token.kind === "issue" || token.kind === "issueCard") {
       if (token.kind === "issueCard" && cardEl && cardEl.dataset.beanIssueCard === token.id) {
         target = findCardAction(cardEl, token.action);
@@ -290,6 +303,7 @@
     if (cardEl) { cardEl.remove(); cardEl = null; }
     if (groupLayer) groupLayer.replaceChildren();
     if (groupCardEl) { groupCardEl.remove(); groupCardEl = null; }
+    if (assistantCardEl) { assistantCardEl.remove(); assistantCardEl = null; }
     if (paragraphReviewEl) { paragraphReviewEl.remove(); paragraphReviewEl = null; }
     if (paragraphReviewShield) { paragraphReviewShield.remove(); paragraphReviewShield = null; }
     if (paragraphBusyEl) { paragraphBusyEl.remove(); paragraphBusyEl = null; }
@@ -363,7 +377,7 @@
           underline.dataset.bean = "overlay";
           underline.dataset.beanIssue = entry.id;
           underline.setAttribute("aria-label", `Suggestion: replace ${entry.issue.original} with ${entry.issue.suggestion}`);
-          Object.assign(underline.style, { left:`${r.x}px`, top:`${r.y}px`, width:`${r.w}px`, height:`${r.h}px` });
+          Object.assign(underline.style, { left:`${r.x}px`, top:`${r.y + r.h - Math.min(6, r.h)}px`, width:`${r.w}px`, height:`${Math.min(6, r.h)}px` });
           underline.addEventListener("mouseenter", () => {
             if (hoverTimer) clearTimeout(hoverTimer);
             hoverTimer = setTimeout(() => call(handlers, "onActivate", entry.id), 180);
@@ -476,16 +490,33 @@
     const posText = position ? `${position.index + 1} of ${position.total}` : "";
     card.innerHTML = `<div class="row"><span class="pill" data-part="type"></span>
       <span class="pill" data-part="position"></span><button class="x" type="button" aria-label="Close suggestion">✕</button></div>
-      <div class="fix"><span class="orig"></span><span class="arrow" aria-hidden="true">→</span><span class="sugg"></span></div>
+      <div class="source"></div><div class="fix"><span class="orig"></span><span class="arrow" aria-hidden="true">→</span><span class="sugg"></span></div>
       ${issue.explanation ? '<div class="expl"></div>' : ""}
-      <div class="actions"><button class="b" type="button" data-act="ignore">Ignore</button><span class="spacer"></span>
+      ${Array.isArray(issue.alternatives) && issue.alternatives.length ? '<div class="alternatives"></div>' : ''}
+      <div class="actions"><button class="b" type="button" data-act="ignore">Dismiss</button><span class="spacer"></span>
         ${position && position.total > 1 ? '<button class="b" type="button" data-act="next" aria-label="Next suggestion">Next</button>' : ""}
-        <button class="b primary" type="button" data-act="apply">Apply</button>${overflowMarkup()}</div>`;
+        <button class="b primary" type="button" data-act="apply">Accept</button>${overflowMarkup()}</div>`;
     card.querySelector('[data-part="type"]').textContent = cap(issue.type || "suggestion");
     card.querySelector('[data-part="position"]').textContent = posText;
-    card.querySelector(".orig").textContent = issue.original;
-    card.querySelector(".sugg").textContent = issue.suggestion;
+    card.querySelector(".source").textContent = issue.source === "ai" ? "AI suggestion · review for accuracy" : "Local suggestion · checked on this Mac";
+    card.querySelector(".orig").textContent = visibleCorrectionText(issue.original);
+    card.querySelector(".sugg").textContent = visibleCorrectionText(issue.suggestion);
     if (issue.explanation) card.querySelector(".expl").textContent = issue.explanation;
+    if (Array.isArray(issue.alternatives) && issue.alternatives.length) {
+      const alternatives = card.querySelector(".alternatives");
+      alternatives.className = "alternatives actions";
+      for (const suggestion of issue.alternatives.slice(0,4)) {
+        const button = document.createElement("button");
+        button.type = "button"; button.className = "b";
+        button.textContent = suggestion;
+        button.setAttribute("aria-label",`Replace with ${suggestion}`);
+        wireButton(button,(event) => {
+          queueFocusForActivationEvent(event);
+          call(handlers,"onApplyAlternative",entry.id,suggestion);
+        });
+        alternatives.appendChild(button);
+      }
+    }
     wire(card, ".x", () => call(handlers, "onClose"));
     wire(card, '[data-act="ignore"]', (event) => {
       queueFocusForActivationEvent(event);
@@ -502,9 +533,14 @@
     wireOverflow(card, handlers);
     shadow.appendChild(card);
     cardEl = card;
-    anchor(card, entry.rects[0]);
+    anchor(card, entry.rects[entry.rects.length - 1] || entry.cardAnchor);
     announce(`Suggestion: replace ${issue.original} with ${issue.suggestion}`);
     focusAfterKeyboardActivation(card, '[data-act="apply"]');
+  }
+
+  function visibleCorrectionText(text) {
+    if (/^ +$/.test(text)) return `${text.length} ${text.length === 1 ? "space" : "spaces"}`;
+    return text;
   }
 
   function focusAfterKeyboardActivation(card, selector) {
@@ -519,7 +555,8 @@
 
   function anchor(card, rect) {
     const w = card.offsetWidth || 300, h = card.offsetHeight || 120, gap = 8;
-    let x = rect.x + rect.w / 2 - w / 2;
+    const anchorWidth = Number.isFinite(rect.w) ? rect.w : 1;
+    let x = rect.x + anchorWidth / 2 - w / 2;
     x = Math.max(window.scrollX + 8, Math.min(x, window.scrollX + window.innerWidth - w - 8));
     let y = rect.y - h - gap;
     if (y < window.scrollY + 8) y = rect.y + rect.h + gap;
@@ -540,7 +577,7 @@
       groupLayer.replaceChildren();
       if (groupCardEl) { groupCardEl.remove(); groupCardEl = null; }
       if (!groups || !groups.length) return;
-      for (const group of groups) {
+      for (const group of handlers && handlers.hideIcons ? [] : groups) {
         const icon = document.createElement("button");
         icon.type = "button";
         icon.className = "pico";
@@ -577,13 +614,13 @@
     const helper = group.canFix
       ? (usesAI ? "AI checks only the paragraph you just edited." : "Fixes obvious issues locally. No text is sent.")
       : "A safe automatic fix is not available here. Review suggestions one by one.";
-    const fixLabel = usesAI ? "AI Proofread Paragraph" : "Fix Obvious Issues";
+    const fixLabel = usesAI ? "Review AI changes" : "Fix obvious issues";
     card.innerHTML = `<div class="row"><span class="pill" data-part="count"></span>
       <button class="x" type="button" aria-label="Close paragraph suggestions">✕</button></div>
       <div class="expl" data-part="helper"></div><div class="gactions">
         <button class="b primary" type="button" data-act="fix"${group.canFix ? "" : " disabled"}></button>
         <button class="b" type="button" data-act="review">Review one by one</button>
-        <button class="b" type="button" data-act="ignoreAll">Ignore all</button>${overflowMarkup()}</div>`;
+        <button class="b" type="button" data-act="ignoreAll">Dismiss all</button>${overflowMarkup()}</div>`;
     card.querySelector('[data-part="count"]').textContent = `${group.count} suggestions in this paragraph`;
     card.querySelector('[data-part="helper"]').textContent = helper;
     card.querySelector('[data-act="fix"]').textContent = fixLabel;
@@ -599,7 +636,109 @@
     groupCardEl = card;
     anchor(card, { x:group.anchor.x, y:group.anchor.y, w:30, h:group.anchor.h || 30 });
     announce(`${group.count} suggestions in this paragraph`);
-    focusAfterKeyboardActivation(card, group.canFix ? '[data-act="fix"]' : '[data-act="review"]');
+    focusAfterKeyboardActivation(card, '[data-act="review"]');
+  }
+
+  function assistantDescription(status, count) {
+    if (status === "waiting") return "Checks update when you pause typing";
+    if (status === "checkingLocal") return "Checking spelling on this Mac…";
+    if (status === "checking") return "Checking the changed paragraph with AI…";
+    if (status === "tooLong") return "This field is too long for inline checks.";
+    if (count) return `${count} writing ${count === 1 ? "suggestion" : "suggestions"}`;
+    if (status === "mappingLimited") return "Suggestions found · exact editing range unavailable";
+    if (status === "empty") return "Ready when you start writing";
+    if (status === "nativeLocal" || status === "ai") return "No spelling or basic grammar suggestions";
+    return "Basic checks only · spelling connection unavailable";
+  }
+
+  // One quiet, predictable entry point per field. Keep it out of the text so
+  // reading, selecting, and placing the caret continue to work normally.
+  function renderAssistant(rect, count, status, handlers) {
+    if (!rect || rect.x + rect.w < window.scrollX || rect.x > window.scrollX + window.innerWidth ||
+        rect.y + rect.h < window.scrollY || rect.y > window.scrollY + window.innerHeight) {
+      clearAssistant(); return false;
+    }
+    ensureHost();
+    const wasFocused = assistantEl && shadow.activeElement === assistantEl;
+    if (assistantEl) assistantEl.remove();
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "assistant";
+    button.dataset.bean = "overlay";
+    button.dataset.beanAssistant = "";
+    const description = assistantDescription(status, count);
+    button.setAttribute("aria-label", `Bean: ${description}. Open writing suggestions.`);
+    button.title = description;
+    const mark = document.createElement("img");
+    mark.src = officialMarkURL(); mark.alt = "";
+    const number = document.createElement("span");
+    number.className = "assistant-count";
+    number.textContent = count ? String(count) : (["checking","checkingLocal"].includes(status) ? "…" : "");
+    button.append(mark, number);
+    const x = Math.max(window.scrollX + 4, Math.min(rect.x + rect.w - 48,
+      window.scrollX + window.innerWidth - 56));
+    const y = Math.max(window.scrollY + 4, Math.min(rect.y + rect.h + 5,
+      window.scrollY + window.innerHeight - 36));
+    Object.assign(button.style, { left:`${x}px`, top:`${y}px` });
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    wireButton(button, (event) => {
+      queueFocusForActivationEvent(event);
+      const scope = call(handlers,"onPrepareActions",event);
+      if (scope) handlers.actionScope = scope;
+      showAssistantCard(rect, status, handlers, count);
+    });
+    shadow.appendChild(button);
+    assistantEl = button;
+    if (wasFocused) focusWithoutScroll(button);
+    return true;
+  }
+
+  function showAssistantCard(rect, status, handlers, count = 0) {
+    if (assistantCardEl) assistantCardEl.remove();
+    const close = () => {
+      if (assistantCardEl) assistantCardEl.remove();
+      assistantCardEl = null;
+      call(handlers, "onClose");
+    };
+    const card = dialogCard("Bean writing assistant", close);
+    card.innerHTML = `<div class="row"><strong></strong><button class="x" type="button" aria-label="Close writing assistant">✕</button></div>
+      <div class="expl"></div>
+      <div class="actions">${count ? '<button class="b" type="button" data-act="review">Review suggestions</button>' : ''}
+        <button class="b primary" type="button" data-act="proofread">Proofread</button></div>
+      <div class="expl" data-part="rewriteScope">Rewrite with AI</div><div class="actions">
+        <button class="b" type="button" data-act="makeClearer">Clearer</button>
+        <button class="b" type="button" data-act="makeConcise">Concise</button>
+        <button class="b" type="button" data-act="makeProfessional">Professional</button>
+        <button class="b" type="button" data-act="makeCasual">Friendly</button>
+      </div>${overflowMarkup()}`;
+    card.querySelector("strong").textContent = assistantDescription(status, count);
+    const scope = handlers && handlers.actionScope === "selection" ? "selected text" :
+      handlers && handlers.actionScope === "paragraph" ? "current paragraph" : "draft";
+    card.querySelector('[data-act="proofread"]').textContent = `Proofread ${scope}`;
+    card.querySelector('[data-part="rewriteScope"]').textContent = `Rewrite ${scope} with AI`;
+    card.querySelector(".expl").textContent = ["nativeLocal","ai"].includes(status)
+      ? "Spelling and basic grammar checks run on your Mac. AI checks, when enabled, cover the paragraph you last edited."
+      : status === "mappingLimited" ? "Bean found possible corrections but couldn’t verify their exact range in this editor. Select the text to proofread or use Bean’s Mac keyboard shortcut."
+      : status === "tooLong" ? "Select a smaller section to proofread or rewrite."
+      : ["waiting","checkingLocal","checking","empty"].includes(status)
+        ? "Proofread selected text or your current draft in one action. Local proofreading works without an API key."
+        : "Common typo and spacing checks are available. Full spelling needs the Bean app connection. Local results don’t mean the text is error-free.";
+    wire(card, ".x", close);
+    wire(card,'[data-act="review"]',() => call(handlers,"onReview"));
+    for (const action of ["proofread","makeClearer","makeConcise","makeProfessional","makeCasual"]) {
+      wire(card,`[data-act="${action}"]`,(event) => call(handlers,"onWritingAction",action,event));
+    }
+    wireOverflow(card, handlers);
+    shadow.appendChild(card); assistantCardEl = card;
+    anchor(card, rect);
+    focusAfterKeyboardActivation(card, '[data-act="proofread"]');
+  }
+
+  function clearAssistant() {
+    if (assistantEl) assistantEl.remove();
+    assistantEl = null;
+    if (assistantCardEl) assistantCardEl.remove();
+    assistantCardEl = null;
   }
 
   function showParagraphBusy(pageRect, message) {
@@ -626,6 +765,49 @@
   function clearParagraphBusy() {
     if (paragraphBusyEl) paragraphBusyEl.remove();
     paragraphBusyEl = null;
+  }
+
+  function paragraphDiff(before, after) {
+    const tokenize = (value) => String(value).split(/(\s+|[.,!?;:]+)/).filter(Boolean);
+    const left = tokenize(before), right = tokenize(after);
+    // Requests are capped at 2,000 characters. Keep unusually fragmented text
+    // bounded too; the fallback still shows both full strings without loss.
+    if (left.length > 600 || right.length > 600) return {
+      before:[{ text:before, changed:before !== after }],
+      after:[{ text:after, changed:before !== after }]
+    };
+    const lengths = Array.from({ length:left.length + 1 }, () => new Uint16Array(right.length + 1));
+    for (let i = left.length - 1; i >= 0; i--) {
+      for (let j = right.length - 1; j >= 0; j--) {
+        lengths[i][j] = left[i] === right[j] ? lengths[i + 1][j + 1] + 1
+          : Math.max(lengths[i + 1][j], lengths[i][j + 1]);
+      }
+    }
+    const result = { before:[], after:[] };
+    const append = (parts, text, changed) => {
+      const last = parts[parts.length - 1];
+      if (last && last.changed === changed) last.text += text;
+      else parts.push({ text, changed });
+    };
+    let i = 0, j = 0;
+    while (i < left.length || j < right.length) {
+      if (i < left.length && j < right.length && left[i] === right[j]) {
+        append(result.before, left[i], false); append(result.after, right[j], false); i++; j++;
+      } else if (i < left.length && (j >= right.length || lengths[i + 1][j] >= lengths[i][j + 1])) {
+        append(result.before, left[i++], true);
+      } else append(result.after, right[j++], true);
+    }
+    return result;
+  }
+
+  function renderComparison(element, parts, kind) {
+    element.replaceChildren();
+    for (const part of parts) {
+      const span = document.createElement("span");
+      if (part.changed) span.className = kind === "before" ? "diff-remove" : "diff-add";
+      span.textContent = part.text;
+      element.appendChild(span);
+    }
   }
 
   function reviewParagraph(pageRect, before, after, message) {
@@ -659,20 +841,21 @@
         event.stopPropagation();
         finish(false);
       });
-      const card = dialogCard("Review unusual Bean result", () => finish(false));
+      const card = dialogCard("Review Bean paragraph changes", () => finish(false));
       card.classList.add("review");
       card.dataset.beanParagraphReview = "";
       card.setAttribute("aria-modal", "true");
       card.removeAttribute("aria-label");
       card.setAttribute("aria-labelledby", "bean-paragraph-review-title");
-      card.innerHTML = `<div class="row"><strong id="bean-paragraph-review-title" tabindex="-1">Review unusual result</strong></div><div class="expl"></div>
-        <div class="compare"><div><label>BEFORE</label><pre data-part="before"></pre></div>
-        <div><label>AFTER</label><pre data-part="after"></pre></div></div>
+      card.innerHTML = `<div class="row"><strong id="bean-paragraph-review-title" tabindex="-1">Review paragraph changes</strong></div><div class="expl"></div>
+        <div class="compare"><div><label>Original</label><pre data-part="before"></pre></div>
+        <div><label>Suggested</label><pre data-part="after"></pre></div></div>
         <div class="actions"><button class="b" type="button" data-act="cancel">Cancel</button><span class="spacer"></span>
-        <button class="b primary" type="button" data-act="apply">Apply reviewed result</button></div>`;
+        <button class="b primary" type="button" data-act="apply">Accept changes</button></div>`;
       card.querySelector(".expl").textContent = message || "Review this result before changing the paragraph.";
-      card.querySelector('[data-part="before"]').textContent = before;
-      card.querySelector('[data-part="after"]').textContent = after;
+      const differences = paragraphDiff(before, after);
+      renderComparison(card.querySelector('[data-part="before"]'), differences.before, "before");
+      renderComparison(card.querySelector('[data-part="after"]'), differences.after, "after");
       wire(card, '[data-act="cancel"]', () => finish(false));
       wire(card, '[data-act="apply"]', () => finish(true));
       card.addEventListener("keydown", (event) => {
@@ -692,7 +875,7 @@
       paragraphReviewShield = shield;
       paragraphReviewEl = card;
       anchor(card, pageRect || { x:window.scrollX + window.innerWidth / 2, y:window.scrollY + 120, w:1, h:1 });
-      announce("Review unusual Bean result before applying");
+      announce("Review paragraph changes before accepting");
       requestAnimationFrame(() => card.querySelector("#bean-paragraph-review-title")?.focus());
     });
   }
@@ -805,9 +988,9 @@
   window.BeanOverlay = {
     render, renderGroups, clear, clearUndo, flash, reviewParagraph, showParagraphBusy,
     clearParagraphBusy, showUndo, setFieldDisabled, focusFirstControl, focusLastControl,
-    hasKeyboardControls, setKeyboardExitHandler,
-    _test: { cap, officialMarkURL, wireActivationControl, wireButton,
+    hasKeyboardControls, setKeyboardExitHandler, renderAssistant, clearAssistant,
+    _test: { cap, assistantDescription, visibleCorrectionText, paragraphDiff, officialMarkURL, wireActivationControl, wireButton,
              queueKeyboardActivationFocus, focusAfterKeyboardActivation, keyboardControls,
-             isPlainTabEvent, keyboardExitDirection, keyboardFocusToken, restoreKeyboardFocus }
+             isPlainTabEvent, keyboardExitDirection, keyboardFocusToken, restoreKeyboardFocus, anchor }
   };
 })();

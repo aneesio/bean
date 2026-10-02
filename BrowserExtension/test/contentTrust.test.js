@@ -29,6 +29,7 @@ async function run() {
   const elementListeners = {};
   const timers = new Map();
   const bridgeMessages = [];
+  const localBridgeMessages = [],ownershipMessages = [],actionMessages = [];
   const localChecks = [];
   const extraFields = new Set();
   const savedSettings = { blockedSites: [] };
@@ -47,6 +48,9 @@ async function run() {
   let runtimeMessageListener = null;
   let bridgeDetectedIssues = [];
   let automaticAccountingAvailable = true;
+  let localCheckAvailable = false,localSpellingAvailable = false,nativeLocalIssues = [];
+  let delayLocal = false,pendingLocalCallback = null;
+  let providerConfigured = true,performActionAvailable = false,actionResult = null;
   let fieldPresent = true;
   let now = 1_000_000;
   const domNodes = new Set();
@@ -131,6 +135,7 @@ async function run() {
   const window = {
     scrollX: 0,
     scrollY: 0,
+    getSelection:() => null,
     addEventListener: () => {}
   };
   const chrome = {
@@ -165,6 +170,22 @@ async function run() {
       id: "bean-extension-id",
       onMessage: { addListener: (listener) => { runtimeMessageListener = listener; } },
       sendMessage: (message, callback) => {
+        if (message.type === "fieldOwnership") {
+          ownershipMessages.push(message); callback({ok:true,ownershipAccepted:true}); return;
+        }
+        if (message.type === "getStatus" && message.purpose === "localCheck") {
+          localBridgeMessages.push(message);
+          callback({ok:true,bridgeAvailable:true,protocolVersion:1,compatible:true,localCheckAvailable}); return;
+        }
+        if (message.type === "localCheck") {
+          localBridgeMessages.push(message);
+          if (delayLocal) pendingLocalCallback = callback;
+          else callback({ok:true,issues:nativeLocalIssues,localSpellingAvailable});
+          return;
+        }
+        if (message.type === "performAction") {
+          actionMessages.push(message); callback(actionResult || {ok:true,text:message.request.text}); return;
+        }
         bridgeMessages.push(message);
         if (message.type === "getStatus" && delayStatus) {
           pendingStatusCallback = callback;
@@ -174,7 +195,8 @@ async function run() {
             bridgeAvailable: true,
             protocolVersion: 1,
             compatible: true,
-            providerConfigured: true,
+            providerConfigured,
+            performActionAvailable,
             webInlineEnabled: true,
             automaticAccountingAvailable
           });
@@ -209,7 +231,13 @@ async function run() {
   };
   let detectedIssues = [];
   const BeanDetector = {
-    detect: (text) => { localChecks.push(text); return detectedIssues; },
+    detect: (text) => {
+      localChecks.push(text);
+      return detectedIssues.map((issue) => {
+        const start = text.indexOf(issue.original);
+        return {...issue,source:"local",start:issue.start ?? start,end:issue.end ?? start + issue.original.length};
+      });
+    },
     fixObvious: (text) => text
   };
   const BeanTrustPolicy = {
@@ -270,9 +298,12 @@ async function run() {
   let keyboardExitHandler = null;
   let overlayFocusCount = 0;
   const reviewCalls = [];
+  const assistantCalls = [];
   const BeanOverlay = {
     clear: () => { paragraphBusy = false; renderedEntries = []; },
     clearUndo: () => {},
+    renderAssistant: (rect, count, status, handlers) => assistantCalls.push({ rect, count, status, handlers }),
+    clearAssistant: () => {},
     render: (entries, _selected, _position, handlers) => {
       renderedEntries = entries;
       renderHandlers = handlers;
@@ -353,6 +384,11 @@ async function run() {
     Event: function Event() {}, Date: { now: () => now }, Math, Promise, Set, WeakSet, Map, Object, Array,
     setTimeout, clearTimeout
   };
+  const actualTrustContext = {window:{}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,"..","src","trustPolicy.js"),"utf8"),actualTrustContext);
+  for (const name of ["mergeLocalIssues","localCheckChunks","localBridgeReadiness","isPlainTextContentEditableBlock"]) {
+    BeanTrustPolicy[name] = actualTrustContext.window.BeanTrustPolicy[name];
+  }
   window.window = window;
   vm.runInNewContext(source, context);
 
@@ -851,7 +887,7 @@ async function run() {
   assert.equal(flashMessages.at(-1), "Couldn’t block this website");
   storageSetFailure = false;
 
-  // Whole-paragraph AI returns asynchronously and normally applies in one step.
+  // Whole-paragraph AI returns asynchronously and requires an explicit preview.
   // Every hard exclusion is therefore checked again after the provider response,
   // immediately before that delayed write.
   for (const [label, makeIneligible] of ineligibleMutations) {
@@ -921,6 +957,200 @@ async function run() {
   assert.equal(field.value, "we recieve teh parcel", "cancelling review leaves text untouched");
   assert.equal(document.activeElement, field, "cancelling review restores the source field");
   assert.deepEqual(busyEvents.map((event) => event[0]).slice(-2), ["show", "clear"]);
+
+  // Ordinary AI results have the same explicit review contract: nothing
+  // changes until the user accepts the actual paragraph.
+  delayProofread = true;
+  groupHandlers.onFixParagraph("g0");
+  await settle();
+  pendingProofreadCallback({ ok:true, text:"we receive the parcel", reviewRequired:false });
+  await settle();
+  assert.equal(reviewCalls.length, 2, "ordinary AI changes also open a before/after preview");
+  assert.equal(field.value, "we recieve teh parcel", "normal AI output never writes without acceptance");
+  delayProofread = false;
+
+  reviewResult = true;
+  delayProofread = true;
+  groupHandlers.onFixParagraph("g0");
+  await settle();
+  pendingProofreadCallback({ ok:true, text:"we receive teh parcel", reviewRequired:false });
+  await settle();
+  assert.equal(field.value, "we receive teh parcel", "accepting preview applies the reviewed paragraph exactly");
+  runTimers();
+  await settle();
+  assert.equal(renderedEntries.some((entry) => entry.original === "teh"), true,
+    "a partial AI improvement never suppresses remaining local findings");
+  reviewResult = false;
+  delayProofread = false;
+
+  // Run the real deterministic detector through the production content pipeline
+  // to cover occurrence mapping and sequential accept, rather than only strings.
+  const detectorContext = { window:{} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "src", "localDetector.js"), "utf8"), detectorContext);
+  const previousDetect = BeanDetector.detect;
+  BeanDetector.detect = detectorContext.window.BeanDetector.detect;
+  field.value = "i recieve mail and i recieve parcels";
+  field.selectionStart = field.value.length;
+  elementListeners.input({ isTrusted:false, isComposing:false });
+  runTimers();
+  await settle();
+  assert.equal(renderedEntries.length, 4, "all repeated local occurrences map to their own live offsets");
+  assert.equal(assistantCalls.at(-1).count, 4, "one field badge reflects the visible suggestion count");
+  renderHandlers.onApply(renderedEntries[0].id);
+  assert.equal(field.value, "I recieve mail and i recieve parcels", "accept only changes the selected occurrence");
+  assert.equal(renderedEntries.length, 3, "accept continues to the remaining repeated findings");
+  renderHandlers.onApply(renderedEntries[0].id);
+  assert.equal(field.value, "I receive mail and i recieve parcels");
+  assert.equal(renderedEntries.length, 2);
+
+  // Dismiss exactly one of two repeated typos. Accepting another correction
+  // shifts the saved occurrence instead of resurrecting it or hiding both.
+  const firstRemaining = renderedEntries[0];
+  renderHandlers.onIgnore(firstRemaining.id);
+  assert.equal(renderedEntries.length, 1);
+  renderHandlers.onApply(renderedEntries[0].id);
+  runTimers();
+  await settle();
+  assert.equal(field.value, "I receive mail and i receive parcels");
+  assert.equal(renderedEntries.length, 0, "the dismissed i stays dismissed after an unrelated accept");
+  field.value = "i recieve mail and i recieve parcels";
+  elementListeners.input({ isTrusted:false, isComposing:false });
+  runTimers();
+  await settle();
+  const typos = renderedEntries.filter((entry) => entry.original === "recieve");
+  renderHandlers.onIgnore(typos[0].id);
+  assert.equal(renderedEntries.filter((entry) => entry.original === "recieve").length, 1,
+    "dismissing one typo leaves the other occurrence reviewable");
+
+  const requestsBeforeComposition = bridgeMessages.length;
+  elementListeners.compositionstart();
+  field.value = "i";
+  elementListeners.input({ isTrusted:true, isComposing:true });
+  runTimers();
+  await settle();
+  assert.equal(renderedEntries.length, 0, "composition hides actionable findings");
+  assert.equal(bridgeMessages.length, requestsBeforeComposition, "unfinished composition never starts an AI request");
+  elementListeners.compositionend();
+  runTimers();
+  await settle();
+  assert.equal(renderedEntries.length, 1, "a completed one-character draft can be capitalized");
+  renderHandlers.onIgnore(renderedEntries[0].id);
+  assert.equal(assistantCalls.at(-1).count, 0, "dismissing the last finding updates the badge immediately");
+  field.value = "i!";
+  elementListeners.input({ isTrusted:false, isComposing:false });
+  runTimers();
+  await settle();
+  field.value = "i";
+  elementListeners.input({ isTrusted:false, isComposing:false });
+  runTimers();
+  await settle();
+  // Leaving and returning resets a field's session-only dismissal.
+  document.activeElement = { nodeType:1, closest:() => null, isContentEditable:false, getAttribute:() => null,
+    tagName:"BUTTON", getBoundingClientRect:() => ({ width:20, height:20 }), offsetParent:{} };
+  documentListeners.focusin({ target:document.activeElement, composedPath:() => [] });
+  document.activeElement = field;
+  documentListeners.focusin({ target:field, composedPath:() => [field] });
+  runTimers();
+  await settle();
+  renderHandlers.onApply(renderedEntries[0].id);
+  assert.equal(field.value, "I");
+  runTimers();
+  await settle();
+  assert.equal(assistantCalls.at(-1).count, 0);
+  assert.equal(assistantCalls.at(-1).status, "localLimited", "tiny-dictionary results never claim full spelling coverage");
+  BeanDetector.detect = previousDetect;
+
+  // Offline Mac spelling checks run on focus/synthetic edits too, with no
+  // provider consent, accounting, or key required. Both exact occurrences map.
+  localCheckAvailable = true;
+  localSpellingAvailable = true;
+  providerConfigured = false;
+  automaticAccountingAvailable = false;
+  nativeLocalIssues = [
+    {original:"tme",suggestion:"time",location:2,length:3,category:"spelling",alternatives:["tame"]},
+    {original:"tme",suggestion:"time",start:10,end:13,category:"spelling"}
+  ];
+  field.value = "a tme and tme.";
+  field.selectionStart = field.selectionEnd = field.value.length;
+  const paidBeforeLocal = bridgeMessages.filter((message) => message.type === "detectIssues").length;
+  elementListeners.input({isTrusted:false,isComposing:false});
+  runTimers(); await settle();
+  assert.equal(localBridgeMessages.at(-1).type,"localCheck");
+  assert.equal(localBridgeMessages.at(-1).request.text,field.value);
+  assert.equal(renderedEntries.length,2,"native spelling keeps repeated exact occurrences");
+  assert.deepEqual(Array.from(renderedEntries,(entry) => entry.start),[2,10]);
+  assert.equal(assistantCalls.at(-1).status,"nativeLocal");
+  assert.equal(bridgeMessages.filter((message) => message.type === "detectIssues").length,paidBeforeLocal);
+  const originalRects = BeanMapping.rectsForRange;
+  BeanMapping.rectsForRange = () => [];
+  elementListeners.input({isTrusted:false,isComposing:false});
+  runTimers(); await settle();
+  assert.equal(renderedEntries.length,2,"missing glyph geometry keeps exact corrections in the floating assistant");
+  assert.equal(renderedEntries[0].rects.length,0);
+  BeanMapping.rectsForRange = originalRects;
+  renderHandlers.onApplyAlternative(renderedEntries[0].id,"unapproved");
+  assert.equal(field.value,"a tme and tme.");
+  renderHandlers.onApplyAlternative(renderedEntries[0].id,"tame");
+  assert.equal(field.value,"a tame and tme.","spelling alternatives use the same exact occurrence");
+  assert.equal(undoOffer.handler(),true);
+  assert.equal(field.value,"a tme and tme.");
+  runTimers(); await settle();
+  renderHandlers.onApply(renderedEntries[1].id);
+  assert.equal(field.value,"a tme and time.","Accept edits only the chosen native spelling occurrence");
+  assert.equal(undoOffer.handler(),true);
+  assert.equal(field.value,"a tme and tme.");
+
+  nativeLocalIssues = [];
+  delayLocal = true;
+  field.value = "tme pending";
+  elementListeners.input({isTrusted:false,isComposing:false});
+  runTimers(); await settle();
+  assert.equal(typeof pendingLocalCallback,"function");
+  field.value = "new text";
+  pendingLocalCallback({ok:true,localSpellingAvailable:true,issues:[
+    {original:"tme",suggestion:"time",start:0,end:3}
+  ]});
+  await settle();
+  assert.equal(renderedEntries.length,0,"stale offline spelling never highlights newer text");
+  delayLocal = false;
+
+  // A one-click Proofread works locally; Rewrite is bound to a trusted UI
+  // action and the exact unchanged source, even with automatic AI disabled.
+  field.value = "please tme now";
+  field.selectionStart = field.selectionEnd = field.value.length;
+  nativeLocalIssues = [{original:"tme",suggestion:"time",start:7,end:10}];
+  elementListeners.input({isTrusted:false,isComposing:false});
+  runTimers(); await settle();
+  nativeLocalIssues = [{original:"tme",suggestion:"time",start:7,end:10,confidence:0.65}];
+  await assistantCalls.at(-1).handlers.onWritingAction("proofread",{isTrusted:true});
+  assert.equal(field.value,"please tme now","bulk local proofreading leaves uncertain Mac guesses for review");
+  assert.match(flashMessages.at(-1),/needs your choice/);
+  nativeLocalIssues = [{original:"tme",suggestion:"time",start:7,end:10,confidence:0.9}];
+  await assistantCalls.at(-1).handlers.onWritingAction("proofread",{isTrusted:true});
+  assert.equal(field.value,"please time now");
+  assert.equal(actionMessages.length,0,"key-free Proofread never calls a provider");
+  assert.equal(undoOffer.handler(),true);
+  assert.equal(field.value,"please tme now");
+  performActionAvailable = true;
+  providerConfigured = true;
+  actionResult = {ok:true,text:"Please take your time."};
+  await assistantCalls.at(-1).handlers.onWritingAction("makeProfessional",{isTrusted:false});
+  assert.equal(actionMessages.length,0,"a synthetic overlay action cannot authorize paid text");
+  await assistantCalls.at(-1).handlers.onWritingAction("makeProfessional",{isTrusted:true});
+  assert.equal(actionMessages.length,1);
+  assert.equal(actionMessages[0].request.action,"makeProfessional");
+  assert.equal(field.value,"Please take your time.");
+  assert.equal(undoOffer.handler(),true);
+  assert.equal(field.value,"please tme now");
+  assert.ok(ownershipMessages.some((message) => message.ownership.active === true));
+  document.visibilityState = "hidden";
+  documentListeners.visibilitychange();
+  assert.equal(ownershipMessages.at(-1).ownership.active,false,"a hidden document releases native UI ownership");
+  document.visibilityState = "visible";
+  documentListeners.visibilitychange();
+  localCheckAvailable = false; localSpellingAvailable = false;
+  performActionAvailable = false; automaticAccountingAvailable = true;
+  nativeLocalIssues = [];
 
   // Legacy/common leading-dot block rules canonicalize to the actual hostname;
   // malformed DNS shapes are authorization corruption and fail closed.

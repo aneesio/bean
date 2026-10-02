@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import Darwin
 
 private enum NativeBridgeContract {
     static let protocolVersion = 1
@@ -98,6 +100,14 @@ struct NativeHostStatusConfiguration: Sendable {
     }
 }
 
+/// Tests supply an isolated dictionary and disable macOS services when those
+/// services are unavailable in the test sandbox. Production reads Bean's own
+/// dictionary and performs the same offline checks as native text fields.
+struct NativeHostLocalCheckConfiguration {
+    let dictionary: [DictionaryTerm]
+    var includeSystemChecker = true
+}
+
 // Chrome Native Messaging host mode. When Chrome launches the Bean binary as a
 // native messaging host (it passes the calling extension's chrome-extension://
 // origin as an argument), `BeanApp.main` routes here INSTEAD of starting the
@@ -133,12 +143,35 @@ enum NativeMessagingHost {
     private static let maxTextChars = EngineConfig.maxProviderInputCharacters
     private static let maxIssuesCap = 8
     private static let maxParagraphChars = 2_000      // a single paragraph, not a doc
+    private static let responseWriteLock = NSLock()
 
     static func run() {
+        signal(SIGPIPE, SIG_IGN)
+        let limiter = NativeHostConcurrencyLimiter()
+        let outstanding = DispatchGroup()
         while let payload = readMessage() {
-            let response = processSync(payload)
-            writeMessage(response)
+            let request = try? JSONDecoder().decode(HostRequest.self, from: payload)
+            let providerBacked = ["detectIssues", "proofreadParagraph", "performAction"].contains(request?.type ?? "")
+            guard limiter.acquire(providerBacked: providerBacked) else {
+                writeMessage(encode(HostResponse.error(
+                    id: request?.id, code: "nativeHostBusy",
+                    message: "Bean is finishing another check. Try again in a moment."
+                )))
+                continue
+            }
+            outstanding.enter()
+            Task.detached {
+                defer {
+                    limiter.release(providerBacked: providerBacked)
+                    outstanding.leave()
+                }
+                let response = await processAsync(payload)
+                writeMessage(response)
+            }
         }
+        // Settle already authorized provider usage before the parent process
+        // exits. No request is started after the browser closes its input pipe.
+        outstanding.wait()
     }
 
     // MARK: - Framing
@@ -169,6 +202,8 @@ enum NativeMessagingHost {
     }
 
     private static func writeMessage(_ data: Data) {
+        responseWriteLock.lock()
+        defer { responseWriteLock.unlock() }
         var length = UInt32(data.count).littleEndian
         let header = Data(bytes: &length, count: 4)
         let out = FileHandle.standardOutput
@@ -180,7 +215,8 @@ enum NativeMessagingHost {
 
     static func processSync(
         _ payload: Data,
-        statusConfiguration: NativeHostStatusConfiguration? = nil
+        statusConfiguration: NativeHostStatusConfiguration? = nil,
+        localCheckConfiguration: NativeHostLocalCheckConfiguration? = nil
     ) -> Data {
         let semaphore = DispatchSemaphore(value: 0)
         let result = ResultBox()
@@ -189,16 +225,27 @@ enum NativeMessagingHost {
         // isolated. Inheriting MainActor and then waiting caused the bridge to
         // remain stuck at “Checking…” forever.
         Task.detached {
-            result.store(await process(payload, statusConfiguration: statusConfiguration))
+            result.store(await process(payload, statusConfiguration: statusConfiguration,
+                                       localCheckConfiguration: localCheckConfiguration))
             semaphore.signal()
         }
         semaphore.wait()
         return result.load()
     }
 
+    /// Async callers, including MainActor tests, must not block the main queue
+    /// while a local macOS spelling check hops back to it.
+    static func processAsync(_ payload: Data,
+                             statusConfiguration: NativeHostStatusConfiguration? = nil,
+                             localCheckConfiguration: NativeHostLocalCheckConfiguration? = nil) async -> Data {
+        await process(payload, statusConfiguration: statusConfiguration,
+                      localCheckConfiguration: localCheckConfiguration)
+    }
+
     private static func process(
         _ payload: Data,
-        statusConfiguration: NativeHostStatusConfiguration?
+        statusConfiguration: NativeHostStatusConfiguration?,
+        localCheckConfiguration: NativeHostLocalCheckConfiguration?
     ) async -> Data {
         guard let request = try? JSONDecoder().decode(HostRequest.self, from: payload) else {
             return encode(HostResponse.error(id: nil, code: "badRequest", message: "Malformed request."))
@@ -211,15 +258,108 @@ enum NativeMessagingHost {
                 for: request,
                 configuration: statusConfiguration ?? HostConfig.statusConfiguration
             ))
+        case "fieldOwnership":
+            if let error = textRequestCompatibilityError(for: request) { return encode(error) }
+            return await processFieldOwnership(request)
         case "detectIssues":
             if let error = textRequestCompatibilityError(for: request) { return encode(error) }
             return await detect(request)
+        case "localCheck":
+            if let error = textRequestCompatibilityError(for: request) { return encode(error) }
+            return await localCheck(request, configuration: localCheckConfiguration)
+        case "performAction":
+            if let error = textRequestCompatibilityError(for: request) { return encode(error) }
+            guard let action = explicitBrowserAction(request.action) else {
+                return encode(HostResponse.error(id: request.id, code: "unsupportedAction",
+                                                 message: "Choose Proofread or an available rewrite."))
+            }
+            return await proofreadParagraph(request, action: action, explicit: true)
         case "proofreadParagraph":
             if let error = textRequestCompatibilityError(for: request) { return encode(error) }
             return await proofreadParagraph(request)
         default:
             return encode(HostResponse.error(id: request.id, code: "unknownType", message: "Unsupported request type."))
         }
+    }
+
+    static func explicitBrowserAction(_ raw: String?) -> WritingAction? {
+        switch raw {
+        case "proofread": return .proofread
+        case "makeClearer", "rewrite", "rewriteDetailed": return .makeClearer
+        case "makeConcise", "rewriteConcise": return .makeConcise
+        case "makeProfessional", "rewriteProfessional": return .makeProfessional
+        case "makeCasual", "rewriteFriendly": return .makeCasual
+        default: return nil
+        }
+    }
+
+    private static func processFieldOwnership(_ request: HostRequest) async -> Data {
+        guard let ownership = request.ownership, ownership.isValid(at: Date()) else {
+            return encode(HostResponse.error(id: request.id, code: "invalidFieldOwnership",
+                                             message: "The active field claim was invalid or expired."))
+        }
+        let browser = await MainActor.run { () -> BrowserFieldOwnershipIdentity? in
+            guard let identity = BrowserFieldOwnershipIdentity.nativeHostBrowser() else { return nil }
+            if ownership.active,
+               NSWorkspace.shared.frontmostApplication?.processIdentifier != identity.processIdentifier { return nil }
+            return identity
+        }
+        guard let browser else {
+            return encode(HostResponse.error(id: request.id, code: "browserIdentityUnavailable",
+                                             message: "Bean could not verify the active browser."))
+        }
+        let accepted = BrowserFieldOwnershipStore().record(ownership, for: browser)
+        return encode(HostResponse(id: request.id, ok: true, ownershipAccepted: accepted))
+    }
+
+    /// Local text never crosses a provider boundary. Browser fields receive
+    /// macOS spelling and grammar, personal dictionary protection, and exact
+    /// UTF-16 locations even when browser AI is disabled or unconfigured.
+    private static func localCheck(_ request: HostRequest,
+                                   configuration: NativeHostLocalCheckConfiguration?) async -> Data {
+        let text = request.text ?? ""
+        guard EngineConfig.providerInputIsWithinLimit(text, maximumCharacters: maxTextChars) else {
+            return encode(HostResponse.error(id: request.id, code: "textTooLong",
+                                             message: "Text is too long for a local check."))
+        }
+        let configuration = configuration ?? NativeHostLocalCheckConfiguration(dictionary: HostConfig.dictionary)
+        let maximumIssues = max(1, min(request.settings?.maxIssues ?? 32, 32))
+        return await MainActor.run {
+            let systemAvailable = configuration.includeSystemChecker && localSpellingIsAvailable()
+            var detector = IssueDetector()
+            detector.maxIssues = maximumIssues
+            let issues = detector.localIssues(in: text, dictionary: configuration.dictionary,
+                                              includeSpellChecker: systemAvailable)
+            let source = text as NSString
+            let mapped = issues.compactMap { issue -> HostResponse.Issue? in
+                guard issue.range.location >= 0, issue.range.location != NSNotFound,
+                      issue.range.length > 0, issue.range.location <= source.length,
+                      issue.range.length <= source.length - issue.range.location,
+                      source.substring(with: issue.range) == issue.original else { return nil }
+                return HostResponse.Issue(
+                    original: issue.original, suggestion: issue.suggestion,
+                    type: issue.type.rawValue, explanation: issue.explanation,
+                    confidence: issue.confidence, start: issue.range.location,
+                    end: NSMaxRange(issue.range), source: "local",
+                    location: issue.range.location, length: issue.range.length,
+                    alternatives: issue.alternatives
+                )
+            }
+            return encode(HostResponse(id: request.id, ok: true, issues: mapped,
+                                       localSpellingAvailable: systemAvailable))
+        }
+    }
+
+    /// A spell-server failure returns NSNotFound just like clean prose. A
+    /// fixed nonsense probe keeps the extension from claiming a complete
+    /// spelling check when macOS's spelling service could not answer.
+    @MainActor
+    static func localSpellingIsAvailable() -> Bool {
+        let checker = NSSpellChecker.shared
+        let probe = "qzxvbnmzz"
+        let range = checker.checkSpelling(of: probe, startingAt: 0, language: checker.language(),
+                                          wrap: false, inSpellDocumentWithTag: 0, wordCount: nil)
+        return range.location == 0 && range.length == (probe as NSString).length
     }
 
     /// Text-bearing requests fail closed before configuration or provider work.
@@ -229,7 +369,7 @@ enum NativeMessagingHost {
             return .error(
                 id: request.id,
                 code: "protocolMismatch",
-                message: "Update Bean and the browser extension before using web AI."
+                message: "Update Bean and the browser extension before using browser assistance."
             )
         }
         guard NativeBridgeContract.version(
@@ -239,7 +379,7 @@ enum NativeMessagingHost {
             return .error(
                 id: request.id,
                 code: "extensionUpdateRequired",
-                message: "Update the Bean browser extension before using web AI."
+                message: "Update the Bean browser extension before using browser assistance."
             )
         }
         guard let minimumAppVersion = request.minimumAppVersion,
@@ -247,7 +387,7 @@ enum NativeMessagingHost {
             return .error(
                 id: request.id,
                 code: "beanUpdateRequired",
-                message: "Update Bean before using web AI."
+                message: "Update Bean before using browser assistance."
             )
         }
         return nil
@@ -369,11 +509,17 @@ enum NativeMessagingHost {
             _ = reservation.complete(
                 usage: usage,
                 outputLength: detection.issues.reduce(0) { $0 + $1.suggestion.count },
-                safetyResult: "structuredIssueMapping",
-                outcome: detection.issues.isEmpty ? "noIssues" : "issuesReturned"
+                safetyResult: detection.failureOutcome == nil ? "structuredIssueMapping" : "structuredIssueMappingFailed",
+                outcome: detection.failureOutcome ?? (detection.issues.isEmpty ? "noIssues" : "issuesReturned")
             )
         } else {
             _ = reservation.fail(outcome: detection.failureOutcome ?? "providerFailed")
+        }
+        if detection.failureOutcome != nil || detection.usage == nil {
+            return encode(HostResponse.error(
+                id: request.id, code: "aiCheckFailed",
+                message: "The AI review couldn't finish. Local suggestions are still available. Try again."
+            ))
         }
         let mapped = detection.issues.map { issue in
             HostResponse.Issue(original: issue.original, suggestion: issue.suggestion,
@@ -387,8 +533,10 @@ enum NativeMessagingHost {
     // Uses Bean's strict proofread (same prompt-injection hardening + output
     // safety as the desktop app), then strips wrappers/zero-width artifacts.
     // Returns ONLY corrected paragraph text. Never logs request/response text.
-    private static func proofreadParagraph(_ request: HostRequest) async -> Data {
-        guard HostConfig.webInlineEnabled else {
+    private static func proofreadParagraph(_ request: HostRequest,
+                                          action: WritingAction = .proofread,
+                                          explicit: Bool = false) async -> Data {
+        guard explicit || HostConfig.webInlineEnabled else {
             return encode(HostResponse.error(id: request.id, code: "webInlineDisabled",
                                              message: "Allow deeper AI checks from the browser in Bean Settings → Browser."))
         }
@@ -398,7 +546,7 @@ enum NativeMessagingHost {
         }
         guard EngineConfig.providerInputIsWithinLimit(
             text,
-            maximumCharacters: maxParagraphChars
+            maximumCharacters: explicit ? maxTextChars : maxParagraphChars
         ) else {
             return encode(HostResponse.error(id: request.id, code: "textTooLong", message: "Paragraph is too long to fix."))
         }
@@ -420,7 +568,7 @@ enum NativeMessagingHost {
         let context = browserSourceContext()
         guard WritingTransformService.providerPayloadIsWithinLimit(
             text: text,
-            action: .proofread,
+            action: action,
             context: context,
             userContextLines: dictionaryLines
         ) else {
@@ -431,17 +579,20 @@ enum NativeMessagingHost {
             ))
         }
         let metadata = HostConfig.automaticMetadata(
-            source: .webInline, context: context,
-            action: "proofreadParagraph", inputLength: text.count,
+            source: explicit ? .manual : .webInline, context: context,
+            action: explicit ? action.rawValue : "proofreadParagraph", inputLength: text.count,
             provider: provider, model: model
         )
-        guard HostConfig.webInlineEnabled else {
+        guard explicit || HostConfig.webInlineEnabled else {
             return encode(HostResponse.error(id: request.id, code: "webInlineDisabled",
                                              message: "Allow deeper AI checks from the browser in Bean Settings → Browser."))
         }
-        guard let reservationResult = HostConfig.reserveAutomaticCallIfConfigurationVerified(
-            provider: provider, model: model, metadata: metadata, timeout: timeout
-        ) else {
+        let reservationResult = explicit
+            ? HostConfig.reserveExplicitCallIfConfigurationVerified(provider: provider, model: model,
+                                                                    metadata: metadata, timeout: timeout)
+            : HostConfig.reserveAutomaticCallIfConfigurationVerified(provider: provider, model: model,
+                                                                     metadata: metadata, timeout: timeout)
+        guard let reservationResult else {
             return encode(HostResponse.error(
                 id: request.id,
                 code: "providerNotVerified",
@@ -460,7 +611,7 @@ enum NativeMessagingHost {
                                              message: "Bean couldn't safely reserve this AI check. Try again."))
         }
         defer { reservation.cancel() }
-        guard HostConfig.webInlineEnabled else {
+        guard explicit || HostConfig.webInlineEnabled else {
             return encode(HostResponse.error(id: request.id, code: "webInlineDisabled",
                                              message: "Allow deeper AI checks from the browser in Bean Settings → Browser."))
         }
@@ -480,7 +631,7 @@ enum NativeMessagingHost {
         let completion: LLMCompletion
         do {
             completion = try await service.transform(
-                text: text, action: .proofread, context: context,
+                text: text, action: action, context: context,
                 userContextLines: dictionaryLines,
                 provider: provider, model: model,
                 apiKey: apiKey, timeout: timeout
@@ -490,24 +641,25 @@ enum NativeMessagingHost {
             return encode(HostResponse.error(id: request.id, code: "providerError", message: "Couldn't reach the provider."))
         }
 
-        let corrected = TextNormalizer.sanitizeModelOutput(completion.text, originalCore: text)
+        let corrected = sanitizedBrowserTransformation(completion.text, original: text)
 
         // Last-line safety runs on the exact text that would be returned, after
         // harmless provider wrappers/commentary have been removed.
-        if case let .suspicious(reason) = OutputSafetyValidator.validate(input: text, output: corrected, action: .proofread) {
+        if case let .suspicious(reason) = OutputSafetyValidator.validate(input: text, output: corrected, action: action) {
             _ = reservation.complete(
                 usage: completion.usage,
                 outputLength: corrected.count,
                 safetyResult: reason,
-                outcome: OutputSafetyValidator.disposition(for: reason) == .hardBlock
+                outcome: explicit || OutputSafetyValidator.disposition(for: reason) == .hardBlock
                     ? "blocked" : "reviewRequired"
             )
-            if OutputSafetyValidator.disposition(for: reason) == .reviewRequired {
+            if !explicit && OutputSafetyValidator.disposition(for: reason) == .reviewRequired {
                 return encode(HostResponse(id: request.id, ok: true, text: corrected,
                                            reviewRequired: true,
                                            message: OutputSafetyValidator.reviewMessage(for: reason)))
             }
-            return encode(HostResponse.error(id: request.id, code: "unsafeOutput", message: "The correction contained unsafe model output."))
+            return encode(HostResponse.error(id: request.id, code: "unsafeOutput",
+                                             message: "The result did not safely preserve your text. Nothing was replaced. Try again."))
         }
 
         guard !corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -538,6 +690,13 @@ enum NativeMessagingHost {
         )
         guard !list.isEmpty else { return [] }
         return ["Preserve these user terms exactly; do not 'correct' them: \(list)."]
+    }
+
+    /// Whole-field browser actions preserve the author's exact outer layout,
+    /// just as native shortcuts do. Provider wrappers belong to the core only.
+    static func sanitizedBrowserTransformation(_ output: String, original: String) -> String {
+        let (leading, core, trailing) = TextNormalizer.split(original)
+        return leading + TextNormalizer.sanitizeModelOutput(output, originalCore: core) + trailing
     }
 
     /// Reads only Bean's exact app-owned user-content file. A redirected,
@@ -680,6 +839,19 @@ private enum HostConfig {
         }
     }
 
+    static func reserveExplicitCallIfConfigurationVerified(
+        provider: ProviderKind, model: String,
+        metadata: AutomaticCallMetadata, timeout: TimeInterval
+    ) -> AutomaticCallBudgetStore.ReservationResult? {
+        NativeProviderVerificationPolicy.performIfVerified(
+            capturedProvider: provider, capturedModel: model, defaults: defaults
+        ) {
+            AutomaticCallBudgetStore().reserveManual(
+                leaseDuration: max(timeout + 30, 60), metadata: metadata
+            )
+        }
+    }
+
     /// Dictionary terms loaded directly from the same JSON the app writes.
     static var dictionary: [DictionaryTerm] {
         guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return [] }
@@ -703,7 +875,9 @@ private struct HostRequest: Decodable {
     let extensionVersion: String?
     let minimumAppVersion: String?
     let text: String?
+    let action: String?
     let settings: Settings?
+    let ownership: BrowserFieldOwnershipRequest?
 
     struct Settings: Decodable { let maxIssues: Int? }
 }
@@ -714,8 +888,12 @@ private struct HostResponse: Encodable {
     var issues: [Issue]? = nil
     var text: String? = nil            // proofreadParagraph: corrected paragraph
     var reviewRequired: Bool? = nil
+    var localSpellingAvailable: Bool? = nil
+    var localCheckAvailable: Bool? = nil
+    var performActionAvailable: Bool? = nil
     var errorCode: String? = nil
     var message: String? = nil
+    var ownershipAccepted: Bool? = nil
     // status-only fields
     var bridgeAvailable: Bool? = nil
     var nativeHostConnected: Bool? = nil
@@ -735,6 +913,7 @@ private struct HostResponse: Encodable {
     var dailyAutomaticCallLimit: Int? = nil
     var automaticCallsToday: Int? = nil
     var automaticAccountingAvailable: Bool? = nil
+    var fieldOwnershipAvailable: Bool? = nil
 
     struct Issue: Encodable {
         let original: String
@@ -742,6 +921,12 @@ private struct HostResponse: Encodable {
         let type: String
         let explanation: String?
         let confidence: Double
+        var start: Int? = nil
+        var end: Int? = nil
+        var source: String? = nil
+        var location: Int? = nil
+        var length: Int? = nil
+        var alternatives: [String]? = nil
     }
 
     static func error(id: String?, code: String, message: String) -> HostResponse {
@@ -754,6 +939,8 @@ private struct HostResponse: Encodable {
         return HostResponse(
             id: request.id,
             ok: true,
+            localCheckAvailable: true,
+            performActionAvailable: true,
             message: compatibility.message,
             bridgeAvailable: true,
             nativeHostConnected: true,
@@ -772,7 +959,8 @@ private struct HostResponse: Encodable {
             requestTimeoutSeconds: configuration.timeout,
             dailyAutomaticCallLimit: configuration.dailyAutomaticCallLimit,
             automaticCallsToday: configuration.automaticCallsToday,
-            automaticAccountingAvailable: configuration.automaticAccountingAvailable
+            automaticAccountingAvailable: configuration.automaticAccountingAvailable,
+            fieldOwnershipAvailable: true
         )
     }
 

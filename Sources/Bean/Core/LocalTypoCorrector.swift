@@ -21,6 +21,7 @@ enum LocalTypoCorrector {
         "occurence": "occurrence",
         "adress": "address",
         "tommorow": "tomorrow",
+        "tomorow": "tomorrow",
         "wierd": "weird",
         "becuase": "because",
         "thier": "their",
@@ -31,13 +32,28 @@ enum LocalTypoCorrector {
         "sucess": "success",
         "sucessful": "successful",
         "calender": "calendar",
-        "prefered": "preferred"
+        "prefered": "preferred",
+        "remeber": "remember",
+        "recomend": "recommend",
+        "recommed": "recommend",
+        "recomendation": "recommendation",
+        "immediatly": "immediately",
+        "neccessary": "necessary",
+        "necesssary": "necessary",
+        "untill": "until",
+        "comming": "coming",
+        "begining": "beginning",
+        "beleive": "believe",
+        "acheive": "achieve"
     ]
 
     /// Returns the corrected word with the original's capitalization pattern
     /// preserved, or nil if `word` isn't a known typo.
     static func correction(for word: String) -> String? {
         guard let replacement = dictionary[word.lowercased()] else { return nil }
+        // Mixed casing generally indicates a product name or identifier.
+        guard word == word.lowercased() || word == word.uppercased()
+                || word == word.prefix(1).uppercased() + word.dropFirst().lowercased() else { return nil }
         return apply(casePatternOf: word, to: replacement)
     }
 

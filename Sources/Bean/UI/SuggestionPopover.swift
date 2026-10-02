@@ -3,15 +3,18 @@ import SwiftUI
 
 // The small, non-intrusive "Bean found a suggestion" popover shown after a
 // typing pause. It must NEVER take key focus (the user is still typing in their
-// app), so it lives in a non-activating, non-key panel near the menu bar.
+// app). Deliberate interaction enables keyboard navigation without activating
+// Bean, and the card stays beside the writing that produced it.
 @MainActor
 final class SuggestionPopoverController {
-    private var panel: NSPanel?
+    private var panel: NonKeyPanel?
+    private var focusSession: OverlaySourceFocusSession?
 
     /// Shows the popover. `showApply` is false when Settings requires a preview
     /// before applying.
     func present(previewText: String,
                  showApply: Bool,
+                 sourceAnchor: CGRect? = nil,
                  onApply: @escaping () -> Void,
                  onPreview: @escaping () -> Void,
                  onIgnore: @escaping () -> Void,
@@ -41,28 +44,45 @@ final class SuggestionPopoverController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentViewController = NSHostingController(rootView: view)
         panel.setContentSize(panel.contentViewController!.view.fittingSize)
-        positionTopRight(panel)
+        position(panel, sourceAnchor: sourceAnchor)
 
         self.panel = panel
         panel.orderFrontRegardless() // does NOT take key focus
     }
 
     func dismiss() {
+        let wasKey = panel?.isKeyWindow == true
+        let wasInteractive = panel?.allowsKeyInteraction == true
         panel?.orderOut(nil)
         panel = nil
+        if wasKey { focusSession?.restoreIfAppropriate() }
+        focusSession = nil
+        if wasInteractive { DockPresence.refreshAfterWindowChange() }
     }
 
     var isShowing: Bool { panel != nil }
 
-    private func positionTopRight(_ window: NSWindow) {
+    func reposition(sourceAnchor: CGRect?) {
+        guard let panel else { return }
+        position(panel, sourceAnchor: sourceAnchor)
+    }
+
+    private func position(_ window: NSWindow, sourceAnchor: CGRect?) {
         let screens = OverlayScreenArea.current
-        let sourceRect: CGRect? = AccessibilityService.focusedField().flatMap { field in
+        let sourceRect: CGRect? = sourceAnchor ?? AccessibilityService.focusedField().flatMap { field in
             TextRangeLocator.selectionRect(for: field.element)
+                ?? TextRangeLocator.caretRect(for: field.element)
                 ?? TextRangeLocator.fieldRect(for: field.element)
         }
         let screen = sourceRect.flatMap { OverlayGeometry.screen(containing: $0, from: screens) }
             ?? OverlayGeometry.screen(containing: NSEvent.mouseLocation, from: screens)
         guard let screen else { return }
+        if let sourceRect {
+            window.setFrameOrigin(OverlayGeometry.cardOrigin(
+                anchoredTo: sourceRect, panelSize: window.frame.size, in: screen.visibleFrame
+            ))
+            return
+        }
         window.setFrameOrigin(OverlayGeometry.topRightOrigin(
             panelSize: window.frame.size,
             in: screen.visibleFrame
@@ -71,8 +91,14 @@ final class SuggestionPopoverController {
 }
 
 private final class NonKeyPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    var allowsKeyInteraction = false
+    var onExplicitInteraction: (() -> Void)?
+    override var canBecomeKey: Bool { allowsKeyInteraction }
     override var canBecomeMain: Bool { false }
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown { onExplicitInteraction?() }
+        super.sendEvent(event)
+    }
 }
 
 struct SuggestionPopoverView: View {
@@ -87,8 +113,18 @@ struct SuggestionPopoverView: View {
         VStack(alignment: .leading, spacing: BeanDesign.Spacing.md) {
             HStack(spacing: BeanDesign.Spacing.sm) {
                 BeanMark(size: 20)
-                Text("Bean found a suggestion").font(.system(size: 13, weight: .semibold))
+                Text("Writing suggestion").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(action: onIgnore) {
+                    Image(systemName: "xmark")
+                        .frame(width: OverlayGeometry.minimumMotorTarget, height: OverlayGeometry.minimumMotorTarget)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .accessibilityLabel("Dismiss suggestion")
             }
+            Text("Suggested version")
+                .font(BeanDesign.Typography.caption()).foregroundColor(.secondary)
             Text(previewText)
                 .font(BeanDesign.Typography.body())
                 .lineLimit(4)
@@ -99,18 +135,20 @@ struct SuggestionPopoverView: View {
                 .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).fill(BeanDesign.warmBackground))
 
             HStack {
-                Button("Ignore") { onIgnore() }.controlSize(.small)
+                Button("Dismiss") { onIgnore() }.controlSize(.small)
                 Spacer()
                 Button("Copy") { onCopy() }.controlSize(.small)
-                Button("Preview") { onPreview() }.controlSize(.small)
+                if !showApply { Button("Review") { onPreview() }.controlSize(.small) }
                 if showApply {
-                    Button("Apply") { onApply() }.controlSize(.small).buttonStyle(.borderedProminent)
+                    Button("Accept") { onApply() }.controlSize(.small).buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
                 }
             }
         }
         .padding(BeanDesign.Spacing.md)
         .frame(width: 320)
         .tint(BeanDesign.accent)
+        .onExitCommand(perform: onIgnore)
         .background(
             RoundedRectangle(cornerRadius: BeanDesign.Radius.card)
                 .fill(.regularMaterial)
