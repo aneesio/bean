@@ -27,7 +27,13 @@ struct TypingPauseActivityTracker {
         guard previous.processIdentifier == next.processIdentifier,
               previous.fieldIdentity == next.fieldIdentity,
               previous.acceptsTextInput == next.acceptsTextInput else { return .focusChanged }
-        return previous.value == next.value ? .unchanged : .textChanged
+        let sameValue: Bool
+        switch (previous.value, next.value) {
+        case (nil, nil): sameValue = true
+        case let (before?, after?): sameValue = before.utf16.elementsEqual(after.utf16)
+        default: sameValue = false
+        }
+        return sameValue ? .unchanged : .textChanged
     }
 
     mutating func reset() { snapshot = nil }

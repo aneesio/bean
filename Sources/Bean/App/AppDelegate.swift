@@ -8,6 +8,7 @@ import Carbon
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = AppSettings()
     private let userContent = UserContentStore()
+    private lazy var dictionaryLearning = DictionaryLearningService(userContent: userContent)
     private let operationHistory = OperationHistoryStore()
     private let usageLedger = UsageLedgerStore()
     private let automaticCallBudget = AutomaticCallBudgetStore()
@@ -36,7 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         usageLedger: usageLedger, automaticCallBudget: automaticCallBudget,
         undoStore: replacementUndo,
         statusHUD: statusHUD,
-        runAction: { [weak self] action in self?.coordinator.runAction(action) }
+        runAction: { [weak self] action in self?.coordinator.runAction(action) },
+        runParagraphAction: { [weak self] action in self?.coordinator.runAction(action, currentParagraph: true) }
     )
 
     private lazy var bubbleService = BeanBubbleService(
@@ -44,7 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusHUD: statusHUD,
         runAction: { [weak self] action in self?.coordinator.runAction(action) },
         openFullMenu: { [weak self] in self?.coordinator.showActionMenu() },
-        openAISettings: { [weak self] in self?.windowPresenter.showSettings(section: .provider) }
+        openAISettings: { [weak self] in self?.windowPresenter.showSettings(section: .provider) },
+        runParagraphAction: { [weak self] action in self?.coordinator.runAction(action, currentParagraph: true) }
     )
 
     private lazy var typingDispatcher = TypingPauseDispatcher(
@@ -76,7 +79,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onCheckCurrentField: { [weak self] in self?.checkCurrentField() },
         onCheckPermissions: { [weak self] in self?.coordinator.checkPermissions() },
         onShowSettings: { [weak self] in self?.windowPresenter.showSettings() },
-        onShowAbout: { [weak self] in self?.windowPresenter.showAbout() }
+        onShowAbout: { [weak self] in self?.windowPresenter.showAbout() },
+        assistanceSettings: settings
     )
 
     private let hotkeyService = HotkeyService()
@@ -95,6 +99,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+
+        // Keep browser learning on this process's authoritative content store.
+        _ = dictionaryLearning
 
         // Reconcile crash-recovery leases even when all automatic features are
         // now off, so minimal reservation metadata never lingers indefinitely.

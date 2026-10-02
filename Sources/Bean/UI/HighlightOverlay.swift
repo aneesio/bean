@@ -3,23 +3,28 @@ import SwiftUI
 
 // Inline-highlights overlay (redesigned). Each issue gets a tiny, transparent,
 // non-activating panel positioned exactly over its text range that draws the
-// underline AND handles hover/click — so the highlight itself is the affordance
-// (no top-right badge). A separate anchored panel shows the correction card next
-// to the issue. The service owns the issue list + selection; this controller
-// just renders and forwards interactions.
+// underline and handles explicit clicks. A quiet field control opens review,
+// progress details, and writing actions. Cards do not appear while typing.
+// The service owns the issue list and selection; this controller renders it.
 @MainActor
 final class HighlightOverlayController {
     struct Entry { let issue: TextIssue; let rect: CGRect? } // nil: exact text, unavailable glyph bounds
 
     // Interaction callbacks (set by the service).
-    var onActivateIssue: ((UUID) -> Void)?   // hover or click a highlight
+    var onActivateIssue: ((UUID) -> Void)?
     var onApply: ((UUID) -> Void)?
     var onApplyAlternative: ((UUID, String) -> Void)?
     var onIgnore: ((UUID) -> Void)?
+    var onLearnWord: ((UUID) -> Void)?
     var onNext: (() -> Void)?
     var onCloseCard: (() -> Void)?
-    var onWritingAction: (() -> Void)?
-    var writingActionLabel = "Quick Fix"
+    var onWritingAction: ((WritingAction, Bool) -> Void)?
+    var onFixAll: (() -> Void)?
+    var onUndo: (() -> Void)?
+    var onPauseApp: (() -> Void)?
+    var onPrepareAssistant: (() -> Void)?
+    var assistantState = NativeAssistantState()
+    var showsAssistantControl = true
     var showExplanation = true
 
     private var highlightPanels: [UUID: OverlayPanel] = [:]
@@ -30,15 +35,10 @@ final class HighlightOverlayController {
     private var preferTrayCardAnchor = false
     private var renderedEntries: [Entry] = []
     private var renderedSelectedID: UUID?
-    private var hoverSampleTimer: Timer?
-    private var hoverCandidateID: UUID?
-    private var hoverCandidateSince: Date?
     private var cardIsInteractive = false
     private var cardFocusSession: OverlaySourceFocusSession?
-    private var lastHoverWithinCard: Date?
+    private var assistantOpen = false
 
-    private let hoverDelay: TimeInterval = 0.2
-    private let hoverSampleInterval: TimeInterval = 0.1
 
     var isShowing: Bool { !highlightPanels.isEmpty || trayPanel != nil || cardPanel != nil }
     var ownsKeyboardInteraction: Bool { cardIsInteractive }
@@ -47,11 +47,9 @@ final class HighlightOverlayController {
 
     func render(entries: [Entry], selectedID: UUID?, position: (index: Int, total: Int)?,
                 sourceAnchor: CGRect? = nil) {
-        guard !entries.isEmpty else { hide(); return }
         self.sourceAnchor = sourceAnchor
         renderedEntries = entries
         renderedSelectedID = selectedID
-        startHoverSamplingIfNeeded()
 
         // Sync highlight panels with the current entries.
         let ids = Set(entries.filter { $0.rect != nil }.map { $0.issue.id })
@@ -67,25 +65,34 @@ final class HighlightOverlayController {
                 highlightPanels[entry.issue.id] = makeHighlightPanel(for: entry.issue.id, frame: frame)
             }
         }
-        showTray(issueCount: entries.count)
+        if showsAssistantControl { showTray(issueCount: entries.count) }
+        else { trayPanel?.orderOut(nil); trayPanel = nil }
 
         // Card for the selected issue (if any).
         if let selectedID, let entry = entries.first(where: { $0.issue.id == selectedID }) {
+            assistantOpen = false
             showCard(for: entry, position: position)
+        } else if assistantOpen {
+            showAssistantCard()
         } else {
             hideCard()
         }
     }
 
     func hide() {
-        stopHoverSampling()
         renderedEntries = []
         renderedSelectedID = nil
+        assistantOpen = false
         for panel in highlightPanels.values { panel.orderOut(nil) }
         highlightPanels.removeAll()
         trayPanel?.orderOut(nil)
         trayPanel = nil
         sourceAnchor = nil
+        hideCard()
+    }
+
+    func dismissExpandedUI() {
+        assistantOpen = false
         hideCard()
     }
 
@@ -115,70 +122,8 @@ final class HighlightOverlayController {
         return panel
     }
 
-    /// Samples global mouse location instead of placing a large transparent
-    /// window over editable text. The >=28pt hover target is therefore forgiving
-    /// while every ordinary source-field click still reaches the source app.
-    private func startHoverSamplingIfNeeded() {
-        guard hoverSampleTimer == nil else { return }
-        let timer = Timer(timeInterval: hoverSampleInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.sampleHover(at: NSEvent.mouseLocation, now: Date()) }
-        }
-        timer.tolerance = hoverSampleInterval / 3
-        RunLoop.main.add(timer, forMode: .common)
-        hoverSampleTimer = timer
-    }
-
-    private func stopHoverSampling() {
-        hoverSampleTimer?.invalidate()
-        hoverSampleTimer = nil
-        hoverCandidateID = nil
-        hoverCandidateSince = nil
-    }
-
-    private func sampleHover(at point: CGPoint, now: Date) {
-        // A deliberately opened card owns keyboard/VoiceOver interaction until
-        // it is dismissed; passing over another underline must not replace it.
-        guard !cardIsInteractive, !cardPinned else {
-            hoverCandidateID = nil
-            hoverCandidateSince = nil
-            return
-        }
-        if let cardPanel, cardPanel.frame.insetBy(dx: -10, dy: -10).contains(point) {
-            lastHoverWithinCard = now
-            return
-        }
-        let candidate = renderedEntries
-            .filter { $0.rect.map { OverlayGeometry.highlightHoverFrame(for: $0).contains(point) } ?? false }
-            .min { lhs, rhs in
-                squaredDistance(point, lhs.rect!.center) < squaredDistance(point, rhs.rect!.center)
-            }
-
-        guard let id = candidate?.issue.id else {
-            hoverCandidateID = nil
-            hoverCandidateSince = nil
-            // Allow a short bridge from the underline to its card. A passive
-            // card then closes as the pointer leaves the writing interaction.
-            if renderedSelectedID != nil,
-               now.timeIntervalSince(lastHoverWithinCard ?? now) > 0.6 {
-                onCloseCard?()
-            }
-            return
-        }
-        lastHoverWithinCard = now
-        if hoverCandidateID != id {
-            hoverCandidateID = id
-            hoverCandidateSince = now
-            lastHoverWithinCard = now
-            return
-        }
-        guard renderedSelectedID != id,
-              let since = hoverCandidateSince,
-              now.timeIntervalSince(since) >= hoverDelay else { return }
-        activateIssue(id, intent: .passiveHover)
-    }
-
     private func activateIssue(_ id: UUID, intent: OverlayActivationIntent, anchorToTray: Bool = false) {
-        lastHoverWithinCard = Date()
+        assistantOpen = false
         preferTrayCardAnchor = anchorToTray
         if intent != .passiveHover { cardPinned = true }
         if intent.allowsKeyboardInteraction, !cardIsInteractive {
@@ -203,11 +148,16 @@ final class HighlightOverlayController {
             onApply: { [weak self] in self?.applyFromCard(entry.issue.id) },
             onApplyAlternative: { [weak self] choice in self?.applyFromCard(entry.issue.id, choice: choice) },
             onIgnore: { [weak self] in self?.onIgnore?(entry.issue.id) },
+            onLearnWord: entry.issue.type == .spelling ? { [weak self] in self?.onLearnWord?(entry.issue.id) } : nil,
             onNext: { [weak self] in self?.onNext?() },
             onClose: { [weak self] in self?.onCloseCard?() }
         )
 
-        let host = NSHostingController(rootView: CorrectionCardView(model: model))
+        let host: NSHostingController<CorrectionCardView>
+        if let existing = cardPanel?.contentViewController as? NSHostingController<CorrectionCardView> {
+            existing.rootView = CorrectionCardView(model: model)
+            host = existing
+        } else { host = NSHostingController(rootView: CorrectionCardView(model: model)) }
         if let cardPanel {
             cardPanel.contentViewController = host
         } else {
@@ -231,7 +181,7 @@ final class HighlightOverlayController {
         if let anchor = anchor ?? trayPanel?.frame ?? sourceAnchor {
             anchorCard(cardPanel!, to: anchor)
         }
-        if cardIsInteractive {
+        if cardIsInteractive, cardPanel?.isKeyWindow != true {
             makeInteractive(cardPanel!, firstResponder: host.view)
         } else {
             cardPanel?.orderFrontRegardless()
@@ -246,7 +196,6 @@ final class HighlightOverlayController {
         cardIsInteractive = false
         cardPinned = false
         preferTrayCardAnchor = false
-        lastHoverWithinCard = nil
         let focusSession = cardFocusSession
         cardFocusSession = nil
         if shouldRestoreFocus { focusSession?.restoreIfAppropriate() }
@@ -281,14 +230,9 @@ final class HighlightOverlayController {
     }
 
     private func showTray(issueCount: Int) {
-        let host = NSHostingController(rootView: LiveIssueTrayView(count: issueCount, actionLabel: writingActionLabel,
-                                                                  onAction: { [weak self] in self?.onWritingAction?() }, onOpen: { [weak self] in
-            guard let self, let id = self.renderedSelectedID ?? self.renderedEntries.first?.issue.id else { return }
-            self.activateIssue(id, intent: .pointer, anchorToTray: true)
-        }, onKeyboardOpen: { [weak self] in
-            guard let self, let id = self.renderedSelectedID ?? self.renderedEntries.first?.issue.id else { return }
-            self.activateIssue(id, intent: .explicit, anchorToTray: true)
-        }))
+        let host = NSHostingController(rootView: NativeAssistantBadgeView(state: assistantState,
+            onOpen: { [weak self] in self?.openAssistant(intent: .pointer) },
+            onKeyboardOpen: { [weak self] in self?.openAssistant(intent: .explicit) }))
         let panel: OverlayPanel
         if let existing = trayPanel { panel = existing }
         else {
@@ -314,6 +258,60 @@ final class HighlightOverlayController {
                                                                  in: screen.visibleFrame))
         }
         panel.orderFrontRegardless()
+    }
+
+    private func openAssistant(intent: OverlayActivationIntent) {
+        onPrepareAssistant?()
+        assistantOpen = true
+        if intent.allowsKeyboardInteraction, !cardIsInteractive {
+            cardFocusSession = OverlaySourceFocusSession.capture()
+            cardIsInteractive = true
+        }
+        showAssistantCard()
+    }
+
+    private func showAssistantCard() {
+        let view = NativeAssistantPanelView(state: assistantState,
+            onReview: { [weak self] in
+                guard let self, let id = self.renderedEntries.first?.issue.id else { return }
+                self.activateIssue(id, intent: self.cardIsInteractive ? .explicit : .pointer, anchorToTray: true)
+            }, onAction: { [weak self] action, paragraph in
+                self?.finishAssistantInteraction { self?.onWritingAction?(action, paragraph) }
+            }, onFixAll: { [weak self] in self?.finishAssistantInteraction { self?.onFixAll?() } },
+            onUndo: { [weak self] in self?.finishAssistantInteraction { self?.onUndo?() } },
+            onPause: { [weak self] in self?.finishAssistantInteraction { self?.onPauseApp?() } },
+            onClose: { [weak self] in self?.assistantOpen = false; self?.hideCard() })
+        // Keep SwiftUI identity and the user's selected scope/focused control
+        // when a background check updates the status of an open assistant.
+        let host: NSHostingController<NativeAssistantPanelView>
+        if let existing = cardPanel?.contentViewController as? NSHostingController<NativeAssistantPanelView> {
+            existing.rootView = view
+            host = existing
+        } else { host = NSHostingController(rootView: view) }
+        if let cardPanel { cardPanel.contentViewController = host }
+        else {
+            let panel = OverlayPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 230),
+                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.level = .statusBar
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = false
+            panel.hidesOnDeactivate = false
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            panel.contentViewController = host
+            cardPanel = panel
+        }
+        cardPanel?.allowsKeyInteraction = cardIsInteractive
+        cardPanel?.setContentSize(host.view.fittingSize)
+        if let anchor = trayPanel?.frame ?? sourceAnchor { anchorCard(cardPanel!, to: anchor) }
+        if cardIsInteractive, cardPanel?.isKeyWindow != true { makeInteractive(cardPanel!, firstResponder: host.view) }
+        else { cardPanel?.orderFrontRegardless() }
+    }
+
+    private func finishAssistantInteraction(_ action: @escaping @MainActor () -> Void) {
+        assistantOpen = false
+        hideCard()
+        Task { @MainActor in action() }
     }
 
     private func makeInteractive(_ panel: OverlayPanel, firstResponder: NSView? = nil) {
@@ -343,7 +341,7 @@ final class HighlightOverlayController {
     }
 }
 
-private final class OverlayPanel: NSPanel {
+final class OverlayPanel: NSPanel {
     var allowsKeyInteraction = false
     var onExplicitInteraction: (() -> Void)?
     override var canBecomeKey: Bool { allowsKeyInteraction }
@@ -397,18 +395,20 @@ final class CardModel: ObservableObject {
     let onApply: () -> Void
     let onApplyAlternative: (String) -> Void
     let onIgnore: () -> Void
+    let onLearnWord: (() -> Void)?
     let onNext: () -> Void
     let onClose: () -> Void
 
     init(issue: TextIssue, positionText: String?, showNext: Bool, showExplanation: Bool,
          onApply: @escaping () -> Void, onApplyAlternative: @escaping (String) -> Void,
-         onIgnore: @escaping () -> Void,
+         onIgnore: @escaping () -> Void, onLearnWord: (() -> Void)? = nil,
          onNext: @escaping () -> Void, onClose: @escaping () -> Void) {
         self.issue = issue
         self.positionText = positionText
         self.showNext = showNext
         self.showExplanation = showExplanation
         self.onApplyAlternative = onApplyAlternative
+        self.onLearnWord = onLearnWord
         self.onApply = onApply; self.onIgnore = onIgnore; self.onNext = onNext; self.onClose = onClose
     }
 }
@@ -462,6 +462,14 @@ struct CorrectionCardView: View {
                 }
             }
 
+            if let onLearnWord = model.onLearnWord {
+                Button("Add to Dictionary", action: onLearnWord)
+                    .controlSize(.small)
+                    .frame(minHeight: OverlayGeometry.minimumMotorTarget)
+                    .accessibilityLabel("Add \(model.issue.original) to Bean dictionary")
+                    .accessibilityHint("Keeps this spelling in future local checks")
+            }
+
             HStack {
                 Button { model.onIgnore() } label: {
                     Text("Dismiss")
@@ -499,42 +507,6 @@ struct CorrectionCardView: View {
         .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.card).fill(.regularMaterial)
             .shadow(color: .black.opacity(0.18), radius: 10, y: 4))
         .onExitCommand { model.onClose() }
-    }
-}
-
-private struct LiveIssueTrayView: View {
-    let count: Int
-    let actionLabel: String
-    let onAction: () -> Void
-    let onOpen: () -> Void
-    let onKeyboardOpen: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: onOpen) {
-                HStack(spacing: 8) {
-                    BeanMark(size: 18)
-                    Text("\(count) suggestion\(count == 1 ? "" : "s")")
-                        .font(.system(size: 12, weight: .semibold))
-                    Image(systemName: "chevron.up").font(.system(size: 9, weight: .semibold))
-                }
-                .padding(.horizontal, 12)
-                .frame(minHeight: 36)
-                .contentShape(Rectangle())
-            }
-            .help("Review suggestions for this field")
-            .accessibilityLabel("\(count) writing suggestion\(count == 1 ? "" : "s"). Review suggestions.")
-            .accessibilityAction(named: Text("Review with keyboard"), onKeyboardOpen)
-            Divider().frame(height: 18)
-            Button(actionLabel, action: onAction)
-                .font(.system(size: 11, weight: .semibold))
-                .padding(.horizontal, 12)
-                .frame(minHeight: 36)
-                .help("\(actionLabel) in this field")
-        }
-        .buttonStyle(.plain)
-        .foregroundColor(.primary)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
     }
 }
 

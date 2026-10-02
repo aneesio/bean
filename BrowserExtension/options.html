@@ -166,6 +166,12 @@
       <p class="footnote">AI checks and paragraph reviews follow the daily limit you set in Bean. Local checks are unlimited.</p>
     </section>
 
+    <section class="card" aria-labelledby="paused-title">
+      <h2 id="paused-title">Paused websites</h2>
+      <p class="muted">One-hour pauses resume automatically. Resume here without reloading an open draft.</p>
+      <div id="paused-list" class="site-list" aria-live="polite"></div>
+    </section>
+
     <section class="card" aria-labelledby="blocked-title">
       <h2 id="blocked-title">Blocked websites</h2>
       <p class="muted">Bean works everywhere it can verify a normal writing field. Add a website only when you want Bean completely hidden there.</p>
@@ -179,8 +185,17 @@
       <p class="footnote">Reload an already-open page after changing its access.</p>
     </section>
 
+    <section class="card" aria-labelledby="performance-title">
+      <div class="card-head">
+        <div><h2 id="performance-title">Performance diagnostics</h2>
+          <p class="muted">Copy timing and result counts to help diagnose slow checks.</p></div>
+        <button id="copy-performance" type="button">Copy diagnostics</button>
+      </div>
+      <p class="footnote">Includes time from your last edit to local feedback and time to apply changes. Stores up to 500 measurements in browser memory, with no writing, websites, or dictionary words. Resets when the extension worker restarts.</p>
+    </section>
     <div id="notice" role="status" aria-live="polite"></div>
   </main>
+  <script src="src/sitePolicy.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

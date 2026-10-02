@@ -3,6 +3,21 @@ import XCTest
 @testable import Bean
 
 final class ReplacementUndoStoreTests: XCTestCase {
+    @MainActor
+    func testUndoAvailabilityMatchesStoredTargetAndExactOutputWithoutLiveReads() throws {
+        let store = ReplacementUndoStore()
+        let app = NSRunningApplication.current
+        let element = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        let other = AXUIElementCreateSystemWide()
+        let plan = try XCTUnwrap(NativeEditPlan.proofread(original: "teh café", corrected: "the café"))
+        store.registerConfirmedEdits(app: app, element: element, plan: plan)
+        XCTAssertTrue(store.isAvailable(for: element, value: "the café", app: app))
+        XCTAssertFalse(store.isAvailable(for: other, value: "the café", app: app))
+        XCTAssertFalse(store.isAvailable(for: element, value: "the cafe\u{301}", app: app))
+        XCTAssertFalse(store.isAvailable(for: element, value: "the newer café", app: app))
+        XCTAssertFalse(store.isAvailable(for: element, value: "the café", app: nil))
+    }
+
     func testConfirmedSelectedEditSupportsUndoWithoutRequiringWholeFieldWrite() {
         let original = "Please fix teh sentence."
         XCTAssertTrue(ReplacementUndoStore.canRegisterRangeUndo(

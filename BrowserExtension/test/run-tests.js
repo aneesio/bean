@@ -2,10 +2,13 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const tests = [
+  "sitePolicy.test.js",
+  "ownershipGuard.test.js",
   "settingsMigration.test.js",
   "background.test.js",
   "coverage.test.js",
   "core.test.js",
+  "minimalEdits.test.js",
   "contentTrust.test.js",
   "options.test.js",
   "popup.test.js",

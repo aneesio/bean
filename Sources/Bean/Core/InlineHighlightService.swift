@@ -1,12 +1,9 @@
 import AppKit
 import ApplicationServices
 
-// Phase 6 + redesign: selective inline highlights with a contextual,
-// anchored correction experience. Highlights are the affordance (no top-right
-// badge): hover/click a highlight → a card appears beside the word with the
-// mistake and fix. Applying one issue fixes only that issue, remaps the
-// remaining issues against the updated field text (dropping any that no longer
-// map uniquely), and continues the session.
+// A quiet field control and exact native underlines share one review session.
+// Cards open only after explicit activation. Accepting a suggestion changes
+// its verified range, preserves unrelated rich content, and offers safe Undo.
 @MainActor
 final class InlineHighlightService {
     private static let maximumInlineCharacters = 50_000
@@ -24,6 +21,7 @@ final class InlineHighlightService {
     private let overlay = HighlightOverlayController()
     private let replacementService: TextSelectionService
     private let runAction: (WritingAction) -> Void
+    private let runParagraphAction: ((WritingAction) -> Void)?
     private let analysisDependencies: AnalysisDependencies
     private var runGeneration = 0
 
@@ -34,18 +32,27 @@ final class InlineHighlightService {
         var value: (AXUIElement) -> String? = { AccessibilityService.value(of: $0) }
         var rangeText: (AXUIElement, NSRange) -> String? = { AccessibilityService.string(in: $0, range: $1) }
         var rangeRect: (AXUIElement, NSRange) -> CGRect? = { TextRangeLocator.screenRects(for: $1, in: $0).first }
-        var localIssues: ((String, [DictionaryTerm], Int) -> [TextIssue])?
+        var localAnalysis: ((String, [DictionaryTerm], Int, WritingDialect) -> IssueDetector.LocalAnalysis)?
         var present: (([HighlightOverlayController.Entry]) -> Void)?
+        var selectedRange: (AXUIElement) -> NSRange? = { AccessibilityService.selectedRange(of: $0) }
+        var anchor: (AXUIElement) -> CGRect? = { TextRangeLocator.fieldRect(for: $0) ?? TextRangeLocator.caretRect(for: $0) }
+        var presentState: ((NativeAssistantState) -> Void)?
+        var canEditRanges: (AXUIElement) -> Bool = { AccessibilityService.isSelectedRangeSettable($0) }
     }
 
     private var lastCallTime: Date?
-    private var ignored = Set<String>()
+    private var dismissed = DismissedIssueTracker()
+    private var dismissalElement: AXUIElement?
+    private(set) var assistantState = NativeAssistantState()
+    var onLocalFeedback: ((Int) -> Void)?
 
     private struct AnalysisSnapshot {
         let element: AXUIElement
         let value: String
         var issues: [TextIssue]
         let configuration: CheckConfiguration
+        var localLimitation: String? = nil
+        var providerLimitation: String? = nil
     }
     private struct CheckConfiguration: Equatable {
         let dictionary: [DictionaryTerm]
@@ -54,6 +61,7 @@ final class InlineHighlightService {
         let usesProvider: Bool
         let providerVerified: Bool
         let issueLimit: Int
+        let dialect: WritingDialect
     }
     private var analysis: AnalysisSnapshot?
     private var isApplying = false
@@ -67,7 +75,6 @@ final class InlineHighlightService {
     private var session: Session?
     private var entries: [HighlightOverlayController.Entry] = []
     private var selectedID: UUID?
-    private var floatingCardSuppressed = false
     private var renderedSourceAnchor: CGRect?
 
     init(settings: AppSettings, userContent: UserContentStore,
@@ -76,6 +83,7 @@ final class InlineHighlightService {
          undoStore: ReplacementUndoStore,
          statusHUD: StatusHUD,
          runAction: @escaping (WritingAction) -> Void,
+         runParagraphAction: ((WritingAction) -> Void)? = nil,
          analysisDependencies: AnalysisDependencies? = nil) {
         self.settings = settings
         self.userContent = userContent
@@ -86,37 +94,88 @@ final class InlineHighlightService {
         self.replacementService = TextSelectionService(undoStore: undoStore)
         self.statusHUD = statusHUD
         self.runAction = runAction
+        self.runParagraphAction = runParagraphAction
         self.analysisDependencies = analysisDependencies ?? AnalysisDependencies()
         overlay.onActivateIssue = { [weak self] id in self?.activate(id) }
         overlay.onApply = { [weak self] id in self?.apply(id) }
         overlay.onApplyAlternative = { [weak self] id, choice in self?.apply(id, choice: choice) }
-        overlay.onIgnore = { [weak self] id in self?.ignore(id) }
+        overlay.onIgnore = { [weak self] id in self?.dismissIssue(id) }
+        overlay.onLearnWord = { [weak self] id in self?.learnWord(id) }
         overlay.onNext = { [weak self] in self?.next() }
         overlay.onCloseCard = { [weak self] in self?.closeCard() }
-        overlay.onWritingAction = { [weak self] in
-            self?.performWritingAction()
-        }
+        overlay.onWritingAction = { [weak self] action, paragraph in self?.performWritingAction(action, currentParagraph: paragraph) }
+        overlay.onFixAll = { [weak self] in self?.fixAll() }
+        overlay.onUndo = { [weak self] in self?.undoLastCorrection() }
+        overlay.onPauseApp = { [weak self] in self?.pauseCurrentApp() }
+        overlay.onPrepareAssistant = { [weak self] in self?.renderOverlay() }
     }
 
     func hideUI() {
         runGeneration += 1
+        overlay.dismissExpandedUI()
         clearPresentation()
     }
 
     private func clearPresentation() {
         overlay.hide(); entries = []; selectedID = nil; session = nil; renderedSourceAnchor = nil
     }
+
+    /// Keep the same small control present across typing revisions. Cards and
+    /// stale underlines close immediately; checking waits for the typing pause.
+    func prepare(field: AccessibilityService.FocusedField, app: NSRunningApplication?) {
+        guard !settings.isAssistancePaused(for: app?.bundleIdentifier) else { hideUI(); return }
+        guard field.acceptsTextInput, !field.isSecure else { hideUI(); return }
+        runGeneration += 1
+        overlay.dismissExpandedUI()
+        entries = []
+        selectedID = nil
+        session = Session(app: app, element: field.element, fingerprint: fingerprint(field.value ?? ""),
+                          value: field.value ?? "")
+        assistantState.phase = field.value == nil ? .unavailable("cannotReadText")
+            : field.value?.isEmpty == true ? .ready : .waiting
+        assistantState.localLimitation = nil
+        assistantState.limitation = nil
+        renderOverlay()
+    }
+
+    func typingBegan() {
+        guard session != nil else { return }
+        runGeneration += 1
+        overlay.dismissExpandedUI()
+        entries = []
+        selectedID = nil
+        assistantState.phase = .waiting
+        assistantState.localLimitation = nil
+        assistantState.limitation = nil
+        renderOverlay()
+    }
+
+    func showUnavailable(field: AccessibilityService.FocusedField, app: NSRunningApplication?, reason: String) {
+        guard field.acceptsTextInput, !field.isSecure else { hideUI(); return }
+        session = Session(app: app, element: field.element, fingerprint: fingerprint(field.value ?? ""),
+                          value: field.value ?? "")
+        entries = []
+        selectedID = nil
+        assistantState.phase = .unavailable(reason)
+        assistantState.localLimitation = nil
+        assistantState.limitation = nil
+        renderOverlay()
+    }
     var isShowingUI: Bool { overlay.isShowing }
     var isApplyingCorrection: Bool { isApplying }
     var ownsUIInteraction: Bool { overlay.ownsKeyboardInteraction }
+    var selectedIssueID: UUID? { selectedID }
 
     /// A successful Bean edit already remapped this exact session. The polling
     /// dispatcher can acknowledge it without closing the next correction card.
     func matchesCurrentSession(app: NSRunningApplication?, field: AccessibilityService.FocusedField) -> Bool {
-        guard let session else { return false }
+        guard let session, let analysis,
+              AccessibilityService.isSameElement(analysis.element, session.element),
+              TextSelectionService.exactTextMatches(analysis.value, session.value),
+              analysis.configuration == currentConfiguration() else { return false }
         return app?.processIdentifier == session.app?.processIdentifier
             && AccessibilityService.isSameElement(field.element, session.element)
-            && field.value == session.value
+            && TextSelectionService.exactTextMatches(field.value, session.value)
     }
 
     /// Keep geometry attached to live text when the source window moves or
@@ -127,16 +186,15 @@ final class InlineHighlightService {
               NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
               let focused = AccessibilityService.focusedField(in: app)?.element,
               AccessibilityService.isSameElement(focused, session.element),
-              AccessibilityService.value(of: session.element) == session.value else { hideUI(); return }
-        let issues = (analysis?.issues ?? entries.map(\.issue)).filter {
-            !ignored.contains(ignoreKey(session.fingerprint, $0))
+              TextSelectionService.exactTextMatches(AccessibilityService.value(of: session.element), session.value) else { hideUI(); return }
+        let issues = (analysis.flatMap { TextSelectionService.exactTextMatches($0.value, session.value) ? $0.issues : nil } ?? entries.map(\.issue)).filter {
+            !dismissed.contains($0)
         }
         let updated = remap(issues, in: session.value, element: session.element)
         let geometryChanged = updated.count != entries.count || zip(updated, entries).contains {
             $0.issue.id != $1.issue.id || $0.rect != $1.rect
         }
-        let sourceAnchor = TextRangeLocator.fieldRect(for: session.element)
-            ?? TextRangeLocator.caretRect(for: session.element)
+        let sourceAnchor = analysisDependencies.anchor(session.element)
         guard geometryChanged || sourceAnchor != renderedSourceAnchor else { return }
         entries = updated
         if !entries.contains(where: { $0.issue.id == selectedID }) { selectedID = nil }
@@ -179,53 +237,106 @@ final class InlineHighlightService {
 
     func run(field: AccessibilityService.FocusedField, app: NSRunningApplication?,
              context: SourceAppContext, isCurrent: @escaping () -> Bool, reason: inout String) async -> Bool {
+        guard !settings.isAssistancePaused(for: app?.bundleIdentifier ?? context.bundleIdentifier) else {
+            reason = "appPaused"; hideUI(); return false
+        }
         guard !field.isSecure, field.acceptsTextInput else { reason = "unsupportedField"; return false }
-        guard let value = field.value, !value.isEmpty else { reason = "cannotReadText"; return false }
-        guard value.count <= Self.maximumInlineCharacters else { reason = "textTooLong"; return false }
+        guard let value = field.value else {
+            reason = "cannotReadText"; showUnavailable(field: field, app: app, reason: reason); return false
+        }
+        guard !value.isEmpty else { prepare(field: field, app: app); reason = "empty"; return false }
+        guard value.count <= Self.maximumInlineCharacters else {
+            reason = "textTooLong"; showUnavailable(field: field, app: app, reason: reason); return false
+        }
         let checkGeneration = runGeneration
         let fp = fingerprint(value)
         let configuration = currentConfiguration()
+        let dialect = configuration.dialect
+        guard !Task.isCancelled, isCurrent(), TextSelectionService.exactTextMatches(analysisDependencies.value(field.element), value) else {
+            reason = "staleDiscarded"; return false
+        }
+        defer {
+            if assistantState.phase == .checkingAI, reason != "staleDiscarded" {
+                assistantState.phase = .complete
+                assistantState.limitation = reason
+                analysis?.providerLimitation = reason
+                renderOverlay()
+            }
+        }
         if let analysis, AccessibilityService.isSameElement(analysis.element, field.element),
-           analysis.value == value, analysis.configuration == configuration {
+           TextSelectionService.exactTextMatches(analysis.value, value), analysis.configuration == configuration {
             guard !Task.isCancelled, checkGeneration == runGeneration, isCurrent(),
-                  analysisDependencies.value(field.element) == value else {
+                  TextSelectionService.exactTextMatches(analysisDependencies.value(field.element), value) else {
                 reason = "staleDiscarded"; return false
             }
-            let cached = analysis.issues.filter { !ignored.contains(ignoreKey(fp, $0)) }
+            let cached = analysis.issues.filter { !dismissed.contains($0) }
             entries = remap(cached, in: value, element: field.element)
-            guard !entries.isEmpty else {
-                clearPresentation()
-                reason = cached.isEmpty ? "noIssues" : "cannotLocateRanges"
-                return false
-            }
             session = Session(app: app, element: field.element, fingerprint: fp, value: value)
             selectedID = nil
+            assistantState.localLimitation = analysis.localLimitation
+            assistantState.limitation = analysis.providerLimitation
+            assistantState.phase = cached.isEmpty || !entries.isEmpty ? .complete : .unavailable("cannotLocateRanges")
+            guard !entries.isEmpty else {
+                reason = cached.isEmpty ? "noIssues" : "cannotLocateRanges"
+                renderOverlay()
+                onLocalFeedback?(entries.count)
+                AssistanceMetrics.shared.recordNativeAnalysis(inputLength: value.count, issueCount: entries.count,
+                    elapsedMilliseconds: 0, cached: true, outcome: reason)
+                return false
+            }
             renderOverlay()
+            onLocalFeedback?(entries.count)
+            AssistanceMetrics.shared.recordNativeAnalysis(inputLength: value.count, issueCount: entries.count,
+                elapsedMilliseconds: 0, cached: true, outcome: "shown")
             reason = "shown"
             return true
         }
-        clearPresentation()
-        ignored.removeAll()
-        floatingCardSuppressed = false
+        if dismissalElement.map({ AccessibilityService.isSameElement($0, field.element) }) == true {
+            dismissed.update(to: value)
+        } else {
+            dismissalElement = field.element
+            dismissed.reset(to: value)
+        }
+        entries = []
+        selectedID = nil
+        session = Session(app: app, element: field.element, fingerprint: fp, value: value)
+        assistantState.phase = .checkingLocal
+        assistantState.limitation = nil
+        assistantState.localLimitation = nil
+        renderOverlay()
 
+        let localStartedAt = Date()
         var localDetector = detector
         localDetector.maxIssues = max(8, (value as NSString).length)
-        var issues = analysisDependencies.localIssues?(value, userContent.dictionary, localDetector.maxIssues)
-            ?? localDetector.localIssues(in: value, dictionary: userContent.dictionary)
+        let local = analysisDependencies.localAnalysis?(value, userContent.dictionary, localDetector.maxIssues, dialect)
+            ?? localDetector.localAnalysis(in: value, dictionary: userContent.dictionary, dialect: dialect)
+        var issues = local.issues
+        let coverages = [local.spellingCoverage, local.grammarCoverage]
+        let localLimitation: String?
+        if coverages.contains(.invalidResponse) { localLimitation = "invalidResponse" }
+        else if coverages.contains(.unavailable) { localLimitation = "unavailable" }
+        else if coverages.contains(.limitReached) { localLimitation = "limitReached" }
+        else { localLimitation = nil }
+        assistantState.localLimitation = localLimitation
+        AssistanceMetrics.shared.recordNativeAnalysis(inputLength: value.count, issueCount: issues.count,
+            elapsedMilliseconds: Int(Date().timeIntervalSince(localStartedAt) * 1_000), cached: false, outcome: issues.isEmpty ? "noIssues" : "shown")
         guard !Task.isCancelled, checkGeneration == runGeneration, isCurrent(),
-              analysisDependencies.value(field.element) == value else {
+              TextSelectionService.exactTextMatches(analysisDependencies.value(field.element), value) else {
             reason = "staleDiscarded"; return false
         }
         // Local feedback appears immediately. A slower optional provider check
         // must never hold back the underline or simple in-field correction.
+        analysis = AnalysisSnapshot(element: field.element, value: value, issues: issues,
+                                    configuration: configuration, localLimitation: localLimitation)
         if !issues.isEmpty {
-            analysis = AnalysisSnapshot(element: field.element, value: value, issues: issues,
-                                        configuration: configuration)
             session = Session(app: app, element: field.element, fingerprint: fp, value: value)
-            entries = remap(issues, in: value, element: field.element)
+            entries = remap(issues.filter { !dismissed.contains($0) }, in: value, element: field.element)
             selectedID = nil
-            renderOverlay()
         }
+        assistantState.phase = .complete
+        renderOverlay()
+        onLocalFeedback?(entries.count)
+        var providerLimitation: String?
         var llmCount = 0
         let remainingLLMCapacity = IssueDetector.remainingProviderIssueCapacity(
             totalLimit: settings.inlineMaxIssues, localIssueCount: issues.count
@@ -249,17 +360,20 @@ final class InlineHighlightService {
             text: value,
             context: context,
             dictionary: userContent.dictionary,
-            maximumIssues: remainingLLMCapacity
+            maximumIssues: remainingLLMCapacity, dialect: dialect
         )
         let llmCooldownElapsed = lastCallTime.map {
             Date().timeIntervalSince($0) >= EngineConfig.automaticLLMCooldown
         } ?? true
         if wantsLLM, !providerInputWithinLimit {
+            providerLimitation = "providerInputTooLong"
             if issues.isEmpty { reason = "providerInputTooLong"; return false }
         } else if wantsLLM, llmCooldownElapsed {
+            assistantState.phase = .checkingAI
+            renderOverlay()
             await Task.pause(.seconds(max(settings.passiveDelay, 1.2) - 0.45))
             guard !Task.isCancelled, checkGeneration == runGeneration, isCurrent(), currentConfiguration() == configuration,
-                  analysisDependencies.value(field.element) == value else {
+                  TextSelectionService.exactTextMatches(analysisDependencies.value(field.element), value) else {
                 reason = "staleDiscarded"; return false
             }
             let apiKey = settings.apiKey
@@ -278,9 +392,11 @@ final class InlineHighlightService {
             case .reserved(let value):
                 reservation = value
             case .limitReached:
+                providerLimitation = "automaticDailyLimit"
                 reservation = nil
                 if issues.isEmpty { reason = "automaticDailyLimit"; return false }
             case .unavailable:
+                providerLimitation = "usageReservationUnavailable"
                 reservation = nil
                 if issues.isEmpty { reason = "usageReservationUnavailable"; return false }
             }
@@ -293,8 +409,11 @@ final class InlineHighlightService {
                     llmDetector.maxIssues = remainingLLMCapacity
                     let llm = await llmDetector.llmIssues(
                         in: value, context: context, dictionary: userContent.dictionary,
-                        provider: provider, model: model, apiKey: apiKey, timeout: timeout
+                        provider: provider, model: model, apiKey: apiKey, timeout: timeout, dialect: dialect
                     )
+                    if llm.usage == nil || llm.failureOutcome != nil {
+                        providerLimitation = llm.failureOutcome ?? "providerFailed"
+                    }
                     llmCount = llm.issues.count
                     issues += llm.issues
                     if let usage = llm.usage {
@@ -313,9 +432,9 @@ final class InlineHighlightService {
                         reason = llm.failureOutcome ?? "providerFailed"
                         return false
                     }
-                } else if issues.isEmpty {
-                    reason = "usageReservationUnavailable"
-                    return false
+                } else {
+                    providerLimitation = "usageReservationUnavailable"
+                    if issues.isEmpty { reason = "usageReservationUnavailable"; return false }
                 }
             }
         } else if providerModeEnabled, !providerVerified, issues.isEmpty {
@@ -325,19 +444,24 @@ final class InlineHighlightService {
         }
 
         guard checkGeneration == runGeneration, isCurrent(), currentConfiguration() == configuration,
-              let nowValue = analysisDependencies.value(field.element), nowValue == value else {
+              let nowValue = analysisDependencies.value(field.element), TextSelectionService.exactTextMatches(nowValue, value) else {
             reason = "staleDiscarded"; return false
         }
 
-        issues = issues.filter { !ignored.contains(ignoreKey(fp, $0)) }
         issues = IssueDetector.nonOverlappingIssues(issues, limit: max(1, issues.count))
         analysis = AnalysisSnapshot(element: field.element, value: value, issues: issues,
-                                    configuration: configuration)
+                                    configuration: configuration, localLimitation: localLimitation,
+                                    providerLimitation: providerLimitation)
 
-        let mapped = remap(issues, in: value, element: field.element)
+        let visible = issues.filter { !dismissed.contains($0) }
+        let mapped = remap(visible, in: value, element: field.element)
+        session = Session(app: app, element: field.element, fingerprint: fp, value: value)
+        assistantState.phase = visible.isEmpty || !mapped.isEmpty ? .complete : .unavailable("cannotLocateRanges")
+        assistantState.limitation = providerLimitation
         guard !mapped.isEmpty else {
-            clearPresentation()
-            reason = issues.isEmpty ? "noIssues" : "cannotLocateRanges"
+            entries = []
+            renderOverlay()
+            reason = visible.isEmpty ? "noIssues" : "cannotLocateRanges"
             return false
         }
 
@@ -354,7 +478,6 @@ final class InlineHighlightService {
 
     private func activate(_ id: UUID) {
         guard entries.contains(where: { $0.issue.id == id }) else { return }
-        floatingCardSuppressed = false
         selectedID = id
         diag(["inlineCardShown": "true"])
         renderOverlay()
@@ -362,7 +485,6 @@ final class InlineHighlightService {
 
     private func closeCard() {
         selectedID = nil
-        floatingCardSuppressed = true
         renderOverlay()
     }
 
@@ -372,15 +494,34 @@ final class InlineHighlightService {
         renderOverlay()
     }
 
-    private func ignore(_ id: UUID) {
+    func dismissIssue(_ id: UUID) {
         guard let s = session, let i = entries.firstIndex(where: { $0.issue.id == id }) else { return }
-        ignored.insert(ignoreKey(s.fingerprint, entries[i].issue))
-        analysis?.issues.removeAll(where: { $0.id == id })
-        entries = remap(analysis?.issues ?? entries.filter { $0.issue.id != id }.map(\.issue),
+        dismissed.dismiss(entries[i].issue)
+        entries = remap((analysis?.issues ?? entries.map(\.issue)).filter { !dismissed.contains($0) },
                         in: s.value, element: s.element)
-        if entries.isEmpty { hideUI(); statusHUD.show(.info, "No more suggestions"); return }
-        selectedID = entries[min(i, entries.count - 1)].issue.id // show next
+        selectedID = entries.isEmpty ? nil : entries[min(i, entries.count - 1)].issue.id
+        assistantState.phase = .complete
         renderOverlay()
+    }
+
+    func learnWord(_ id: UUID) {
+        guard let s = session, let issue = entries.first(where: { $0.issue.id == id })?.issue,
+              issue.type == .spelling else { return }
+        switch userContent.upsert(DictionaryTerm(term: issue.original)) {
+        case .inserted, .updated, .rejectedDuplicate:
+            let visible = (analysis?.issues ?? entries.map(\.issue)).filter {
+                $0.original.caseInsensitiveCompare(issue.original) != .orderedSame
+            }
+            analysis = AnalysisSnapshot(element: s.element, value: s.value, issues: visible,
+                                        configuration: currentConfiguration(), localLimitation: analysis?.localLimitation,
+                                        providerLimitation: analysis?.providerLimitation)
+            entries = remap(visible.filter { !dismissed.contains($0) }, in: s.value, element: s.element)
+            selectedID = nil
+            assistantState.phase = .complete
+            renderOverlay()
+        default:
+            statusHUD.showWarning("That word couldn’t be saved. Check your dictionary in Settings.")
+        }
     }
 
     private func apply(_ id: UUID, choice: String? = nil) {
@@ -405,7 +546,7 @@ final class InlineHighlightService {
               let current = AccessibilityService.focusedField(in: app)?.element,
               AccessibilityService.isSameElement(current, s.element),
               let nowValue = AccessibilityService.value(of: s.element),
-              nowValue == s.value,
+              TextSelectionService.exactTextMatches(nowValue, s.value),
               let expected = InlineIssueMapping.expectedValue(afterApplying: chosen, to: nowValue) else {
             diag(["inlineApplyResult": "stale"])
             hideUI()
@@ -414,10 +555,12 @@ final class InlineHighlightService {
         }
 
         let selection = AccessibilityService.selectedRange(of: s.element)
+        let replacementStartedAt = Date()
         let result = await replacementService.replaceRange(
             app: app, element: s.element, valueBefore: nowValue, range: entry.issue.range,
             replacement: chosen.suggestion, selectionToRestore: selection
         )
+        recordAcceptance(result, inputLength: chosen.original.utf16.count, issueCount: 1, startedAt: replacementStartedAt)
         switch result {
         case .replacedConfirmed: break
         case .replacementSentUnconfirmed:
@@ -441,7 +584,7 @@ final class InlineHighlightService {
             statusHUD.show(.warning, reason)
             return
         }
-        guard let updatedValue = AccessibilityService.value(of: s.element), updatedValue == expected else {
+        guard let updatedValue = AccessibilityService.value(of: s.element), TextSelectionService.exactTextMatches(updatedValue, expected) else {
             // The shared replacement path already confirmed this edit. New
             // typing afterward invalidates the cards, not that confirmation.
             diag(["inlineApplyResult": "replacedConfirmedNewerText"])
@@ -457,10 +600,11 @@ final class InlineHighlightService {
         let beforeCount = remaining.count
         let newFp = fingerprint(updatedValue)
         analysis = AnalysisSnapshot(element: s.element, value: updatedValue, issues: remaining,
-                                    configuration: currentConfiguration())
-        ignored.removeAll()
+                                    configuration: currentConfiguration(), localLimitation: analysis?.localLimitation,
+                                    providerLimitation: analysis?.providerLimitation)
+        dismissed.update(to: updatedValue)
         session = Session(app: app, element: s.element, fingerprint: newFp, value: updatedValue)
-        entries = remap(remaining, in: updatedValue, element: s.element)
+        entries = remap(remaining.filter { !dismissed.contains($0) }, in: updatedValue, element: s.element)
         let dropped = beforeCount - entries.count
         diag(["inlineApplyResult": "replacedConfirmed", "lineBreakPreserved": "true",
               "inlineRemainingIssues": String(entries.count), "inlineRemapDroppedCount": String(dropped)])
@@ -469,20 +613,30 @@ final class InlineHighlightService {
             ? { [weak self] in self?.undoLastCorrection() } : nil
         statusHUD.showConfirmedSuccess("Suggestion applied", sourceAnchorRect: TextRangeLocator.fieldRect(for: s.element),
                                        onUndo: undo)
-        if entries.isEmpty {
-            hideUI()
-        } else {
-            selectedID = entries.first?.issue.id // continue with the next issue
-            renderOverlay()
-        }
+        selectedID = entries.first?.issue.id // Continue only an explicitly opened review.
+        assistantState.phase = .complete
+        renderOverlay()
     }
 
     // MARK: - Rendering / remap
 
     private func renderOverlay() {
-        if selectedID == nil, !floatingCardSuppressed, !entries.isEmpty, entries.allSatisfy({ $0.rect == nil }) {
-            selectedID = entries.first?.issue.id
-        }
+        assistantState.issueCount = entries.count
+        assistantState.aiAvailable = settings.hasAPIKey
+        assistantState.safeFixCount = session.flatMap { s in
+            let safe = safeIssues(in: s.value)
+            return !safe.isEmpty && analysisDependencies.canEditRanges(s.element) ? safe.count : 0
+        } ?? 0
+        assistantState.scope = session.flatMap { analysisDependencies.selectedRange($0.element) }
+            .map { $0.length > 0 ? "selected text" : "draft" } ?? "draft"
+        assistantState.canPauseApp = session?.app?.bundleIdentifier != nil
+        assistantState.canChooseParagraph = runParagraphAction != nil && (session.map {
+            guard let caret = analysisDependencies.selectedRange($0.element),
+                  analysisDependencies.canEditRanges($0.element) else { return false }
+            return NativeActionScope.paragraphRange(in: $0.value, caret: caret) != nil
+        } ?? false)
+        assistantState.canUndo = session.map { undoStore.isAvailable(for: $0.element, value: $0.value, app: $0.app) } ?? false
+        analysisDependencies.presentState?(assistantState)
         if let present = analysisDependencies.present {
             present(entries)
             return
@@ -491,10 +645,9 @@ final class InlineHighlightService {
             entries.firstIndex(where: { $0.issue.id == id }).map { ($0, entries.count) }
         }
         overlay.showExplanation = settings.inlineShowExplanation
-        overlay.writingActionLabel = settings.hasAPIKey ? "AI Proofread" : "Quick Fix"
-        let sourceAnchor = session.flatMap {
-            TextRangeLocator.fieldRect(for: $0.element) ?? TextRangeLocator.caretRect(for: $0.element)
-        }
+        overlay.assistantState = assistantState
+        overlay.showsAssistantControl = settings.bubbleEnabled || (!entries.isEmpty && entries.allSatisfy { $0.rect == nil })
+        let sourceAnchor = session.flatMap { analysisDependencies.anchor($0.element) }
         renderedSourceAnchor = sourceAnchor
         overlay.render(entries: entries, selectedID: selectedID, position: position, sourceAnchor: sourceAnchor)
     }
@@ -518,9 +671,8 @@ final class InlineHighlightService {
         }
     }
 
-    private func performWritingAction() {
+    private func performWritingAction(_ action: WritingAction, currentParagraph: Bool = false) {
         guard let captured = session, let app = captured.app, !app.isTerminated else { return }
-        let action: WritingAction = settings.hasAPIKey ? .proofread : .localQuickCheck
         hideUI()
         Task { [weak self] in
             guard let self else { return }
@@ -539,7 +691,8 @@ final class InlineHighlightService {
                 self.statusHUD.show(.warning, "Return to the original field, then choose Bean again.")
                 return
             }
-            self.runAction(action)
+            if currentParagraph, let runParagraphAction = self.runParagraphAction { runParagraphAction(action) }
+            else { self.runAction(action) }
         }
     }
 
@@ -581,14 +734,78 @@ final class InlineHighlightService {
                            model: settings.model,
                            usesProvider: !settings.inlineLocalOnly && settings.inlineIncludeLLM && !automaticProviderIsPaused,
                            providerVerified: settings.isProviderConnectionVerified,
-                           issueLimit: settings.inlineMaxIssues)
+                           issueLimit: settings.inlineMaxIssues, dialect: settings.writingDialect)
     }
 
     private var automaticProviderIsPaused: Bool {
         settings.passivePausedUntil.map { $0 > Date() } ?? false
     }
 
-    private func ignoreKey(_ fp: Int, _ issue: TextIssue) -> String { "\(fp):\(issue.original):\(issue.range.location)" }
+    private func safeIssues(in value: String) -> [TextIssue] {
+        guard let analysis, TextSelectionService.exactTextMatches(analysis.value, value),
+              analysis.configuration == currentConfiguration() else { return [] }
+        return Array(analysis.issues.filter {
+            $0.source == .local && $0.confidence >= 0.95 && !dismissed.contains($0)
+                && TextBoundarySafety.isSingleLine($0.original)
+                && TextBoundarySafety.preservesLineBreakStructure(from: $0.original, to: $0.suggestion)
+                && InlineIssueMapping.resolvedRange(for: $0, in: value) == $0.range
+        }.prefix(NativeEditPlan.maximumEdits))
+    }
+
+    private func pauseCurrentApp() {
+        guard let bundle = session?.app?.bundleIdentifier else { return }
+        settings.pauseAssistance(in: bundle)
+        hideUI()
+    }
+
+    private func fixAll() {
+        guard !isApplying, let captured = session, let app = captured.app, !app.isTerminated else { return }
+        let issues = safeIssues(in: captured.value)
+        let edits = issues.map { NativeTextEdit(range: $0.range, original: $0.original, replacement: $0.suggestion) }
+        guard !edits.isEmpty, NativeEditPlan.validated(original: captured.value, edits: edits) != nil else { return }
+        isApplying = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isApplying = false }
+            if #available(macOS 14.0, *) { app.activate() } else { app.activate(options: []) }
+            await Task.pause(Timing.afterActivate)
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                  let field = AccessibilityService.focusedField(in: app),
+                  AccessibilityService.isSameElement(field.element, captured.element),
+                  TextSelectionService.exactTextMatches(field.value, captured.value) else {
+                self.hideUI()
+                self.statusHUD.showWarning("Your text changed. Bean kept your newer writing.")
+                return
+            }
+            let replacementStartedAt = Date()
+            let result = await self.replacementService.replaceEdits(app: app, element: captured.element,
+                valueBefore: captured.value, edits: edits, selectionToRestore: AccessibilityService.selectedRange(of: captured.element))
+            self.recordAcceptance(result, inputLength: captured.value.utf16.count, issueCount: edits.count, startedAt: replacementStartedAt)
+            if result == .replacedConfirmed {
+                self.analysis = nil
+                self.hideUI()
+                if let updated = AccessibilityService.focusedField(in: app) { self.prepare(field: updated, app: app) }
+                self.statusHUD.showConfirmedSuccess("\(edits.count) obvious issues fixed", sourceAnchorRect: self.analysisDependencies.anchor(captured.element),
+                    onUndo: self.undoStore.isAvailable ? { [weak self] in self?.undoLastCorrection() } : nil)
+            } else {
+                self.hideUI()
+                self.statusHUD.showWarning("Bean couldn’t finish every correction. Review your field before trying again.")
+            }
+        }
+    }
+
+    private func recordAcceptance(_ result: TextSelectionService.ReplacementResult, inputLength: Int,
+                                  issueCount: Int, startedAt: Date) {
+        let outcome: String
+        switch result {
+        case .replacedConfirmed: outcome = "replacedConfirmed"
+        case .replacementSentUnconfirmed: outcome = "replacementSentUnconfirmed"
+        case .noChangesNeeded: outcome = "noChangesNeeded"
+        default: outcome = "failed"
+        }
+        AssistanceMetrics.shared.record(kind: .nativeAcceptance, inputLength: inputLength, issueCount: issueCount,
+            elapsedMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1_000), outcome: outcome)
+    }
 
     private func diag(_ extra: [String: String]) {
         guard settings.diagnosticsEnabled else { return }

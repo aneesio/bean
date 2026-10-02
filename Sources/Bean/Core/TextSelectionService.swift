@@ -42,6 +42,11 @@ final class TextSelectionService {
         case failed(reason: String)
     }
 
+    enum ReplacementStrategy: Equatable {
+        case selectedSpan
+        case minimalProofread
+    }
+
     /// Content-free diagnostics for acquisition failures. Never retain field
     /// text, titles, clipboard contents, or app identity in this reason.
     enum AcquisitionFailureReason: String {
@@ -53,6 +58,7 @@ final class TextSelectionService {
         case clipboardUnavailable
         case focusedFieldFallbackDisabled
         case inputTooLong
+        case preciseParagraphUnavailable
     }
 
     private(set) var lastAcquisitionFailureReason: AcquisitionFailureReason?
@@ -75,13 +81,20 @@ final class TextSelectionService {
         var selectionToRestore: NSRange? = nil
         var allowsEmptyRangeReplacement = false
         var selectionSnapshotBefore: AccessibilityService.TextSelectionSnapshot? = nil
+        var deferredSelectionRange: NSRange? = nil
     }
 
     private var pending: Pending?
 
+    var capturedScopeLabel: String? {
+        guard let pending else { return nil }
+        if pending.deferredSelectionRange != nil { return "Current paragraph" }
+        return pending.mode == .selectedText ? "Selected text" : "Whole field"
+    }
+
     // MARK: - Acquisition
 
-    func acquire(allowFocusedFieldFallback: Bool) async -> TextAcquisitionResult {
+    func acquire(allowFocusedFieldFallback: Bool, preferCurrentParagraph: Bool = false) async -> TextAcquisitionResult {
         lastAcquisitionFailureReason = nil
         let interactionMonitor = GuardedInteractionMonitor()
         let interactionRevision = interactionMonitor.revision
@@ -263,6 +276,28 @@ final class TextSelectionService {
         if let value = field.value,
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            field.acceptsTextInput || electronTextSurface {
+            if preferCurrentParagraph, value.contains(where: { $0.isNewline }) {
+                guard let caret = AccessibilityService.selectedRange(of: field.element),
+                      AccessibilityService.isSelectedRangeSettable(field.element),
+                      let paragraph = NativeActionScope.paragraphRange(in: value, caret: caret)
+                else { return acquisitionFailure(.preciseParagraphUnavailable) }
+                let text = (value as NSString).substring(with: paragraph)
+                guard text.count <= EngineConfig.maxAutoFieldCharacters else {
+                    return acquisitionFailure(.inputTooLong, result: .tooLong)
+                }
+                // Reading the paragraph does not move the user's caret while
+                // a provider works. Exact source/caret proof precedes selection.
+                pending = Pending(mode: .selectedText, savedClipboard: savedClipboard,
+                    targetApp: targetApp, focusedElement: field.element,
+                    valueSettable: field.isValueSettable, fieldValueReadable: true,
+                    valueBefore: value, selectedRangeBefore: caret,
+                    clipboardOwnershipChangeCount: clipboardOwnershipAfterSelectionAttempt,
+                    keepsFallbackCorrection: false, acquiredViaCmdA: false,
+                    allowsAXFreeFullFieldPaste: false, slackTypingAnchor: nil,
+                    selectionToRestore: caret, deferredSelectionRange: paragraph)
+                let context = SourceAppContext.current(app: targetApp, field: field, mode: .selectedText)
+                return .acquired(text: text, mode: .selectedText, context: context)
+            }
             if value.count > EngineConfig.maxAutoFieldCharacters {
                 Log.event("Focused field exceeds length guard")
                 return acquisitionFailure(.inputTooLong, result: .tooLong)
@@ -455,6 +490,92 @@ final class TextSelectionService {
 
     // MARK: - Replacement
 
+    /// Applies nonoverlapping original-snapshot spans in one guarded session.
+    /// Never broadens a missing range into a whole-document plain-text paste.
+    func replaceEdits(app: NSRunningApplication, element: AXUIElement, valueBefore: String,
+                      edits: [NativeTextEdit], selectionToRestore: NSRange? = nil,
+                      capturedSelection: NSRange? = nil) async -> ReplacementResult {
+        guard let plan = NativeEditPlan.validated(original: valueBefore, edits: edits) else {
+            return .failed(reason: "The corrections no longer match this field or change document structure.")
+        }
+        guard !plan.edits.isEmpty else { return .noChangesNeeded }
+        guard await reactivateAndConfirm(app),
+              let field = AccessibilityService.focusedField(in: app), field.acceptsTextInput,
+              AccessibilityService.isSameElement(field.element, element),
+              Self.exactTextMatches(field.value, valueBefore),
+              AccessibilityService.isSelectedRangeSettable(element) else {
+            return .failed(reason: "This editor cannot safely target the corrections. Select the text and try again.")
+        }
+        let selection = AccessibilityService.selectedRange(of: element)
+        guard let selection else {
+            return .failed(reason: "This editor does not expose a precise caret or selection.")
+        }
+        let monitor = GuardedInteractionMonitor()
+        let revision = monitor.revision
+        defer { monitor.stop() }
+        let savedClipboard = ClipboardService.snapshot()
+        let initialClipboardCount = ClipboardService.changeCount
+        var ownedClipboardCount: Int?
+        let destinationIsValid: () -> Bool = {
+            guard !Task.isCancelled,
+                  !monitor.isAvailable || monitor.revision == revision,
+                  ClipboardService.changeCount == (ownedClipboardCount ?? initialClipboardCount),
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                  let focused = AccessibilityService.focusedField(in: app), focused.acceptsTextInput,
+                  AccessibilityService.isSameElement(focused.element, element) else { return false }
+            return true
+        }
+        let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: capturedSelection ?? selection,
+            effects: .init(destinationIsValid: destinationIsValid,
+                readValue: { AccessibilityService.value(of: element) },
+                selectedRange: { AccessibilityService.selectedRange(of: element) },
+                setSelectedRange: { AccessibilityService.setSelectedRange($0, on: element) },
+                sendEdit: { replacement in
+                    if replacement.isEmpty { ClipboardService.simulateDelete() }
+                    else {
+                        ClipboardService.writeString(replacement)
+                        ownedClipboardCount = ClipboardService.changeCount
+                        ClipboardService.simulatePaste()
+                    }
+                },
+                verify: { before, expected in
+                    if Self.verificationResult(after: AccessibilityService.value(of: element),
+                                               valueBefore: before, expectedAfter: expected) == .replacedConfirmed {
+                        return .replacedConfirmed
+                    }
+                    return await Self.verifyReplacement(valueBefore: before, expectedAfter: expected,
+                        readValue: { AccessibilityService.value(of: element) }, wait: { await Task.pause($0) })
+                }))
+        if outcome.editWasSent { undoStore.discard() }
+        if !outcome.confirmedEdits.isEmpty,
+           Self.exactTextMatches(AccessibilityService.value(of: element), outcome.confirmedValue),
+           let applied = NativeEditPlan.validated(original: valueBefore, edits: outcome.confirmedEdits),
+            Self.exactTextMatches(applied.replacement, outcome.confirmedValue) {
+            undoStore.registerConfirmedEdits(app: app, element: element, plan: applied)
+            let currentSelection = AccessibilityService.selectedRange(of: element)
+            let selectionIsOurs = outcome.lastReplacementRange.map {
+                Self.shouldRestoreSelectionAfterPaste(current: currentSelection, replacementRange: $0)
+            } == true || (outcome.lastRequestedRange != nil && currentSelection == outcome.lastRequestedRange)
+            if destinationIsValid(), selectionIsOurs,
+               let mapped = applied.selectionAfterEdits(selectionToRestore ?? selection) {
+                AccessibilityService.setSelectedRange(mapped, on: element)
+            }
+        } else if !outcome.editWasSent, destinationIsValid(),
+                  Self.exactTextMatches(AccessibilityService.value(of: element), valueBefore),
+                  plan.edits.contains(where: { AccessibilityService.selectedRange(of: element) == $0.range }) {
+            AccessibilityService.setSelectedRange(selection, on: element)
+        }
+        guard let ownedClipboardCount else { return outcome.result }
+        // A batch never leaves an individual edit fragment as a recovery
+        // clipboard. Restore our temporary write even on a partial failure;
+        // concurrent user Copy wins throughout this final consumption window.
+        if outcome.result == .replacementSentUnconfirmed {
+            await Task.pause(Timing.beforeClipboardRestore)
+        }
+        Self.restoreClipboardIfOwned(savedClipboard, beanOwnedChangeCount: ownedClipboardCount)
+        return outcome.result
+    }
+
     /// Applies a single inline suggestion through the same verified native
     /// editing path as a shortcut. Using a normal paste preserves the target
     /// app's edit notifications and native Undo, including fields whose AX
@@ -495,7 +616,7 @@ final class TextSelectionService {
         // proves Select All copied the complete draft before touching text.
         // A document-style WebArea can also contain rich signatures, links,
         // and attachments. Plain text cannot preserve those outside the issue.
-        guard Self.canUseWholeFieldRangeFallback(role: field.role) else {
+        guard Self.canUseWholeFieldRangeFallback(role: field.role, value: valueBefore) else {
             return .failed(reason: "Bean can’t target this correction safely. Select the text and use the shortcut.")
         }
         guard let expected = Self.expectedValueAfterSelectionReplacement(
@@ -521,8 +642,8 @@ final class TextSelectionService {
         return result
     }
 
-    /// Inverts a confirmed whole-field change without copying another field
-    /// or requiring the application to expose a writable AXValue attribute.
+    /// Applies a complete corrected snapshot as surgical spans. Rich document
+    /// callers never turn an unavailable range into a whole-document paste.
     func replaceWholeField(app: NSRunningApplication, element: AXUIElement,
                            valueBefore: String, replacement: String,
                            selectionToRestore: NSRange? = nil) async -> ReplacementResult {
@@ -540,13 +661,15 @@ final class TextSelectionService {
             selectedRangeBefore: AccessibilityService.selectedRange(of: element),
             clipboardOwnershipChangeCount: nil, keepsFallbackCorrection: false,
             acquiredViaCmdA: false, allowsAXFreeFullFieldPaste: false, slackTypingAnchor: nil,
-            selectionToRestore: selectionToRestore
+            selectionToRestore: selectionToRestore, allowsEmptyRangeReplacement: true
         )
-        return await replace(corrected: replacement, original: valueBefore, mode: .focusedFieldFullText)
+        return await replace(corrected: replacement, original: valueBefore, mode: .focusedFieldFullText,
+                             strategy: .minimalProofread)
     }
 
-    func replace(corrected: String, original: String, mode: TextInputMode) async -> ReplacementResult {
-        guard let pending else {
+    func replace(corrected: String, original: String, mode: TextInputMode,
+                 strategy: ReplacementStrategy = .selectedSpan) async -> ReplacementResult {
+        guard var pending else {
             return .failed(reason: "Internal error: nothing acquired")
         }
         guard mode == pending.mode else {
@@ -573,6 +696,81 @@ final class TextSelectionService {
             )
             self.pending = nil
             return .noChangesNeeded
+        }
+
+        let role = pending.focusedElement.flatMap {
+            AccessibilityService.focusedField(from: $0, includeValue: false)?.role
+        }
+        let plainFieldSnapshot = pending.valueBefore.map {
+            Self.canUseWholeFieldRangeFallback(role: role, value: $0)
+                && Self.canUseWholeFieldRangeFallback(role: role, value: corrected)
+        } == true
+        let useSurgicalEdits = Self.requiresSurgicalEdits(mode: mode, strategy: strategy, role: role,
+                                                       valueBefore: pending.valueBefore, corrected: corrected)
+
+        if useSurgicalEdits, mode == .focusedFieldFullText, !plainFieldSnapshot,
+           pending.focusedElement == nil || !pending.fieldValueReadable {
+            cancel()
+            return .failed(reason: "Select the passage first so Bean can proofread without replacing the whole document.")
+        }
+        if useSurgicalEdits, pending.fieldValueReadable,
+           let app = pending.targetApp, let element = pending.focusedElement,
+           let before = pending.valueBefore {
+            let scope = pending.deferredSelectionRange ?? (mode == .selectedText
+                ? pending.selectedRangeBefore
+                : NSRange(location: 0, length: (before as NSString).length))
+            if let scope, scope.length > 0 || mode == .focusedFieldFullText,
+               let captured = NativeEditPlan.sourceText(in: before, range: scope),
+               Self.exactTextMatches(captured, original),
+               AccessibilityService.isSelectedRangeSettable(element) {
+                guard let localPlan = NativeEditPlan.proofread(original: original, corrected: corrected) else {
+                    cancel()
+                    return .failed(reason: "This change cannot preserve the document safely. Select a smaller passage to replace.")
+                }
+                let edits = localPlan.edits.map { edit in
+                    NativeTextEdit(range: NSRange(location: scope.location + edit.range.location, length: edit.range.length),
+                                   original: edit.original, replacement: edit.replacement)
+                }
+                let result = await replaceEdits(app: app, element: element, valueBefore: before, edits: edits,
+                    selectionToRestore: pending.selectionToRestore ?? pending.selectedRangeBefore,
+                    capturedSelection: pending.selectedRangeBefore)
+                self.pending = nil
+                return result
+            }
+            // An explicit opaque marker selection still supports the proven
+            // selected-span Mail path. A plain single-line field also retains
+            // its exact Copy/Paste fallback; rich documents never take it.
+            let isExplicitMarkerSelection = mode == .selectedText && pending.selectionSnapshotBefore != nil
+            let isPlainField = mode == .focusedFieldFullText
+                && Self.canUseWholeFieldRangeFallback(role: role, value: before)
+                && Self.canUseWholeFieldRangeFallback(role: role, value: corrected)
+            guard isExplicitMarkerSelection || isPlainField else {
+                cancel()
+                return .failed(reason: "This editor cannot safely target the corrections. Select the passage and try again.")
+            }
+        }
+
+        if let range = pending.deferredSelectionRange {
+            guard await reactivateAndConfirm(pending.targetApp), let app = pending.targetApp,
+                  let element = pending.focusedElement,
+                  let field = AccessibilityService.focusedField(in: app), field.acceptsTextInput,
+                  AccessibilityService.isSameElement(field.element, element),
+                  Self.exactTextMatches(field.value, pending.valueBefore),
+                  AccessibilityService.selectedRange(of: element) == pending.selectedRangeBefore else {
+                cancel()
+                return .failed(reason: "The paragraph or caret changed. Bean left the current text intact.")
+            }
+            guard AccessibilityService.setSelectedRange(range, on: element),
+                  AccessibilityService.selectedRange(of: element) == range else {
+                var temporary = pending
+                temporary.selectedRangeBefore = range
+                restoreSelectionWithoutEdit(temporary, on: element)
+                cancel()
+                return .failed(reason: "This editor could not select the exact paragraph. Bean left the text intact.")
+            }
+            pending.selectedRangeBefore = range
+            pending.deferredSelectionRange = nil
+            self.pending = pending
         }
 
         // Preserve the newest user-owned clipboard before any replacement
@@ -1161,7 +1359,23 @@ final class TextSelectionService {
     }
 
     nonisolated static func canUseWholeFieldRangeFallback(role: String?) -> Bool {
-        role != "AXWebArea"
+        role == "AXTextField"
+    }
+
+    nonisolated static func canUseWholeFieldRangeFallback(role: String?, value: String) -> Bool {
+        canUseWholeFieldRangeFallback(role: role)
+            && !value.contains(where: { $0.isNewline || $0 == "\u{fffc}" })
+    }
+
+    /// Explicit selected passages may use a span Paste. Whole fields need
+    /// surgical edits unless their role and both snapshots prove plain input.
+    nonisolated static func requiresSurgicalEdits(mode: TextInputMode, strategy: ReplacementStrategy,
+                                                 role: String?, valueBefore: String?, corrected: String) -> Bool {
+        if strategy == .minimalProofread { return true }
+        guard mode == .focusedFieldFullText else { return false }
+        guard let valueBefore else { return true }
+        return !canUseWholeFieldRangeFallback(role: role, value: valueBefore)
+            || !canUseWholeFieldRangeFallback(role: role, value: corrected)
     }
 
     /// Native selected text requires a valid, non-empty captured range and the

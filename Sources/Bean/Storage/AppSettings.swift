@@ -127,6 +127,8 @@ final class AppSettings: ObservableObject {
         static let systemWideLocalAssistanceVersion = "systemWideLocalAssistanceVersion"
         static let dailyAutomaticCallLimit = "dailyAutomaticCallLimit"
         static let monthlyTokenWarningThreshold = "monthlyTokenWarningThreshold"
+        static let writingDialect = "writingDialect"
+        static let assistancePausedApps = "assistancePausedApps"
     }
 
     private let defaults: UserDefaults
@@ -282,6 +284,51 @@ final class AppSettings: ObservableObject {
 
     /// Invoked when an inline-highlights setting affecting monitoring changes.
     var onInlineChanged: (() -> Void)?
+
+    @Published var writingDialect: WritingDialect {
+        didSet {
+            defaults.set(writingDialect.rawValue, forKey: Keys.writingDialect)
+            onInlineChanged?()
+        }
+    }
+
+    /// Bundle identifiers and expiry timestamps only; no writing is stored.
+    /// A negative timestamp means the user paused until they choose Resume.
+    @Published private(set) var assistancePausedApps: [String: Double] {
+        didSet {
+            defaults.set(assistancePausedApps, forKey: Keys.assistancePausedApps)
+            onInlineChanged?()
+        }
+    }
+
+    func isAssistancePaused(for bundleIdentifier: String?, now: Date = Date()) -> Bool {
+        guard let bundleIdentifier, let expiry = assistancePausedApps[bundleIdentifier] else { return false }
+        return expiry < 0 || expiry > now.timeIntervalSince1970
+    }
+
+    func pauseAssistance(in bundleIdentifier: String, for duration: TimeInterval? = 3_600,
+                         now: Date = Date()) {
+        guard Self.validPausedAppIdentifier(bundleIdentifier) else { return }
+        var updated = assistancePausedApps.filter { $0.value < 0 || $0.value > now.timeIntervalSince1970 }
+        guard updated.count < 200 || updated[bundleIdentifier] != nil else { return }
+        if let duration {
+            guard duration.isFinite, duration > 0 else { return }
+            updated[bundleIdentifier] = now.addingTimeInterval(min(duration, 30 * 24 * 3_600)).timeIntervalSince1970
+        } else {
+            updated[bundleIdentifier] = -1
+        }
+        assistancePausedApps = updated
+    }
+
+    func resumeAssistance(in bundleIdentifier: String) {
+        guard assistancePausedApps[bundleIdentifier] != nil else { return }
+        assistancePausedApps.removeValue(forKey: bundleIdentifier)
+    }
+
+    private static func validPausedAppIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 255 && value.contains(".")
+            && value.unicodeScalars.allSatisfy { CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_").contains($0) }
+    }
 
     // MARK: - Bean Bubble (Phase 6.5)
 
@@ -444,6 +491,13 @@ final class AppSettings: ObservableObject {
         self.inlineIncludeLLM = defaults.bool(forKey: Keys.inlineIncludeLLM) // default false
         self.inlineShowExplanation = defaults.object(forKey: Keys.inlineShowExplanation) == nil ? true : defaults.bool(forKey: Keys.inlineShowExplanation)
         self.inlineFallbackPassive = defaults.bool(forKey: Keys.inlineFallbackPassive) // default false
+        self.writingDialect = WritingDialect(rawValue: defaults.string(forKey: Keys.writingDialect) ?? "") ?? .automatic
+        let pausedApps = defaults.dictionary(forKey: Keys.assistancePausedApps) ?? [:]
+        self.assistancePausedApps = Dictionary(uniqueKeysWithValues: pausedApps.sorted(by: { $0.key < $1.key }).prefix(200).compactMap { key, value in
+            guard Self.validPausedAppIdentifier(key), let expiry = value as? Double,
+                  expiry.isFinite, expiry < 0 || expiry > Date().timeIntervalSince1970 else { return nil }
+            return (key, expiry)
+        })
 
         // Writing actions stay available beside editable fields by default.
         self.bubbleEnabled = defaults.bool(forKey: Keys.bubbleEnabled)

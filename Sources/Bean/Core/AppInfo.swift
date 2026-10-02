@@ -8,8 +8,8 @@ enum AppInfo {
     static let tagline = "A small writing helper for your menu bar."
     static let copyright = "© 2026 Anees Afzal and Bean contributors"
 
-    static var version: String { string("CFBundleShortVersionString") ?? "1.6.0" }
-    static var build: String { string("CFBundleVersion") ?? "11" }
+    static var version: String { string("CFBundleShortVersionString") ?? "1.7.0" }
+    static var build: String { string("CFBundleVersion") ?? "12" }
 
     /// e.g. "Version 1.3.0 (4)"
     static var versionDisplay: String { "Version \(version) (\(build))" }

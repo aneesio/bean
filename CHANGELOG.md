@@ -3,7 +3,7 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
-## Unreleased — system-wide writing assistance
+## 1.7.0 — 2026-10-02 (public beta candidate)
 
 - Made local live checking and field-side writing actions the default; Bean no
   longer opens the Writer during ordinary launch or setup completion.
@@ -33,6 +33,10 @@ once public release tags begin.
 - Add offline macOS spelling to browser checks without requiring paid AI, rank
   ambiguous spelling guesses using nearby prose, and offer alternate spellings.
   Missing bridge coverage is shown explicitly.
+
+- Proofread rich drafts using bounded minimal edits with exact source checks and reversible batches; keep structural changes outside mechanical proofreading.
+- Unify the native review panel with browser assistance, add app pause, explicit paragraph scope, dictionary learning, stable dismissals, dialect guidance, and cancellable provider actions.
+- Add a family-isolated synthetic quality benchmark, concrete meaning-preservation checks, real owned AppKit/WebKit editor fixtures, bounded performance summaries, and verified install/rollback tests.
 
 ## Earlier unreleased — product and writing-quality review
 

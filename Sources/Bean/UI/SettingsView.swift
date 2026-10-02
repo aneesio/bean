@@ -588,18 +588,18 @@ struct SettingsView: View {
                            kind: settings.automaticAIChecksEnabled ? .warning : .success,
                            showsIcon: false)
             }
-            Text("Deeper AI suggestions and browser AI can call your provider. The daily limit covers all browser AI—including Fix Paragraph—because webpages cannot prove a trusted click. Explicit AI actions in the Bean Mac app remain uncapped. Quick Fix and Live suggestions stay local.")
+            Text("Deeper AI suggestions, automatic browser checks, and Fix Paragraph use the daily limit. Explicit AI actions from Bean’s shortcuts or the browser’s Proofread and Rewrite controls are manual calls and remain available after that limit. Quick Fix and basic Live suggestions stay local.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
             Stepper("Daily automatic-call limit: \(settings.dailyAutomaticCallLimit)",
                     value: $settings.dailyAutomaticCallLimit, in: 1...200)
-                .accessibilityHint("Limits automatic checks and all browser AI, but not explicit AI actions in the Bean Mac app")
+                .accessibilityHint("Limits automatic provider checks and Fix Paragraph, but not explicit native or browser writing actions")
             Stepper("30-day warning: \(settings.monthlyTokenWarningThreshold.formatted()) tokens",
                     value: $settings.monthlyTokenWarningThreshold,
                     in: 25_000...5_000_000, step: 25_000)
                 .accessibilityHint("Sets the token usage warning threshold")
             if let automaticSpentToday {
                 let automaticUsed = max(today.automaticOperationCount, automaticSpentToday)
-                Text("Automatic calls today: \(automaticUsed) of \(settings.dailyAutomaticCallLimit). The limit does not disable explicit AI actions in the Bean Mac app or local Quick Fix.")
+                Text("Automatic calls today: \(automaticUsed) of \(settings.dailyAutomaticCallLimit). Explicit native and browser AI actions and local Quick Fix remain available.")
                     .font(.caption).foregroundColor(BeanDesign.secondaryText)
             } else {
                 Label("Bean couldn't verify automatic-call accounting. Automatic provider checks pause safely until accounting is available; local Quick Fix still works.",
@@ -782,6 +782,28 @@ struct SettingsView: View {
 
     private var writingAdvancedOptions: some View {
         VStack(alignment: .leading, spacing: BeanDesign.Spacing.sm) {
+            Picker("English dialect", selection: $settings.writingDialect) {
+                ForEach(WritingDialect.allCases, id: \.self) { dialect in
+                    Text(dialect.displayName).tag(dialect)
+                }
+            }
+            .accessibilityHint("Sets spelling conventions for local checks and deliberate AI writing actions")
+            Text("Automatic follows your Mac's spelling language. Names and words you add to your dictionary stay protected.")
+                .font(.caption).foregroundColor(BeanDesign.secondaryText)
+            if settings.assistancePausedApps.keys.contains(where: { settings.isAssistancePaused(for: $0) }) {
+                Text("Paused apps").font(.subheadline.weight(.semibold))
+                ForEach(settings.assistancePausedApps.keys.filter { settings.isAssistancePaused(for: $0) }.sorted(), id: \.self) { identifier in
+                    HStack {
+                        Text(NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
+                            .map { $0.deletingPathExtension().lastPathComponent } ?? identifier)
+                        Spacer()
+                        Button("Resume") { settings.resumeAssistance(in: identifier) }
+                            .accessibilityLabel("Resume Bean in \(identifier)")
+                    }
+                }
+                Text("Pausing hides automatic assistance. Your writing shortcuts remain available.")
+                    .font(.caption).foregroundColor(BeanDesign.secondaryText)
+            }
             Text("Live suggestions")
                 .font(.subheadline.weight(.semibold))
             Stepper(
@@ -796,6 +818,11 @@ struct SettingsView: View {
                 .foregroundColor(BeanDesign.secondaryText)
 
             monitorStatusRow
+
+            Button("Copy Performance Summary") {
+                _ = ClipboardService.writeString(AssistanceMetrics.shared.summary)
+            }
+            .accessibilityHint("Copies local timing counts without writing or app identities; measurements disappear when Bean quits")
 
             Divider()
 

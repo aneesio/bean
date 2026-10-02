@@ -57,6 +57,7 @@ final class StatusHUD {
     private var dismissWorkItem: DispatchWorkItem?
     private var lastMessage: String?
     private var undoAction: (() -> Void)?
+    private var cancelAction: (() -> Void)?
     private var presentationGeneration = StatusHUDPresentationGeneration()
     private let reduceMotion: () -> Bool
     private let announcementHandler: ((String) -> Void)?
@@ -87,12 +88,14 @@ final class StatusHUD {
     func showProgress(
         _ message: String,
         sourceAppName: String? = nil,
-        sourceAnchorRect: CGRect? = nil
+        sourceAnchorRect: CGRect? = nil,
+        onCancel: (() -> Void)? = nil
     ) {
         show(
             .progress,
             Self.sourceAwareMessage(message, sourceAppName: sourceAppName),
-            sourceAnchorRect: sourceAnchorRect
+            sourceAnchorRect: sourceAnchorRect,
+            onCancel: onCancel
         )
     }
 
@@ -130,7 +133,7 @@ final class StatusHUD {
     /// and confirmed-success methods above; actionable failures use a notice.
     /// Progress messages persist until the next show; all others auto-dismiss.
     func show(_ style: Style, _ message: String, sourceAnchorRect: CGRect? = nil,
-              onUndo: (() -> Void)? = nil) {
+              onUndo: (() -> Void)? = nil, onCancel: (() -> Void)? = nil) {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
         let presentation = presentationGeneration.advance()
@@ -138,7 +141,8 @@ final class StatusHUD {
         let panel = panel ?? makePanel()
         self.panel = panel
         undoAction = onUndo
-        panel.ignoresMouseEvents = onUndo == nil
+        cancelAction = onCancel
+        panel.ignoresMouseEvents = onUndo == nil && onCancel == nil
 
         let isRepeat = (message == lastMessage) && panel.isVisible
         lastMessage = message
@@ -192,6 +196,8 @@ final class StatusHUD {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
         lastMessage = nil
+        undoAction = nil
+        cancelAction = nil
         let dismissal = presentationGeneration.advance()
         guard let panel, panel.isVisible else { return }
         let duration = Self.animationDuration(reduceMotion: reduceMotion(), appearing: false)
@@ -277,6 +283,12 @@ final class StatusHUD {
         label.setAccessibilityLabel(message)
 
         var views: [NSView] = [badge, label]
+        if cancelAction != nil {
+            let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelPressed))
+            cancel.bezelStyle = .rounded
+            cancel.setAccessibilityLabel("Cancel the current writing action")
+            views.append(cancel)
+        }
         if undoAction != nil {
             let undo = NSButton(title: "Undo", target: self, action: #selector(undoPressed))
             undo.bezelStyle = .rounded
@@ -310,6 +322,13 @@ final class StatusHUD {
     @objc private func undoPressed() {
         let action = undoAction
         undoAction = nil
+        dismiss()
+        action?()
+    }
+
+    @objc private func cancelPressed() {
+        let action = cancelAction
+        cancelAction = nil
         dismiss()
         action?()
     }

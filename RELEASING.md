@@ -47,16 +47,16 @@ The public tag must exactly match the app version: version `1.3.0` uses tag
 BEAN_ALLOW_ADHOC_RELEASE=1 ./scripts/package_release.sh
 ```
 
-This creates universal artifacts named `Bean-<version>-unnotarized.*` and a
+This creates universal artifacts named `Bean-<version>-build<build>-unnotarized.*` and a
 SHA-256 file. The suffix is mandatory so users are not misled about Gatekeeper
 status.
 
 Verify locally:
 
 ```bash
-lipo -archs release/Bean-<version>-unnotarized/Bean.app/Contents/MacOS/Bean
+lipo -archs release/Bean-<version>-build<build>-unnotarized/Bean.app/Contents/MacOS/Bean
 cd release
-shasum -a 256 -c Bean-<version>-unnotarized.sha256
+shasum -a 256 -c Bean-<version>-build<build>-unnotarized.sha256
 ```
 
 Pushing a matching `v*` tag runs the GitHub prerelease workflow and uploads the
@@ -143,3 +143,18 @@ Before tagging any public release:
 - Test installation, first launch, Accessibility, one provider action, and an
   update from the previous beta.
 - Keep the prior release available for rollback.
+
+## Verified local upgrade and rollback
+
+Quit Bean and its native browser connection, then run `./scripts/install_local_build.sh build/Bean.app` using an absolute candidate path, or omit the argument to use the current build. The installer verifies the staged signature, retains a verified prior bundle, and restores it if publication or final verification fails. Pass the printed absolute rollback source to the same command to revert. Preferences remain in place.
+
+Run `./scripts/test_local_install.sh` to exercise upgrades and failures on private copies. Build assembly preserves prior bundles; release artifact names include both version and build number and refuse overwriting existing artifacts. Developer ID signing and notarization are postponed for this milestone.
+
+`./scripts/test_build_publication.sh` verifies compile/sign/publish failures,
+interruption recovery and concurrent build exclusion using real signed bundle
+assembly with a private compiler fixture. `./scripts/test_release_packaging.sh`
+verifies failed-build/DMG cleanup, identical-build retry, real ZIP/DMG/checksums
+and completed artifact preservation. Each test uses private copies and never
+replaces `/Applications/Bean.app` or alters user preferences. Locks left by an
+uncatchable termination must be inspected before removal; the scripts never
+break an unknown process's lock automatically.

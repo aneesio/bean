@@ -37,3 +37,12 @@ jobs:
           test -f build/Bean.app/Contents/Resources/CHANGELOG.md
           test -f build/Bean.app/Contents/Resources/SUPPORTED_APPS.md
           test -x build/Bean.app/Contents/Resources/NativeMessaging/install_native_messaging_host.sh
+
+      - name: Verify local upgrade and rollback
+        run: ./scripts/test_local_install.sh
+
+      - name: Verify bundle publication recovery
+        run: ./scripts/test_build_publication.sh
+
+      - name: Verify packaging failures and artifact preservation
+        run: ./scripts/test_release_packaging.sh

@@ -1,3 +1,53 @@
+# Bean 1.7.0 — public beta candidate
+
+Build **12**, with Chromium extension **0.8.0**. This candidate focuses on writing
+in other apps; ordinary launch and completed setup return to the menu-bar
+experience.
+
+## What changed
+
+- One field-side assistant provides quiet checking status, issue review,
+  Proofread and Rewrite. Supported browser fields use the extension assistant
+  while native controls yield for that field.
+- Routine Proofread and Rewrite apply directly to the verified source. Readable
+  rich drafts use bounded span edits to retain unchanged formatting, links,
+  signatures and attachments. Selected text, whole draft and precise current
+  paragraph are separate scopes; unsafe structural or ambiguous edits decline.
+- Exact source, focus, clipboard and UTF-16 checks protect newer writing.
+  Unrelated carets are retained while Bean still owns the selection. Undo is
+  offered for an exact confirmed change, including a safely verified partial
+  batch, and becomes unavailable after newer text.
+- Offline macOS spelling and basic grammar supplement conservative local rules.
+  Browser checks use the compatible local bridge without an API key; missing
+  spelling/language services show limited coverage. Ambiguous spelling offers
+  alternatives rather than blindly applying the first guess.
+- Fix All handles verified deterministic local corrections. Trusted Learn word,
+  stable occurrence dismissal and Automatic/Canadian/US/British English dialect
+  settings protect vocabulary and valid regional spelling.
+- Native app assistance can be paused for one hour or until resumed. Website
+  pause lasts one hour on the exact host; permanent website disabling remains
+  separate. Explicit provider actions can be cancelled before application;
+  already-sent provider work may still be billed.
+- Build, local install and packaging now verify candidates before publishing,
+  retain rollback copies/artifacts and guard concurrent or interrupted updates.
+
+## Compatibility and quality boundaries
+
+Editors must expose readable text and a safe editing destination. Whole rich
+documents without exact writable ranges require an explicit selected passage;
+marker-only selections do not provide guessed paragraph offsets or whole-document
+Undo. Browser changes spanning incompatible rich nodes, code or attachments are
+declined. See [SUPPORTED_APPS.md](https://github.com/aneesio/bean/blob/main/SUPPORTED_APPS.md).
+
+Owned synthetic AppKit/WebKit editor tests and a family-isolated local writing
+benchmark provide reproducible evidence, not third-party compatibility or
+Grammarly parity. The recorded benchmark still misses its strict heldout
+preferred-correction goal. Historical user reports that manual actions worked
+in ChatGPT, Claude, Slack, Gmail and Apple Mail predate this candidate; live
+underlines, every app variant and rich-document behavior still need separate
+manual validation. No real provider quality certification is claimed. See the
+[quality record](https://github.com/aneesio/bean/blob/main/docs/qa/WRITING_QUALITY_2026-10-02.md).
+
 ## Before you install this public beta
 
 This GitHub beta is an **unnotarized prerelease**. Download the DMG only from
@@ -12,8 +62,12 @@ AI provider. Provider setup is optional. Any provider-backed action uses your
 own API key and may incur provider charges; automatic provider checks are off by
 default and can be disabled or capped in **Settings → AI & Usage**.
 
-The unpacked browser extension runs its local checker on ordinary websites by default,
+The unpacked browser extension runs local checks on ordinary websites by default,
 except sites you block. Deeper browser AI is a separate opt-in, and the
-extension can be disabled for an individual field or website from the Bean
-control. See the [privacy policy](https://github.com/aneesio/bean/blob/main/PRIVACY.md)
+extension can be paused or disabled for an individual website from the Bean
+control, or disabled for a field during that page session. Explicit browser
+Proofread/Rewrite provider actions use the manual-action path and remain
+available when automatic AI is off or capped. Without a provider, browser
+Proofread offers local checks; native Quick Fix stays local. See the
+[privacy policy](https://github.com/aneesio/bean/blob/main/PRIVACY.md)
 for the complete data boundary.

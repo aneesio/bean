@@ -16,9 +16,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let onCheckPermissions: () -> Void
     private let onShowSettings: () -> Void
     private let onShowAbout: () -> Void
+    private let assistanceSettings: AppSettings?
 
     private var statusItem: NSStatusItem?
     private weak var undoItem: NSMenuItem?
+    private weak var pauseItem: NSMenuItem?
+    private weak var pauseUntilResumedItem: NSMenuItem?
+    private var pauseTarget: String?
     private var proofreadShortcut: GlobalShortcut = .default
     private var shortcutAction: PrimaryShortcutAction = .quickFix
     private var beanMenuShortcut: GlobalShortcut = .beanMenuDefault
@@ -33,7 +37,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         onCheckCurrentField: @escaping () -> Void,
         onCheckPermissions: @escaping () -> Void,
         onShowSettings: @escaping () -> Void,
-        onShowAbout: @escaping () -> Void
+        onShowAbout: @escaping () -> Void,
+        assistanceSettings: AppSettings? = nil
     ) {
         self.onOpenWriter = onOpenWriter
         self.onQuickFix = onQuickFix
@@ -45,6 +50,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.onCheckPermissions = onCheckPermissions
         self.onShowSettings = onShowSettings
         self.onShowAbout = onShowAbout
+        self.assistanceSettings = assistanceSettings
         super.init()
     }
 
@@ -104,12 +110,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // replacement, not merely on whether its selector has a target.
         menu.autoenablesItems = false
 
-        let writer = NSMenuItem(title: "Open Bean Writer", action: #selector(handleWriter), keyEquivalent: "1")
-        writer.target = self
-        writer.image = Self.icon("square.and.pencil")
-        menu.addItem(writer)
-        menu.addItem(.separator())
-
         // The chosen primary action owns the direct shortcut. The other action
         // remains available without a misleading second key equivalent.
         let quickFixItem: NSMenuItem
@@ -159,12 +159,32 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.undoItem = undoItem
         menu.addItem(undoItem)
 
+        if assistanceSettings != nil {
+            let pause = NSMenuItem(title: "Pause Bean in This App for 1 Hour", action: #selector(handlePauseApp), keyEquivalent: "")
+            pause.target = self
+            pause.image = Self.icon("pause.circle")
+            pause.isEnabled = false
+            pauseItem = pause
+            menu.addItem(pause)
+            let indefinitePause = NSMenuItem(title: "Pause Bean in This App Until Resumed", action: #selector(handlePauseUntilResumed), keyEquivalent: "")
+            indefinitePause.target = self
+            indefinitePause.image = Self.icon("pause.circle")
+            indefinitePause.isEnabled = false
+            pauseUntilResumedItem = indefinitePause
+            menu.addItem(indefinitePause)
+        }
+
         menu.addItem(.separator())
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(handleSettings), keyEquivalent: ",")
         settingsItem.target = self
         settingsItem.image = Self.icon("gearshape")
         menu.addItem(settingsItem)
+
+        let writer = NSMenuItem(title: "Open Bean Writer", action: #selector(handleWriter), keyEquivalent: "1")
+        writer.target = self
+        writer.image = Self.icon("square.and.pencil")
+        menu.addItem(writer)
 
         let helpItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
         helpItem.image = Self.icon("questionmark.circle")
@@ -206,6 +226,36 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         undoItem?.isEnabled = isUndoAvailable()
+        let app = NSWorkspace.shared.frontmostApplication
+        pauseTarget = app?.bundleIdentifier.flatMap { $0 == "com.bean.app" ? nil : $0 }
+        pauseItem?.isEnabled = pauseTarget != nil
+        pauseUntilResumedItem?.isEnabled = pauseTarget != nil
+        if let identifier = pauseTarget {
+            let name = app?.localizedName ?? "This App"
+            let isPaused = assistanceSettings?.isAssistancePaused(for: identifier) == true
+            pauseItem?.title = isPaused
+                ? "Resume Bean in \(name)" : "Pause Bean in \(name) for 1 Hour"
+            pauseUntilResumedItem?.title = "Pause Bean in \(name) Until Resumed"
+            pauseUntilResumedItem?.isHidden = isPaused
+        } else {
+            pauseItem?.title = "Pause Bean in This App for 1 Hour"
+            pauseUntilResumedItem?.title = "Pause Bean in This App Until Resumed"
+            pauseUntilResumedItem?.isHidden = false
+        }
+    }
+
+    @objc private func handlePauseUntilResumed() {
+        guard let pauseTarget, let assistanceSettings else { return }
+        assistanceSettings.pauseAssistance(in: pauseTarget, for: nil)
+    }
+
+    @objc private func handlePauseApp() {
+        guard let pauseTarget, let assistanceSettings else { return }
+        if assistanceSettings.isAssistancePaused(for: pauseTarget) {
+            assistanceSettings.resumeAssistance(in: pauseTarget)
+        } else {
+            assistanceSettings.pauseAssistance(in: pauseTarget)
+        }
     }
 
     @objc private func handleQuickFix() {

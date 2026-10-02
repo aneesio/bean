@@ -112,8 +112,9 @@ final class BeanBubbleController {
 
     // MARK: - Mini menu
 
-    func showMenu(near point: CGPoint, intent: OverlayActivationIntent, aiAvailable: Bool,
+    func showMenu(near point: CGPoint, intent: OverlayActivationIntent, aiAvailable: Bool, scope: String = "draft",
                   onSelect: @escaping (WritingAction) -> Void,
+                  onParagraphSelect: ((WritingAction) -> Void)? = nil,
                   onSetUpAI: @escaping (WritingAction) -> Void,
                   onMore: @escaping () -> Void, onCancel: @escaping () -> Void) {
         menuPanel?.orderOut(nil)
@@ -121,7 +122,8 @@ final class BeanBubbleController {
             menuFocusSession = OverlaySourceFocusSession.capture()
         }
         let allowsKeyboardInteraction = menuFocusSession != nil
-        let view = MiniActionMenuView(aiAvailable: aiAvailable, onSelect: onSelect,
+        let view = MiniActionMenuView(aiAvailable: aiAvailable, scope: scope, onSelect: onSelect,
+                                      onParagraphSelect: onParagraphSelect,
                                       onSetUpAI: onSetUpAI, onMore: onMore,
                                       onCancel: onCancel)
         let panel = makePanel(size: NSSize(width: 220, height: 240))
@@ -276,10 +278,14 @@ struct BeanBubbleView: View {
 
 struct MiniActionMenuView: View {
     let aiAvailable: Bool
+    var scope = "draft"
     let onSelect: (WritingAction) -> Void
+    var onParagraphSelect: ((WritingAction) -> Void)? = nil
     let onSetUpAI: (WritingAction) -> Void
     let onMore: () -> Void
     let onCancel: () -> Void
+    @State private var currentParagraph = false
+    private var actionScope: String { scope != "selected text" && currentParagraph ? "current paragraph" : scope }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -290,15 +296,23 @@ struct MiniActionMenuView: View {
             }
             .padding(.bottom, 2)
 
-            ForEach(WritingAction.primaryActions) { action in
+            Text("Improve \(actionScope)").font(.system(size: 11)).foregroundColor(.secondary)
+            if scope != "selected text", onParagraphSelect != nil {
+                Picker("Writing scope", selection: $currentParagraph) {
+                    Text("Draft").tag(false)
+                    Text("Paragraph").tag(true)
+                }.pickerStyle(.segmented)
+            }
+            ForEach([aiAvailable ? WritingAction.proofread : .localQuickCheck, .makeClearer, .makeConcise, .makeProfessional, .makeCasual]) { action in
                 let requiresSetup = action.requiresAISetup(aiAvailable: aiAvailable)
                 MiniRow(symbol: requiresSetup ? "lock.fill" : action.symbolName,
-                        title: action.displayName,
+                        title: action.category == .proofread ? "Proofread \(actionScope)" : action.displayName,
                         detail: requiresSetup ? "Set Up AI" : nil) {
                     if requiresSetup {
                         onSetUpAI(action)
                     } else {
-                        onSelect(action)
+                        if currentParagraph, scope != "selected text", let onParagraphSelect { onParagraphSelect(action) }
+                        else { onSelect(action) }
                     }
                 }
             }

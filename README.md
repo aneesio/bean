@@ -8,8 +8,8 @@ service.
 > **Public beta.** Replacement and UI behavior depend on what each macOS app
 > exposes through Accessibility. Review important text before sending it.
 >
-> Current release contract: Bean **1.6.0 (build 11)** with Bean for the Web
-> **0.7.2**.
+> Current release contract: Bean **1.7.0 (build 12)** with Bean for the Web
+> **0.8.0**.
 
 ## What works today
 
@@ -24,6 +24,9 @@ service.
 - Uses global shortcuts and field-side actions for Quick Fix, AI Proofread,
   clarity, concision, and tone adjustments.
 - Keeps personal dictionary terms and style preferences locally.
+- Offers current-paragraph actions, local-only Fix All, inline Learn word,
+  English dialect preferences, and app/site pause controls. Provider actions
+  can be cancelled before editing starts.
 - Offers an optional browser extension for DOM-based web editing support.
   Its field control includes review, Proofread, and Rewrite. When connected to
   Bean, offline macOS spelling supplements its built-in rules; only one Bean
@@ -59,18 +62,19 @@ cd bean
 open build/Bean.app
 ```
 
-For stable Accessibility and launch-at-login permissions, move the finished app
-to `/Applications` before granting permission:
+For stable Accessibility and launch-at-login permissions, quit Bean and install
+the verified build in `/Applications` before granting permission. The installer
+prints a verified rollback copy when replacing an existing app:
 
 ```bash
-ditto build/Bean.app /Applications/Bean.app
+./scripts/install_local_build.sh
 open /Applications/Bean.app
 ```
 
 ### GitHub beta DMG
 
 Early GitHub beta builds are ad-hoc signed and explicitly named
-`Bean-<version>-unnotarized`. macOS will not treat them as identified-developer
+`Bean-<version>-build<build>-unnotarized`. macOS will not treat them as identified-developer
 builds.
 
 1. Download the `.dmg` from the official Bean GitHub prerelease.
@@ -82,12 +86,12 @@ builds.
 
 Checksum verification is an optional advanced safety check, not part of the
 normal Finder-only install. Download the release's `.sha256` file beside the DMG,
-then, for example, run the following for version 1.6.0 and compare the printed
+then, for example, run the following for version 1.7.0, build 12 and compare the printed
 value with the `.dmg` line in that file:
 
 ```bash
 cd ~/Downloads
-shasum -a 256 Bean-1.6.0-unnotarized.dmg
+shasum -a 256 Bean-1.7.0-build12-unnotarized.dmg
 ```
 
 Developer ID-signed and notarized artifacts, if introduced later, will omit the

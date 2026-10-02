@@ -8,7 +8,7 @@ import Foundation
 // Length expectations vary by action (Make Concise may be much shorter; Make
 // Clearer / Make Professional may be longer), so the bounds are action-aware.
 //
-// PRIVACY: works on lengths/scripts/shape only and returns a fixed reason CODE
+// PRIVACY: checks shape and bounded concrete markers, returns a fixed reason CODE
 // (never the text) for logging.
 enum OutputSafetyValidator {
 
@@ -27,7 +27,8 @@ enum OutputSafetyValidator {
 
     static func disposition(for reason: String) -> Disposition {
         switch reason {
-        case "too_short", "too_long", "answered_question", "changedNumbers":
+        case "too_short", "too_long", "answered_question", "changedNumbers",
+             "changedEntities", "changedTemporalFacts", "changedNegation", "changedCommitment":
             return .reviewRequired
         default:
             return .hardBlock
@@ -44,12 +45,21 @@ enum OutputSafetyValidator {
             return "This may answer the text instead of editing it. Review it before replacing."
         case "changedNumbers":
             return "This result changes a number, date, or amount. Check those details before replacing."
+        case "changedEntities":
+            return "This result changes a name or saved term. Check those details before replacing."
+        case "changedTemporalFacts":
+            return "This result changes a day or date reference. Check those details before replacing."
+        case "changedNegation":
+            return "This result may reverse a negative statement. Check the meaning before replacing."
+        case "changedCommitment":
+            return "This result may change a promise, requirement, or uncertainty. Check the meaning before replacing."
         default:
             return "This result is unusual. Review it carefully before replacing."
         }
     }
 
-    static func validate(input: String, output: String, action: WritingAction) -> Result {
+    static func validate(input: String, output: String, action: WritingAction,
+                         protectedTerms: [String] = []) -> Result {
         let inText = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let outText = output.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -98,6 +108,11 @@ enum OutputSafetyValidator {
         // the result. Generative actions already returned above.
         if numericFacts(inText) != numericFacts(outText) {
             return .suspicious(reason: "changedNumbers")
+        }
+
+        if let reason = TextMeaningPreservation.failure(input: inText, output: outText,
+                                                        action: action, protectedTerms: protectedTerms) {
+            return .suspicious(reason: reason)
         }
 
         return .ok

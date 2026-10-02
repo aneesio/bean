@@ -74,6 +74,7 @@ struct NativeHostStatusConfiguration: Sendable {
     let timeout: TimeInterval
     let dailyAutomaticCallLimit: Int
     let automaticCallsToday: Int?
+    var appAssistancePaused = false
 
     var automaticAccountingAvailable: Bool { automaticCallsToday != nil }
 
@@ -106,6 +107,7 @@ struct NativeHostStatusConfiguration: Sendable {
 struct NativeHostLocalCheckConfiguration {
     let dictionary: [DictionaryTerm]
     var includeSystemChecker = true
+    var dialect: WritingDialect = .automatic
 }
 
 // Chrome Native Messaging host mode. When Chrome launches the Bean binary as a
@@ -216,7 +218,8 @@ enum NativeMessagingHost {
     static func processSync(
         _ payload: Data,
         statusConfiguration: NativeHostStatusConfiguration? = nil,
-        localCheckConfiguration: NativeHostLocalCheckConfiguration? = nil
+        localCheckConfiguration: NativeHostLocalCheckConfiguration? = nil,
+        dictionaryConfiguration: NativeHostDictionaryConfiguration? = nil
     ) -> Data {
         let semaphore = DispatchSemaphore(value: 0)
         let result = ResultBox()
@@ -226,7 +229,8 @@ enum NativeMessagingHost {
         // remain stuck at “Checking…” forever.
         Task.detached {
             result.store(await process(payload, statusConfiguration: statusConfiguration,
-                                       localCheckConfiguration: localCheckConfiguration))
+                                       localCheckConfiguration: localCheckConfiguration,
+                                       dictionaryConfiguration: dictionaryConfiguration))
             semaphore.signal()
         }
         semaphore.wait()
@@ -237,27 +241,44 @@ enum NativeMessagingHost {
     /// while a local macOS spelling check hops back to it.
     static func processAsync(_ payload: Data,
                              statusConfiguration: NativeHostStatusConfiguration? = nil,
-                             localCheckConfiguration: NativeHostLocalCheckConfiguration? = nil) async -> Data {
+                             localCheckConfiguration: NativeHostLocalCheckConfiguration? = nil,
+                             dictionaryConfiguration: NativeHostDictionaryConfiguration? = nil) async -> Data {
         await process(payload, statusConfiguration: statusConfiguration,
-                      localCheckConfiguration: localCheckConfiguration)
+                      localCheckConfiguration: localCheckConfiguration,
+                      dictionaryConfiguration: dictionaryConfiguration)
     }
 
     private static func process(
         _ payload: Data,
         statusConfiguration: NativeHostStatusConfiguration?,
-        localCheckConfiguration: NativeHostLocalCheckConfiguration?
+        localCheckConfiguration: NativeHostLocalCheckConfiguration?,
+        dictionaryConfiguration: NativeHostDictionaryConfiguration? = nil
     ) async -> Data {
         guard let request = try? JSONDecoder().decode(HostRequest.self, from: payload) else {
             return encode(HostResponse.error(id: nil, code: "badRequest", message: "Malformed request."))
+        }
+        let appPaused: Bool
+        if let statusConfiguration { appPaused = statusConfiguration.appAssistancePaused }
+        else if ["getStatus", "localCheck", "detectIssues", "proofreadParagraph"].contains(request.type) {
+            appPaused = await HostConfig.browserAssistancePaused()
+        } else { appPaused = false }
+        if ["localCheck", "detectIssues", "proofreadParagraph"].contains(request.type), appPaused {
+            return encode(HostResponse.error(id: request.id, code: "appPaused",
+                                             message: "Bean is paused in this browser. Resume it in Bean Settings."))
         }
         switch request.type {
         case "ping":
             return encode(HostResponse(id: request.id, ok: true))
         case "getStatus":
-            return encode(HostResponse.status(
-                for: request,
-                configuration: statusConfiguration ?? HostConfig.statusConfiguration
-            ))
+            var configuration = statusConfiguration ?? HostConfig.statusConfiguration
+            configuration.appAssistancePaused = appPaused
+            var response = HostResponse.status(for: request, configuration: configuration)
+            response.learnWordAvailable = dictionaryConfiguration?.available
+                ?? (statusConfiguration == nil && DictionaryLearningService.isAvailable())
+            return encode(response)
+        case "learnDictionaryTerm":
+            if let error = textRequestCompatibilityError(for: request) { return encode(error) }
+            return await learnDictionaryTerm(request, configuration: dictionaryConfiguration)
         case "fieldOwnership":
             if let error = textRequestCompatibilityError(for: request) { return encode(error) }
             return await processFieldOwnership(request)
@@ -280,6 +301,64 @@ enum NativeMessagingHost {
         default:
             return encode(HostResponse.error(id: request.id, code: "unknownType", message: "Unsupported request type."))
         }
+    }
+
+    private static func learnDictionaryTerm(_ request: HostRequest,
+                                             configuration: NativeHostDictionaryConfiguration?) async -> Data {
+        guard let term = DictionaryLearningService.validatedTerm(request.text ?? "") else {
+            return encode(HostResponse.error(id: request.id, code: "invalidDictionaryTerm",
+                                             message: "Choose one word to add to your dictionary."))
+        }
+        let result: DictionaryLearningResult
+        if let configuration {
+            guard configuration.available else {
+                return encode(HostResponse.error(id: request.id, code: "dictionaryUnavailable",
+                                                 message: "Open Bean to save this word in your dictionary."))
+            }
+            result = await configuration.learner(term)
+        } else {
+            result = await DictionaryLearningService.learn(term)
+        }
+        switch result {
+        case .saved:
+            return encode(HostResponse(id: request.id, ok: true, learnedTerm: term))
+        case .unavailable:
+            return encode(HostResponse.error(id: request.id, code: "dictionaryUnavailable",
+                                             message: "Open Bean to save this word in your dictionary."))
+        case .invalid:
+            return encode(HostResponse.error(id: request.id, code: "invalidDictionaryTerm",
+                                             message: "Choose one word to add to your dictionary."))
+        case .failed:
+            return encode(HostResponse.error(id: request.id, code: "dictionarySaveFailed",
+                                             message: "Bean couldn’t save this word. Your dictionary is unchanged."))
+        }
+    }
+
+    /// Return a complete exact union: truncating raw spans can make a learned
+    /// term reappear in the JS fallback after many links/code spans. All
+    /// disjoint ranges are bounded by the submitted 8,000-character source,
+    /// keeping the native payload bounded without sacrificing protection.
+    static func mergedProtectedRanges(_ ranges: [NSRange], sourceLength: Int) -> [NSRange] {
+        let valid = ranges.filter {
+            $0.location >= 0 && $0.location != NSNotFound && $0.length > 0
+                && $0.location <= sourceLength && $0.length <= sourceLength - $0.location
+        }.sorted { $0.location == $1.location ? $0.length < $1.length : $0.location < $1.location }
+        var merged: [NSRange] = []
+        for range in valid {
+            if let previous = merged.last, range.location <= NSMaxRange(previous) {
+                merged[merged.count - 1].length = max(NSMaxRange(previous), NSMaxRange(range)) - previous.location
+            } else {
+                merged.append(range)
+            }
+        }
+        return merged
+    }
+
+    static func assistancePaused(defaults: UserDefaults, bundleIdentifier: String?, now: Date = Date()) -> Bool {
+        guard let bundleIdentifier,
+              let expiry = defaults.dictionary(forKey: "assistancePausedApps")?[bundleIdentifier] as? NSNumber else { return false }
+        let timestamp = expiry.doubleValue
+        return timestamp.isFinite && (timestamp < 0 || timestamp > now.timeIntervalSince1970)
     }
 
     static func explicitBrowserAction(_ raw: String?) -> WritingAction? {
@@ -322,14 +401,16 @@ enum NativeMessagingHost {
             return encode(HostResponse.error(id: request.id, code: "textTooLong",
                                              message: "Text is too long for a local check."))
         }
-        let configuration = configuration ?? NativeHostLocalCheckConfiguration(dictionary: HostConfig.dictionary)
+        let configuration = configuration ?? NativeHostLocalCheckConfiguration(dictionary: HostConfig.dictionary, dialect: HostConfig.writingDialect)
         let maximumIssues = max(1, min(request.settings?.maxIssues ?? 32, 32))
         return await MainActor.run {
             let systemAvailable = configuration.includeSystemChecker && localSpellingIsAvailable()
             var detector = IssueDetector()
             detector.maxIssues = maximumIssues
-            let issues = detector.localIssues(in: text, dictionary: configuration.dictionary,
-                                              includeSpellChecker: systemAvailable)
+            let analysis = detector.localAnalysis(in: text, dictionary: configuration.dictionary,
+                                                  includeSpellChecker: configuration.includeSystemChecker,
+                                                  dialect: configuration.dialect)
+            let issues = analysis.issues
             let source = text as NSString
             let mapped = issues.compactMap { issue -> HostResponse.Issue? in
                 guard issue.range.location >= 0, issue.range.location != NSNotFound,
@@ -345,8 +426,16 @@ enum NativeMessagingHost {
                     alternatives: issue.alternatives
                 )
             }
+            let protected = mergedProtectedRanges(
+                IssueDetector.protectedRanges(in: text, dictionary: configuration.dictionary),
+                sourceLength: source.length
+            ).map { HostResponse.ProtectedRange(start: $0.location, end: NSMaxRange($0)) }
             return encode(HostResponse(id: request.id, ok: true, issues: mapped,
-                                       localSpellingAvailable: systemAvailable))
+                localSpellingAvailable: systemAvailable,
+                localCheckComplete: analysis.isComplete,
+                spellingCoverage: analysis.spellingCoverage.rawValue,
+                grammarCoverage: analysis.grammarCoverage.rawValue,
+                protectedRanges: protected))
         }
     }
 
@@ -427,6 +516,7 @@ enum NativeMessagingHost {
             return encode(HostResponse.error(id: request.id, code: "missingApiKey", message: "Add an API key in Bean Settings."))
         }
         let dictionary = HostConfig.dictionary
+        let dialect = HostConfig.writingDialect
         let context = browserSourceContext()
         let maximumIssues = max(1, min(
             request.settings?.maxIssues ?? maxIssuesCap,
@@ -436,7 +526,8 @@ enum NativeMessagingHost {
             text: text,
             context: context,
             dictionary: dictionary,
-            maximumIssues: maximumIssues
+            maximumIssues: maximumIssues,
+            dialect: dialect
         ) else {
             return encode(HostResponse.error(
                 id: request.id,
@@ -502,7 +593,7 @@ enum NativeMessagingHost {
         let detection = await detector.llmIssues(
             in: text, context: context, dictionary: dictionary,
             provider: provider, model: model,
-            apiKey: apiKey, timeout: timeout
+            apiKey: apiKey, timeout: timeout, dialect: dialect
         )
 
         if let usage = detection.usage {
@@ -564,7 +655,9 @@ enum NativeMessagingHost {
         guard !apiKey.isEmpty else {
             return encode(HostResponse.error(id: request.id, code: "missingApiKey", message: "Add an API key in Bean Settings."))
         }
-        let dictionaryLines = HostConfig.dictionaryPreservationLines(for: text)
+        let dictionary = HostConfig.dictionary
+        let dictionaryLines = dictionaryPreservationLines(for: text, dictionary: dictionary)
+            + (HostConfig.writingDialect.promptInstruction.map { [$0] } ?? [])
         let context = browserSourceContext()
         guard WritingTransformService.providerPayloadIsWithinLimit(
             text: text,
@@ -645,7 +738,8 @@ enum NativeMessagingHost {
 
         // Last-line safety runs on the exact text that would be returned, after
         // harmless provider wrappers/commentary have been removed.
-        if case let .suspicious(reason) = OutputSafetyValidator.validate(input: text, output: corrected, action: action) {
+        if case let .suspicious(reason) = OutputSafetyValidator.validate(input: text, output: corrected, action: action,
+            protectedTerms: dictionary.map(\.term)) {
             _ = reservation.complete(
                 usage: completion.usage,
                 outputLength: corrected.count,
@@ -773,6 +867,13 @@ private enum HostConfig {
         return min(max(stored > 0 ? stored : 30, 5), 120)
     }
     static var webInlineEnabled: Bool { defaults.bool(forKey: "webInlineEnabled") }
+    static func browserAssistancePaused() async -> Bool {
+        let bundleIdentifier = await MainActor.run { BrowserFieldOwnershipIdentity.nativeHostBrowser()?.bundleIdentifier }
+        return NativeMessagingHost.assistancePaused(defaults: defaults, bundleIdentifier: bundleIdentifier)
+    }
+    static var writingDialect: WritingDialect {
+        WritingDialect(rawValue: defaults.string(forKey: "writingDialect") ?? "") ?? .automatic
+    }
     static var dailyAutomaticCallLimit: Int {
         AutomaticCallBudgetPolicy.persistedDailyLimit(
             defaults.integer(forKey: "dailyAutomaticCallLimit")
@@ -889,6 +990,13 @@ private struct HostResponse: Encodable {
     var text: String? = nil            // proofreadParagraph: corrected paragraph
     var reviewRequired: Bool? = nil
     var localSpellingAvailable: Bool? = nil
+    var localCheckComplete: Bool? = nil
+    var spellingCoverage: String? = nil
+    var grammarCoverage: String? = nil
+    var protectedRanges: [ProtectedRange]? = nil
+    var learnedTerm: String? = nil
+    var learnWordAvailable: Bool? = nil
+    var appAssistancePaused: Bool? = nil
     var localCheckAvailable: Bool? = nil
     var performActionAvailable: Bool? = nil
     var errorCode: String? = nil
@@ -915,6 +1023,11 @@ private struct HostResponse: Encodable {
     var automaticAccountingAvailable: Bool? = nil
     var fieldOwnershipAvailable: Bool? = nil
 
+    struct ProtectedRange: Encodable {
+        let start: Int
+        let end: Int
+    }
+
     struct Issue: Encodable {
         let original: String
         let suggestion: String
@@ -939,6 +1052,7 @@ private struct HostResponse: Encodable {
         return HostResponse(
             id: request.id,
             ok: true,
+            appAssistancePaused: configuration.appAssistancePaused,
             localCheckAvailable: true,
             performActionAvailable: true,
             message: compatibility.message,

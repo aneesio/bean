@@ -35,6 +35,7 @@ final class TypingPauseDispatcher {
     private var browserOwnershipTargetIsWebContent = false
     private var browserOwnershipTargetCheckedAt = Date.distantPast
     private var nextBrowserOwnershipCleanup = Date.distantPast
+    private var pendingFeedback: (generation: Int, startedAt: Date, inputLength: Int)?
 
     init(settings: AppSettings, passive: PassiveSuggestionService, inline: InlineHighlightService,
          bubble: BeanBubbleService, coordinatorIsBusy: @escaping () -> Bool) {
@@ -43,6 +44,7 @@ final class TypingPauseDispatcher {
         self.inline = inline
         self.bubble = bubble
         self.coordinatorIsBusy = coordinatorIsBusy
+        inline.onLocalFeedback = { [weak self] count in self?.recordLocalFeedback(issueCount: count) }
     }
 
     private var wantsMonitor: Bool {
@@ -62,6 +64,7 @@ final class TypingPauseDispatcher {
         settings.monitorActive = (keyMonitor != nil || targetValidationTimer != nil)
         if wantsMonitor, keyMonitor == nil { schedulePermissionRetry() }
         else { permissionRetry?.cancel(); permissionRetry = nil }
+        if settings.isAssistancePaused(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) { hideAll() }
     }
 
     private func start() {
@@ -131,19 +134,21 @@ final class TypingPauseDispatcher {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
-    private func hideAll() {
+    private func hideAll(keepAssistant: Bool = false) {
         passive.hideUI()
-        inline.hideUI()
+        if keepAssistant { inline.typingBegan() } else { inline.hideUI() }
         bubble.hide()
     }
 
     // MARK: - Events
 
     private func handleTyping(_ event: NSEvent) {
-        // Typing hides everything (including the bubble) and re-arms the
-        // typing-pause router.
-        ElectronTextFocusEvidence.recordKey(event, app: NSWorkspace.shared.frontmostApplication)
-        hideAll()
+        // Close expanded review and stale underlines, retain the quiet field
+        // control, and re-arm checking after committed text changes.
+        let app = NSWorkspace.shared.frontmostApplication
+        guard !settings.isAssistancePaused(for: app?.bundleIdentifier) else { hideAll(); return }
+        ElectronTextFocusEvidence.recordKey(event, app: app)
+        hideAll(keepAssistant: settings.inlineHighlightsEnabled && !browserExtensionOwnsField(app: app))
         generation += 1
         let gen = generation
         scheduleCheck(generation: gen)
@@ -152,14 +157,20 @@ final class TypingPauseDispatcher {
     private func handleClick() {
         // A click elsewhere dismisses current Bean UI, then (after a delay) may
         // show the bubble for the newly focused field/selection.
+        let app = NSWorkspace.shared.frontmostApplication
+        guard !settings.isAssistancePaused(for: app?.bundleIdentifier) else { hideAll(); return }
         let field = AccessibilityService.focusedField()
         ElectronTextFocusEvidence.recordClick(
             app: NSWorkspace.shared.frontmostApplication,
             point: NSEvent.mouseLocation,
             focusedElementIsKnownNonText: field.map { !$0.isSemanticTextSurface } ?? false
         )
-        hideAll()
+        passive.hideUI()
+        bubble.hide()
         generation += 1
+        if settings.inlineHighlightsEnabled, !browserExtensionOwnsField(app: app, field: field), let field {
+            inline.prepare(field: field, app: app)
+        } else { inline.hideUI() }
         pendingDispatch?.cancel()
         // Repositioning the caret must not permanently remove the existing
         // local suggestions. A delayed check reuses the exact cached snapshot.
@@ -205,6 +216,19 @@ final class TypingPauseDispatcher {
         // midway through a verified write. Real key events still invalidate it.
         guard !inline.isApplyingCorrection, !isInteractingWithBean else { return }
         let app = NSWorkspace.shared.frontmostApplication
+        if settings.isAssistancePaused(for: app?.bundleIdentifier) {
+            if settings.lastSupportReason != "appPaused" {
+                generation += 1
+                pendingDispatch?.cancel()
+                pendingBubble?.cancel()
+                pendingFeedback = nil
+                fieldActivity.reset()
+                lastObservedElement = nil
+                hideAll()
+                setStatus("paused", "appPaused")
+            }
+            return
+        }
         let field = app?.processIdentifier == ProcessInfo.processInfo.processIdentifier
             ? nil : AccessibilityService.focusedField()
         let snapshot: TypingPauseActivityTracker.Snapshot?
@@ -245,13 +269,17 @@ final class TypingPauseDispatcher {
             inline.matchesCurrentSession(app: app, field: $0)
         } == true
         if (change != .unchanged || ownershipChanged), !confirmedInlineEdit {
-            hideAll()
+            passive.hideUI()
+            bubble.hide()
             generation += 1
             pendingDispatch?.cancel()
             if snapshot != nil {
+                pendingFeedback = (generation, Date(), field?.value?.count ?? 0)
+                if settings.inlineHighlightsEnabled, let field { inline.prepare(field: field, app: app) }
+                else { inline.hideUI() }
                 scheduleCheck(generation: generation)
                 if settings.bubbleEnabled { scheduleBubble(generation) }
-            }
+            } else { inline.hideUI(); pendingFeedback = nil }
         }
         inline.refreshVisibleTarget()
         passive.refreshVisibleTarget()
@@ -287,6 +315,7 @@ final class TypingPauseDispatcher {
         // Bubble is lowest priority: yield to passive/inline if they're showing.
         guard !passive.isShowingUI, !inline.isShowingUI else { return }
         let app = NSWorkspace.shared.frontmostApplication
+        guard !settings.isAssistancePaused(for: app?.bundleIdentifier) else { return }
         if browserExtensionOwnsField(app: app) { bubble.hide(); return }
         bubble.evaluate(fallbackOrigin: ElectronTextFocusEvidence.validAnchor(for: app))
     }
@@ -294,19 +323,21 @@ final class TypingPauseDispatcher {
     // MARK: - Typing-pause routing (passive / inline)
 
     private func dispatch(generation gen: Int) async {
-        guard gen == generation, !coordinatorIsBusy() else { return }
+        guard gen == generation else { return }
+        if coordinatorIsBusy() { scheduleCheck(generation: gen); return }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         guard settings.passiveActive || settings.inlineHighlightsEnabled else {
             considerBubble(generation: gen)
             return
         }
         guard PermissionService.isAccessibilityGranted else { return }
+        let app = NSWorkspace.shared.frontmostApplication
+        guard !settings.isAssistancePaused(for: app?.bundleIdentifier) else { hideAll(); return }
         guard let field = AccessibilityService.focusedField() else {
             finishPause("skipped", "noField", generation: gen, richerUIShown: false)
             return
         }
 
-        let app = NSWorkspace.shared.frontmostApplication
         if browserExtensionOwnsField(app: app, field: field) {
             hideAll()
             setStatus("browserExtension", "activeBrowserFieldOwned")
@@ -324,6 +355,7 @@ final class TypingPauseDispatcher {
                             generation: gen, richerUIShown: shown)
                 return
             case .degradedUsePopover(let r), .unsupported(let r):
+                inline.showUnavailable(field: field, app: app, reason: r)
                 if settings.inlineFallbackPassive {
                     let shown = await passive.run(field: field, app: app, context: context,
                                                   isCurrent: isCurrent, forced: true, reason: &reason)
@@ -358,5 +390,13 @@ final class TypingPauseDispatcher {
         if settings.diagnosticsEnabled {
             Log.diag(["dispatcher": "pause", "handler": handler, "reason": reason])
         }
+    }
+
+    private func recordLocalFeedback(issueCount: Int) {
+        guard let feedback = pendingFeedback, feedback.generation == generation else { return }
+        pendingFeedback = nil
+        AssistanceMetrics.shared.record(kind: .typingPauseToFeedback, inputLength: feedback.inputLength,
+            issueCount: issueCount, elapsedMilliseconds: Int(Date().timeIntervalSince(feedback.startedAt) * 1_000),
+            outcome: issueCount == 0 ? "noIssues" : "shown")
     }
 }

@@ -34,7 +34,7 @@
     button.primary { border-color:var(--accent); background:var(--accent); color:#fff; }
     button.primary:hover { background:var(--accent-strong); }
     button:disabled { cursor:default; opacity:.55; }
-    #site-action { width:100%; margin-top:12px; }
+    #site-action,#site-pause { width:100%; margin-top:12px; }
     .readiness { display:grid; gap:1px; margin:12px 0; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:var(--line); }
     .readiness-row { display:grid; grid-template-columns:110px 1fr; gap:8px; align-items:center; min-height:42px; padding:8px 11px; background:var(--surface); }
     .key { color:var(--muted); }
@@ -74,6 +74,7 @@
         <span id="site-state" class="pill">Checking</span>
       </div>
       <button id="site-action" type="button" disabled>Block this website</button>
+      <button id="site-pause" type="button" disabled>Pause for 1 hour</button>
     </section>
 
     <section class="readiness" aria-label="Bean readiness" aria-live="polite">
@@ -96,6 +97,7 @@
       <button id="open-settings" class="settings" type="button">Settings…</button>
     </div>
   </main>
+  <script src="src/sitePolicy.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

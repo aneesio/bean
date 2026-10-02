@@ -1,6 +1,7 @@
 // Bean extension service worker. Registers the content script on ordinary web
 // pages except sites the user blocks, and forwards optional provider requests
 // to the local Bean native-messaging host. It never stores request text.
+if (typeof importScripts === "function") importScripts("src/sitePolicy.js");
 const HOST = "com.bean.nativehost";
 const SETTINGS_SCHEMA_VERSION = 6;
 const BRIDGE_PROTOCOL_VERSION = 1;
@@ -16,7 +17,9 @@ const MAX_DETECT_TEXT_CHARS = 8000;
 const MAX_PROOFREAD_TEXT_CHARS = 2000;
 const MAX_TEXT_BYTES = 40000;
 const SCRIPT_ID = "bean-inline";
+const SUPPRESSION_SCRIPT_ID = "bean-disabled-site-ownership";
 const SCRIPT_FILES = [
+  "src/sitePolicy.js",
   "src/localDetector.js",
   "src/trustPolicy.js",
   "src/issueMapping.js",
@@ -24,9 +27,36 @@ const SCRIPT_FILES = [
   "src/contentScript.js"
 ];
 const LOCAL_POLICY_KEYS = new Set([
-  "blockedSites", "legacyAIOptOut", "enabled", "useBridge", "settingsSchemaVersion"
+  "pausedSites", "blockedSites", "legacyAIOptOut", "enabled", "useBridge", "settingsSchemaVersion"
 ]);
 let localPolicyRevision = 0;
+const assistanceMetrics = [];
+const METRIC_KINDS = ["browserAnalysis","typingPauseToFeedback","browserAcceptance"];
+const METRIC_OUTCOMES = ["complete","basic","applied","partial","refused"];
+function recordAssistanceMetric(message,sender,completion) {
+  const sample = message.sample, page = senderPage(sender);
+  const allowedKeys = ["kind","inputLength","issueCount","elapsedMilliseconds","outcome"];
+  const valid = !page.error && sample && typeof sample === "object" && !Array.isArray(sample) &&
+    Object.keys(sample).length === allowedKeys.length && Object.keys(sample).every((key) => allowedKeys.includes(key)) &&
+    METRIC_KINDS.includes(sample.kind) && METRIC_OUTCOMES.includes(sample.outcome) &&
+    Number.isInteger(sample.inputLength) && sample.inputLength >= 0 && sample.inputLength <= 50000 &&
+    Number.isInteger(sample.issueCount) && sample.issueCount >= 0 && sample.issueCount <= 64 &&
+    Number.isInteger(sample.elapsedMilliseconds) && sample.elapsedMilliseconds >= 0 && sample.elapsedMilliseconds <= 180000;
+  if (!valid) { completion({ok:false,errorCode:"invalidMetric"}); return; }
+  assistanceMetrics.push(Object.fromEntries(allowedKeys.map((key) => [key,sample[key]])));
+  if (assistanceMetrics.length > 500) assistanceMetrics.shift();
+  completion({ok:true});
+}
+function assistanceMetricSummary() {
+  return {sampleCount:assistanceMetrics.length,capacity:500,persisted:false,
+    measurements:METRIC_KINDS.map((kind) => {
+      const values=assistanceMetrics.filter((sample) => sample.kind === kind);
+      const durations=values.map((sample) => sample.elapsedMilliseconds).sort((a,b) => a-b);
+      const percentile=(fraction) => durations.length ? durations[Math.max(0,Math.ceil(durations.length * fraction)-1)] : null;
+      return {kind,count:values.length,p50Milliseconds:percentile(0.5),p95Milliseconds:percentile(0.95),
+        outcomes:Object.fromEntries(METRIC_OUTCOMES.map((outcome) => [outcome,values.filter((sample) => sample.outcome === outcome).length]))};
+    })};
+}
 
 function markLocalPolicyChanged() {
   localPolicyRevision += 1;
@@ -96,7 +126,7 @@ function finishRegistrationCycle(result) {
 }
 
 function runRegistrationCycle() {
-  chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] }, () => {
+  chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID,SUPPRESSION_SCRIPT_ID] }, () => {
     // A missing previous registration sets runtime.lastError; reading it keeps
     // Chrome from reporting an unchecked error.
     void chrome.runtime.lastError;
@@ -106,14 +136,23 @@ function runRegistrationCycle() {
         finishRegistrationCycle(registrationFailure(storageError.message));
         return;
       }
-      chrome.scripting.registerContentScripts([{
+      const blockedPatterns = patternsForHosts(settings && settings.blockedSites);
+      const scripts = [{
         id: SCRIPT_ID,
         matches: ["http://*/*", "https://*/*"],
-        excludeMatches: patternsForHosts(settings && settings.blockedSites),
+        excludeMatches: blockedPatterns,
         js: SCRIPT_FILES,
         runAt: "document_idle",
         persistAcrossSessions: true
-      }], () => {
+      }];
+      // Disabled websites load only a semantic focus guard. It captures no
+      // writing and prevents the native Chrome layer from bypassing opt-out.
+      if (blockedPatterns.length) scripts.push({
+        id:SUPPRESSION_SCRIPT_ID,matches:blockedPatterns,
+        js:["src/sitePolicy.js","src/ownershipGuard.js"],
+        runAt:"document_idle",persistAcrossSessions:true
+      });
+      chrome.scripting.registerContentScripts(scripts, () => {
         const registrationError = chrome.runtime.lastError;
         finishRegistrationCycle(registrationError
           ? registrationFailure(registrationError.message)
@@ -768,6 +807,66 @@ function validatedBlocklistMutation(message, sender) {
   return { error: errorResponse(null, "invalidBlocklistMutation", "Bean received an invalid website choice.") };
 }
 
+let sitePauseMutationRunning = false;
+const sitePauseMutationQueue = [];
+function runNextSitePauseMutation() {
+  if (sitePauseMutationRunning || !sitePauseMutationQueue.length) return;
+  sitePauseMutationRunning = true;
+  const item = sitePauseMutationQueue.shift();
+  const finish = (result) => {
+    try { item.completion(result); } catch (_error) {}
+    sitePauseMutationRunning = false;
+    runNextSitePauseMutation();
+  };
+  chrome.storage.local.get(["pausedSites"], (settings) => {
+    const readError = chrome.runtime.lastError;
+    const pausedSites = !readError && settings
+      ? BeanSitePolicy.mutate(settings.pausedSites, item.host, item.operation) : null;
+    if (!pausedSites) { finish(errorResponse(null,"settingsUnavailable","Bean could not verify website pauses.")); return; }
+    chrome.storage.local.set({pausedSites}, () => {
+      const writeError = chrome.runtime.lastError;
+      if (writeError) { finish(errorResponse(null,"settingsUnavailable","Bean could not save this website pause.")); return; }
+      markLocalPolicyChanged();
+      finish({ok:true,pausedSites});
+    });
+  });
+}
+
+function mutateSitePause(message, sender, completion) {
+  const extensionOwned = extensionPageSender(sender), page = extensionOwned ? null : senderPage(sender);
+  const operation = message.operation;
+  const host = extensionOwned ? BeanSitePolicy.host(message.host) : page && page.host;
+  if ((!extensionOwned && (page.error || message.host !== undefined && BeanSitePolicy.host(message.host) !== host)) || !host || !["pause","resume"].includes(operation)) {
+    completion(errorResponse(null,"unauthorizedSender","Only Bean controls can pause this website.")); return;
+  }
+  sitePauseMutationQueue.push({host,operation,completion});
+  runNextSitePauseMutation();
+}
+
+const cancelledActions = new Map(), activeTextJobs = new Map();
+function actionKey(job) { return `${job.tabID}:${job.documentID}:${job.request.id}`; }
+function actionWasCancelled(job) {
+  for (const [key, expiry] of cancelledActions) if (expiry <= Date.now()) cancelledActions.delete(key);
+  return cancelledActions.has(actionKey(job));
+}
+function cancellationError(job) {
+  return errorResponse(job.request.id,"cancelled","Cancelled. Bean will not apply this writing action.");
+}
+function cancelWritingAction(message, sender, completion) {
+  const page = senderPage(sender), id = message.requestId;
+  if (page.error || typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(id)) {
+    completion(errorResponse(null,"unauthorizedSender","Bean could not verify this cancellation.")); return;
+  }
+  const active = activeTextJobs.get(id);
+  if (active && (active.tabID !== page.tabID || active.documentID !== page.documentID || active.request.type !== "performAction")) {
+    completion(errorResponse(id,"unauthorizedSender","Cancel the writing action in its original field.")); return;
+  }
+  const key = actionKey({tabID:page.tabID,documentID:page.documentID,request:{id}});
+  cancelledActions.set(key,Date.now() + 180000);
+  while (cancelledActions.size > 128) cancelledActions.delete(cancelledActions.keys().next().value);
+  completion({ok:true,requestId:id,cancelled:true});
+}
+
 function validateAndBuildTextRequest(message, sender) {
   const page = senderPage(sender);
   const rawRequest = message && message.request;
@@ -777,7 +876,7 @@ function validateAndBuildTextRequest(message, sender) {
     return { error: errorResponse(null, "invalidRequest", "Bean received an invalid browser request.") };
   }
   if (rawRequest.type !== message.type
-      || !["detectIssues", "proofreadParagraph", "localCheck", "performAction"].includes(message.type)) {
+      || !["detectIssues", "proofreadParagraph", "localCheck", "performAction", "learnDictionaryTerm"].includes(message.type)) {
     return { error: errorResponse(candidateID, "invalidRequestType", "Bean received a mismatched browser request.") };
   }
   if (typeof candidateID !== "string" || candidateID.length < 1
@@ -788,9 +887,12 @@ function validateAndBuildTextRequest(message, sender) {
   if (typeof rawRequest.text !== "string" || !rawRequest.text.trim()) {
     return { error: errorResponse(candidateID, "emptyText", "There is no text to check.") };
   }
-  const textLimit = ["detectIssues", "localCheck", "performAction"].includes(message.type) ? MAX_DETECT_TEXT_CHARS : MAX_PROOFREAD_TEXT_CHARS;
+  const textLimit = message.type === "learnDictionaryTerm" ? 96 : ["detectIssues", "localCheck", "performAction"].includes(message.type) ? MAX_DETECT_TEXT_CHARS : MAX_PROOFREAD_TEXT_CHARS;
   if (rawRequest.text.length > textLimit || utf8ByteLength(rawRequest.text) > MAX_TEXT_BYTES) {
     return { error: errorResponse(candidateID, "textTooLong", "This text is too long for browser AI.") };
+  }
+  if (message.type === "learnDictionaryTerm" && !/^\p{L}[\p{L}\p{M}]*(?:['’\-]\p{L}[\p{L}\p{M}]*)*$/u.test(rawRequest.text)) {
+    return {error:errorResponse(candidateID,"invalidDictionaryTerm","Choose one word to add to your dictionary.")};
   }
   if (!rawRequest.source || typeof rawRequest.source !== "object" || Array.isArray(rawRequest.source)) {
     return { error: errorResponse(candidateID, "invalidSource", "Bean could not verify the source field.") };
@@ -883,7 +985,7 @@ function revalidateTextJobPage(job, expectedPolicyRevision, completion) {
       // The service worker is run-to-completion from this callback onward, so
       // this synchronous revision/queue check closes that final privacy gap.
       if (localPolicyRevision !== expectedPolicyRevision
-          || blocklistMutationRunning || blocklistMutationQueue.length > 0) {
+          || blocklistMutationRunning || blocklistMutationQueue.length > 0 || sitePauseMutationRunning || sitePauseMutationQueue.length > 0) {
         completion(errorResponse(
           job.request.id,
           "privacySettingsChanged",
@@ -933,7 +1035,7 @@ function revalidateTextJobDocument(job, expectedPolicyRevision, completion) {
       // Blocking a site while the exact-document challenge is in flight must
       // still win before any captured text crosses the native boundary.
       if (localPolicyRevision !== expectedPolicyRevision
-          || blocklistMutationRunning || blocklistMutationQueue.length > 0) {
+          || blocklistMutationRunning || blocklistMutationQueue.length > 0 || sitePauseMutationRunning || sitePauseMutationQueue.length > 0) {
         completion(errorResponse(
           job.request.id,
           "privacySettingsChanged",
@@ -948,7 +1050,7 @@ function revalidateTextJobDocument(job, expectedPolicyRevision, completion) {
 
 function readLocalPolicy(completion) {
   chrome.storage.local.get(
-    ["blockedSites", "legacyAIOptOut", "enabled", "useBridge", "settingsSchemaVersion"],
+    ["pausedSites", "blockedSites", "legacyAIOptOut", "enabled", "useBridge", "settingsSchemaVersion"],
     (settings) => {
     const runtimeError = chrome.runtime.lastError;
     if (runtimeError || !settings || typeof settings !== "object") {
@@ -956,9 +1058,10 @@ function readLocalPolicy(completion) {
       return;
     }
     const blockedSites = normalizedPolicyBlocklist(settings.blockedSites);
+    const pausedSites = BeanSitePolicy.normalize(settings.pausedSites);
     const policyTypesAreValid = ["legacyAIOptOut", "enabled", "useBridge"].every((key) =>
       settings[key] === undefined || typeof settings[key] === "boolean");
-    if (!blockedSites || !policyTypesAreValid) {
+    if (!blockedSites || !pausedSites || !policyTypesAreValid) {
       // Privacy controls are authorization state. If their persisted shape is
       // corrupt or from an unknown writer, local checks may continue but page
       // text must not cross the native/provider boundary.
@@ -968,6 +1071,7 @@ function readLocalPolicy(completion) {
     completion({
       ok: true,
       blockedSites,
+      pausedSites,
       legacyAIOptOut: preservesLegacyAIOptOut(settings),
       revision: localPolicyRevision
     });
@@ -982,6 +1086,7 @@ function localPolicyError(policy, host, id, automaticAI = true) {
   if (policy.blockedSites.some((blockedHost) => hostIsBlocked(host, blockedHost))) {
     return errorResponse(id, "siteBlocked", "Bean is disabled on this website.");
   }
+  if (BeanSitePolicy.until(policy.pausedSites, host)) return errorResponse(id,"sitePaused","Bean is paused on this website for one hour.");
   if (automaticAI && policy.legacyAIOptOut) {
     return errorResponse(
       id,
@@ -994,9 +1099,13 @@ function localPolicyError(policy, host, id, automaticAI = true) {
 
 function sendTextAfterStatus(job, completion) {
   getLiveStatus((status) => {
-    const offline = job.request.type === "localCheck";
+    if (actionWasCancelled(job)) { completion(cancellationError(job)); return; }
+    const offline = ["localCheck", "learnDictionaryTerm"].includes(job.request.type);
     const explicit = job.request.type === "performAction";
-    const blocked = offline ? blockedByLocalStatus(status)
+    const blocked = job.request.type === "learnDictionaryTerm"
+      ? (status && status.ok === true && status.compatible === true && status.learnWordAvailable === true ? null
+        : errorResponse(job.request.id,"dictionaryUnavailable","Open Bean to save words to your dictionary."))
+      : offline ? blockedByLocalStatus(status)
       : explicit ? blockedByExplicitStatus(status) : blockedByStatus(status);
     if (blocked) {
       completion(blocked);
@@ -1006,6 +1115,7 @@ function sendTextAfterStatus(job, completion) {
     // have blocked the site or retained an old AI opt-out while status was in
     // flight; in either case no text is allowed to cross the native boundary.
     readLocalPolicy((policy) => {
+      if (actionWasCancelled(job)) { completion(cancellationError(job)); return; }
       const policyError = localPolicyError(policy, job.host, job.request.id, !offline && !explicit);
       if (policyError) {
         completion(policyError);
@@ -1015,11 +1125,13 @@ function sendTextAfterStatus(job, completion) {
       // tab at the last possible boundary so text captured from a page that
       // navigated, closed, or began navigating is never sent onward.
       revalidateTextJobPage(job, policy.revision, (pageError) => {
+        if (actionWasCancelled(job)) { completion(cancellationError(job)); return; }
         if (pageError) {
           completion(pageError);
           return;
         }
         revalidateTextJobDocument(job, policy.revision, (documentError) => {
+          if (actionWasCancelled(job)) { completion(cancellationError(job)); return; }
           if (documentError) {
             completion(documentError);
             return;
@@ -1042,19 +1154,31 @@ const activeRequestIDs = new Set();
 
 function startTextRequest(job) {
   sendTextAfterStatus(job, (response) => {
-    try { job.sendResponse(response); } catch (_error) {}
-    activeRequestIDs.delete(job.request.id);
-    if (job.request.type === "localCheck") localRequestInFlight = false;
-    else textRequestInFlight = false;
+    // A pause or cancel arriving during provider work suppresses late output.
+    // The slot remains occupied until the actual work ends; Cancel cannot
+    // promise a provider refund or create a second overlapping paid attempt.
+    const finish = (result) => {
+      try { job.sendResponse(result); } catch (_error) {}
+      activeRequestIDs.delete(job.request.id);
+      activeTextJobs.delete(job.request.id);
+      if (["localCheck", "learnDictionaryTerm"].includes(job.request.type)) localRequestInFlight = false;
+      else textRequestInFlight = false;
+    };
+    if (!response || response.ok !== true) {
+      finish(actionWasCancelled(job) ? cancellationError(job) : response); return;
+    }
+    readLocalPolicy((policy) => finish(actionWasCancelled(job) ? cancellationError(job)
+      : localPolicyError(policy,job.host,job.request.id,false) || response));
   });
 }
 
 function enqueueTextRequest(job) {
+  if (actionWasCancelled(job)) { job.sendResponse(cancellationError(job)); return; }
   if (activeRequestIDs.has(job.request.id)) {
     job.sendResponse(errorResponse(job.request.id, "duplicateRequest", "This browser AI request is already running."));
     return;
   }
-  const offline = job.request.type === "localCheck";
+  const offline = ["localCheck", "learnDictionaryTerm"].includes(job.request.type);
   if (offline ? localRequestInFlight : textRequestInFlight) {
     job.sendResponse(errorResponse(
       job.request.id,
@@ -1066,6 +1190,7 @@ function enqueueTextRequest(job) {
   if (offline) localRequestInFlight = true;
   else textRequestInFlight = true;
   activeRequestIDs.add(job.request.id);
+  activeTextJobs.set(job.request.id,job);
   startTextRequest(job);
 }
 
@@ -1152,7 +1277,11 @@ function forwardFieldOwnership(message, sender, completion) {
   // or a tab switch. Native token checks ensure they only revoke their own lease.
   if (!ownership.active) { send(); return; }
   readLocalPolicy((policy) => {
-    if (!current() || localPolicyError(policy, page.host, null, false)) { reject(); return; }
+    const policyError = localPolicyError(policy,page.host,null,false);
+    // A paused website still suppresses native Chrome assistance. This lease
+    // carries no text and is challenged against its focused eligible field;
+    // every text-bearing request remains blocked by the pause.
+    if (!current() || policyError && !["sitePaused","siteBlocked"].includes(policyError.errorCode)) { reject(); return; }
     const job = { ...page, request:{id:ownership.fieldToken} };
     revalidateTextJobPage(job, policy.revision, (error) => {
       if (error || !current()) { reject(); return; }
@@ -1168,7 +1297,7 @@ function forwardFieldOwnership(message, sender, completion) {
             {frameId:0,documentId:page.documentID}, (response) => {
               if (chrome.runtime.lastError || !current() || !response || response.ok !== true ||
                   response.fieldToken !== ownership.fieldToken || localPolicyRevision !== policy.revision ||
-                  blocklistMutationRunning || blocklistMutationQueue.length) { reject(); return; }
+                  blocklistMutationRunning || blocklistMutationQueue.length || sitePauseMutationRunning || sitePauseMutationQueue.length) { reject(); return; }
               send();
             });
         });
@@ -1178,6 +1307,19 @@ function forwardFieldOwnership(message, sender, completion) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message && message.type === "recordAssistanceMetric") {
+    recordAssistanceMetric(message,sender,sendResponse);return true;
+  }
+  if (message && message.type === "getAssistanceMetrics") {
+    sendResponse(extensionPageSender(sender) ? {ok:true,metrics:assistanceMetricSummary()}
+      : {ok:false,errorCode:"unauthorizedSender"});return true;
+  }
+  if (message && message.type === "cancelWritingAction") {
+    cancelWritingAction(message,sender,sendResponse); return true;
+  }
+  if (message && message.type === "mutateSitePause") {
+    mutateSitePause(message,sender,sendResponse); return true;
+  }
   if (message && message.type === "fieldOwnership") {
     forwardFieldOwnership(message, sender, sendResponse);
     return true;
@@ -1219,7 +1361,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getLiveStatus((status) => statusWithLocalPolicy(status, sendResponse));
     return true;
   }
-  if (message && ["detectIssues", "proofreadParagraph", "localCheck", "performAction"].includes(message.type)) {
+  if (message && ["detectIssues", "proofreadParagraph", "localCheck", "performAction", "learnDictionaryTerm"].includes(message.type)) {
     const validated = validateAndBuildTextRequest(message, sender);
     if (validated.error) {
       sendResponse(validated.error);
@@ -1227,7 +1369,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     readLocalPolicy((policy) => {
       const policyError = localPolicyError(policy, validated.host, validated.request.id,
-        !["localCheck", "performAction"].includes(message.type));
+        !["localCheck", "performAction", "learnDictionaryTerm"].includes(message.type));
       if (policyError) {
         sendResponse(policyError);
         return;

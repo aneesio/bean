@@ -4,6 +4,7 @@ import Foundation
 /// Rank only those supplied candidates; contextual guesses always require the
 /// writer's acceptance and never enter the deterministic Quick Fix path.
 enum SpellingSuggestionRanker {
+    private static let vowels: Set<Character> = ["a", "e", "i", "o", "u"]
     struct Result {
         let suggestion: String
         let alternatives: [String]
@@ -61,10 +62,13 @@ enum SpellingSuggestionRanker {
         guard !a.isEmpty, !b.isEmpty else { return costs[a.count][b.count] }
         for i in 1...a.count {
             for j in 1...b.count {
-                let deletion = i > 1 && a[i - 1] == a[i - 2] ? 0.45 : 0.7
+                let deletion = i > 1 && a[i - 1] == a[i - 2] ? 0.45
+                    : vowels.contains(a[i - 1]) ? 0.7 : 1.05
+                let substitution = a[i - 1] == b[j - 1] ? 0.0
+                    : vowels.contains(a[i - 1]) && vowels.contains(b[j - 1]) ? 0.7 : 1.0
                 costs[i][j] = min(costs[i - 1][j] + deletion,
                                   costs[i][j - 1] + 0.7,
-                                  costs[i - 1][j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1))
+                                  costs[i - 1][j - 1] + substitution)
                 if i > 1, j > 1, a[i - 1] == b[j - 2], a[i - 2] == b[j - 1] {
                     costs[i][j] = min(costs[i][j], costs[i - 2][j - 2] + 0.65)
                 }

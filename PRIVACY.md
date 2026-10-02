@@ -60,6 +60,11 @@ authorized to send it to your selected provider.
   service `com.bean.apikeys`.
 - Preferences and feature flags are stored in macOS UserDefaults for the bundle
   identifier `com.bean.app`.
+- The Mac app and browser extension keep bounded performance samples in memory
+  only. These contain fixed result codes, durations, character/finding counts,
+  and cache status; they contain no writing, clipboard data, app identities,
+  websites, prompts, or responses. Quitting the app or restarting the browser
+  worker clears those samples.
 - Bean keeps a bounded local history of up to 50 content-free operation records
   in UserDefaults. A record may contain timestamp, app name/bundle/category,
   action, input mode and length, provider/model, timing, safety/replacement

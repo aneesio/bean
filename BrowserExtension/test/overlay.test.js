@@ -406,6 +406,93 @@ domOverlay.renderAssistant({ ...fieldRect, y:1000 }, 0, "local", {});
 assert.equal(domDocument.lastShadow.querySelector(".assistant"), null,
   "an off-screen editor never leaves a stray floating badge");
 
+// Production closed-shadow controls expose scope, deterministic Fix All,
+// dictionary persistence and cancellation through real keyboard buttons.
+let preparedScope=null,fixAllEvents=0;
+domOverlay.renderAssistant(fieldRect,2,"nativeLocal",{actionScope:"draft",safeFixCount:2,
+  onPrepareActions:(_event,scope) => {preparedScope=scope || "draft";return preparedScope;},
+  onFixAll:(event) => {if(event.isTrusted) fixAllEvents++;}});
+let badge=domDocument.lastShadow.querySelector(".assistant");
+for(const fn of badge.listeners.click) fn(fakeEvent({detail:1,isTrusted:true}));
+let unifiedCard=domDocument.lastShadow.querySelector(".card");
+const paragraphScope=unifiedCard.querySelector('[data-act="scopeParagraph"]');
+for(const fn of paragraphScope.listeners.click) fn(fakeEvent({detail:1,isTrusted:false}));
+assert.equal(preparedScope,"draft","synthetic page activation cannot change captured scope");
+for(const fn of paragraphScope.listeners.click) fn(fakeEvent({detail:1,isTrusted:true}));
+assert.equal(preparedScope,"paragraph");
+assert.equal(paragraphScope.getAttribute("aria-pressed"),"true");
+assert.match(unifiedCard.querySelector('[data-act="proofread"]').textContent,/current paragraph/);
+assert.ok(unifiedCard.querySelector('[data-act="fixAll"]'));
+for(const fn of unifiedCard.querySelector('[data-act="fixAll"]').listeners.click) fn(fakeEvent({detail:1,isTrusted:true}));
+assert.equal(fixAllEvents,1);
+const proofreadFocus=unifiedCard.querySelector('[data-act="proofread"]');
+proofreadFocus.focus();
+assert.equal(domOverlay._test.keyboardFocusToken().kind,"assistantCard");
+assert.equal(domOverlay._test.keyboardFocusToken().action,"proofread");
+domOverlay.render([],null,null,{});
+domOverlay.renderGroups([],null,{});
+let latestAction=null;
+domOverlay.renderAssistant({...fieldRect,y:110},0,"localLimited",{actionScope:"draft",safeFixCount:0,
+  onWritingAction:(action) => {latestAction=action;}});
+assert.equal(domDocument.lastShadow.querySelector(".card"),unifiedCard,
+  "passive findings/status updates preserve the same expanded assistant DOM identity");
+assert.equal(domDocument.lastShadow.activeElement,proofreadFocus,
+  "empty local results cannot strand focus on the page body");
+assert.match(unifiedCard.querySelector("strong").textContent,/Basic checks/);
+assert.match(proofreadFocus.textContent,/current paragraph/,
+  "passive status refresh retains the exact action scope captured within the open assistant");
+assert.equal(unifiedCard.querySelector('[data-act="review"]').hidden,true);
+assert.equal(unifiedCard.querySelector('[data-part="fixAllGroup"]').hidden,true);
+for(const fn of proofreadFocus.listeners.click) fn(fakeEvent({detail:1,isTrusted:true}));
+assert.equal(latestAction,"proofread","retained controls invoke the latest source-bound handlers");
+const conciseFocus=unifiedCard.querySelector('[data-act="makeConcise"]');conciseFocus.focus();
+domOverlay.renderAssistant(fieldRect,2,"nativeLocal",{actionScope:"draft",safeFixCount:1});
+assert.equal(domDocument.lastShadow.activeElement,conciseFocus,"rewriting action focus survives updated findings");
+assert.equal(unifiedCard.querySelector('[data-act="review"]').hidden,false);
+assert.equal(unifiedCard.querySelector('[data-part="fixAllGroup"]').hidden,false);
+assert.match(unifiedCard.querySelector('[data-act="fixAll"]').textContent,/Fix 1 obvious issue/);
+const scopeFocus=unifiedCard.querySelector('[data-act="scopeParagraph"]');scopeFocus.focus();
+domOverlay.render([],null,null,{});domOverlay.renderAssistant(fieldRect,0,"nativeLocal",{});
+assert.equal(domDocument.lastShadow.activeElement,scopeFocus,"scope selector focus survives passive rerender");
+domOverlay.clear();
+assert.equal(domDocument.lastShadow.querySelector(".card"),null,
+  "explicit typing/field invalidation removes the retained assistant and its captured scope");
+domOverlay.clearAssistant();
+domOverlay.renderAssistant(fieldRect,0,"nativeLocal",{actionScope:"selection",onPrepareActions:() => "selection"});
+badge=domDocument.lastShadow.querySelector(".assistant");
+for(const fn of badge.listeners.click) fn(fakeEvent({detail:1,isTrusted:true}));
+unifiedCard=domDocument.lastShadow.querySelector(".card");
+assert.equal(unifiedCard.querySelector(".scope").hidden,true,"selected-text scope cannot silently widen to the draft");
+assert.match(source,/\.scope\[hidden\]\s*\{\s*display:none\s*;/,
+  "selected-text scope must override the author display:flex rule in rendered browsers");
+assert.match(unifiedCard.querySelector('[data-act="proofread"]').textContent,/selected text/);
+domOverlay.clearAssistant();
+let learnedActivations=0;
+domOverlay.render([replacementIssue],replacementIssue.id,{index:0,total:1},{learnWordAvailable:true,
+  onLearnWord:(id,event) => {assert.equal(id,replacementIssue.id);if(event.isTrusted) learnedActivations++;}});
+let learnControl=domDocument.lastShadow.querySelector('[data-act="learn"]');
+assert.equal(learnControl.disabled,false);
+for(const fn of learnControl.listeners.click) fn(fakeEvent({detail:1,isTrusted:true}));
+assert.equal(learnedActivations,1);
+domOverlay.render([replacementIssue],replacementIssue.id,{index:0,total:1},{learnWordAvailable:false});
+learnControl=domDocument.lastShadow.querySelector('[data-act="learn"]');
+assert.equal(learnControl.disabled,true);
+assert.match(learnControl.title,/Open Bean/);
+assert.match(source,/\.alternatives\s*\{[^}]*flex-wrap:wrap/,
+  "spelling choices wrap inside their correction card at narrow viewport widths");
+assert.match(source,/\.alternatives button\.b\s*\{[^}]*max-width:100%[^}]*overflow-wrap:anywhere/,
+  "a long spelling choice remains bounded by its own card rather than the viewport");
+assert.match(source,/\.card\s*\{[^}]*max-height:calc\(100vh - 16px\)[^}]*overflow:auto/,
+  "long corrections remain scrollable inside a short viewport");
+domOverlay.clear();
+let cancellations=0;
+domOverlay.showParagraphBusy(fieldRect,"Rewriting…",(event) => {if(event.isTrusted) cancellations++;});
+const cancelControl=domOverlay._test.keyboardControls().find((button) => button.dataset.act === "cancel");
+assert.ok(cancelControl,"busy writing actions expose an actual reachable Cancel button");
+for(const fn of cancelControl.listeners.click) fn(fakeEvent({detail:1,isTrusted:true}));
+assert.equal(cancellations,1);
+domOverlay.clearParagraphBusy();
+
 assert.match(source, /createElement\("img"\)/, "paragraph controls use the official Bean mark");
 assert.match(source, /getURL\("icon128\.png"\)/);
 assert.doesNotMatch(source, /icon\.textContent\s*=\s*String/, "the old numbered dot is removed");

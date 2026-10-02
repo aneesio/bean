@@ -13,6 +13,7 @@ final class ReplacementUndoStore {
         let original: String
         let replacement: String
         let rangeEdit: RangeEdit?
+        let editPlan: NativeEditPlan?
     }
 
     private struct RangeEdit {
@@ -26,6 +27,14 @@ final class ReplacementUndoStore {
     var isAvailable: Bool {
         guard let record else { return false }
         return Date().timeIntervalSince(record.createdAt) <= Self.lifetime
+    }
+
+    func isAvailable(for element: AXUIElement, value: String, app: NSRunningApplication?) -> Bool {
+        guard isAvailable, let record, let app, !app.isTerminated,
+              record.targetApp.processIdentifier == app.processIdentifier,
+              AccessibilityService.isSameElement(record.element, element),
+              Self.currentValueMatches(value, expectedReplacement: record.replacement) else { return false }
+        return true
     }
 
     /// A newer confirmed edit without an exact undoable range must retire the
@@ -43,7 +52,7 @@ final class ReplacementUndoStore {
         guard let app, !app.isTerminated, let element,
               !TextSelectionService.exactTextMatches(original, replacement) else { return }
         record = Record(createdAt: Date(), targetApp: app, element: element,
-                        original: original, replacement: replacement, rangeEdit: nil)
+                        original: original, replacement: replacement, rangeEdit: nil, editPlan: nil)
     }
 
     func registerConfirmedRange(app: NSRunningApplication?, element: AXUIElement?,
@@ -57,7 +66,16 @@ final class ReplacementUndoStore {
         record = Record(createdAt: Date(), targetApp: app, element: element,
                         original: original, replacement: replacement,
                         rangeEdit: RangeEdit(range: range, original: originalRangeText,
-                                             replacement: replacementRangeText))
+                                             replacement: replacementRangeText), editPlan: nil)
+    }
+
+    func registerConfirmedEdits(app: NSRunningApplication?, element: AXUIElement?, plan: NativeEditPlan) {
+        guard let app, !app.isTerminated, let element, !plan.edits.isEmpty,
+              let checked = NativeEditPlan.validated(original: plan.original, edits: plan.edits),
+              Self.currentValueMatches(checked.replacement, expectedReplacement: plan.replacement) else { return }
+        record = Record(createdAt: Date(), targetApp: app, element: element,
+                        original: checked.original, replacement: checked.replacement,
+                        rangeEdit: nil, editPlan: checked)
     }
 
     func undo() async -> TextSelectionService.ReplacementResult {
@@ -88,7 +106,10 @@ final class ReplacementUndoStore {
         let selection = AccessibilityService.selectedRange(of: record.element)
         let service = TextSelectionService(undoStore: self)
         let result: TextSelectionService.ReplacementResult
-        if let edit = record.rangeEdit {
+        if let plan = record.editPlan {
+            result = await service.replaceEdits(app: record.targetApp, element: record.element,
+                valueBefore: record.replacement, edits: plan.inverseEdits, selectionToRestore: selection)
+        } else if let edit = record.rangeEdit {
             let range = NSRange(location: edit.range.location, length: (edit.replacement as NSString).length)
             if range.length > 0 {
                 result = await service.replaceRange(
@@ -96,13 +117,12 @@ final class ReplacementUndoStore {
                     range: range, replacement: edit.original, selectionToRestore: selection
                 )
             } else {
-                // Undoing a verified deletion inserts the original substring;
-                // restore the proven complete field through normal Paste.
-                result = await service.replaceWholeField(
-                    app: record.targetApp, element: record.element,
-                    valueBefore: record.replacement, replacement: record.original,
-                    selectionToRestore: selection
-                )
+                // A deletion is reversed at the proven numeric caret. Never
+                // flatten surrounding formatting/attachments to restore it.
+                result = await service.replaceEdits(app: record.targetApp, element: record.element,
+                    valueBefore: record.replacement,
+                    edits: [NativeTextEdit(range: range, original: "", replacement: edit.original)],
+                    selectionToRestore: selection)
             }
         } else {
             result = await service.replaceWholeField(
@@ -113,9 +133,12 @@ final class ReplacementUndoStore {
         }
         service.cancel()
         guard result == .replacedConfirmed else {
-            // A retryable clipboard fallback must keep the original undo
-            // record; an uncertain editor result needs a fresh exact check.
-            self.record = record
+            // Keep a retry only while no part of Undo changed the snapshot.
+            // A partial restore cannot keep advertising the old full record.
+            if let current = AccessibilityService.value(of: record.element),
+               Self.currentValueMatches(current, expectedReplacement: record.replacement) {
+                self.record = record
+            } else { self.record = nil }
             return result
         }
 

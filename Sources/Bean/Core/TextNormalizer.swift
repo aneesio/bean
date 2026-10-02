@@ -102,7 +102,7 @@ enum TextNormalizer {
     /// wrapping quotes until the source-aware cleanup above can distinguish
     /// legitimate quoted text from a provider wrapper.
     static func sanitizeModelOutput(_ output: String, originalCore: String) -> String {
-        let cleaned = ParagraphSanitizer.sanitize(output, preservingWrappingQuotes: true).text
+        let cleaned = ParagraphSanitizer.sanitize(output, preservingWrappingQuotes: true, original: originalCore).text
         return stripArtifacts(cleaned, originalCore: originalCore)
     }
 

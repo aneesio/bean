@@ -32,17 +32,28 @@
                   disabledFields: new WeakSet(),
                   aiContext: null, aiDetectionFingerprint: 0,
                   pendingTextAuthorizations: new Map(),
-                  blockedSites: [], settingsAvailable: false,
+                  blockedSites: [], pausedSites:{}, settingsAvailable: false,
+                  learnedTerms:new Set(), protectedRanges:[], protectedText:null,
+                  deterministicIssues:[], deterministicText:null, writingOperation:null,
                   undoRecord: null, applyingEdit: false,
                   disabledControlTarget: null, checkStatus: "localLimited", composing: false,
                   bridgeStatus:null, localSpellingAvailable:false, fieldToken:null, assistantVisible:false,
                   actionTarget:null,actionSourceText:null };
+  state.suppressedField = null;
   let debounce = null, scrollThrottle = null, focusoutTimer = null;
   let ownershipHeartbeat = null;
   let ownershipSupported = false;
   let ownershipRequestSequence = 0;
   let keyboardBridgeEl = null, keyboardBridgeResumeTimer = null;
   let lastBridgeAt = 0;
+  let pauseExpiryTimer = null;
+  let appPauseRefreshTimer = null;
+  let lastInputAt = null;
+  function recordMetric(kind,started,inputLength,issueCount,outcome) {
+    const elapsedMilliseconds = Math.max(0,Math.min(180000,Math.round(Date.now() - started)));
+    try { chrome.runtime.sendMessage({type:"recordAssistanceMetric",sample:{kind,inputLength:Math.min(50000,inputLength),
+      issueCount:Math.min(64,issueCount),elapsedMilliseconds,outcome}},() => { void chrome.runtime.lastError; }); } catch (_error) {}
+  }
 
   // --- Settings -------------------------------------------------------------
   function host() { return canonicalBlockedHost(location.hostname) || ""; }
@@ -76,22 +87,67 @@
   }
   function siteAllowed() {
     return state.settingsAvailable
+      && !BeanSitePolicy.until(state.pausedSites, host())
       && !state.blockedSites.some((blockedHost) => hostIsBlocked(host(), blockedHost));
   }
   function loadSettings(cb) {
-    chrome.storage.local.get(["blockedSites"], (s) => {
+    chrome.storage.local.get(["blockedSites", "pausedSites"], (s) => {
       const readError = chrome.runtime.lastError;
       const rawSites = s && s.blockedSites;
       const normalizedSites = Array.isArray(rawSites)
         ? rawSites.map(canonicalBlockedHost) : [];
       const shapeValid = rawSites === undefined || (Array.isArray(rawSites)
         && normalizedSites.every(Boolean));
-      state.settingsAvailable = !readError && !!s && shapeValid;
+      const pausedSites = s && BeanSitePolicy.normalize(s.pausedSites);
+      state.settingsAvailable = !readError && !!s && shapeValid && !!pausedSites;
+      state.pausedSites = pausedSites || {};
       state.blockedSites = state.settingsAvailable && Array.isArray(rawSites)
         ? [...new Set(normalizedSites)]
         : [];
+      schedulePauseExpiry();
+      syncPausedOwnership();
       cb && cb();
     });
+  }
+
+  function schedulePauseExpiry() {
+    if (pauseExpiryTimer) clearTimeout(pauseExpiryTimer);
+    pauseExpiryTimer = null;
+    const until = BeanSitePolicy.until(state.pausedSites,host());
+    if (until) pauseExpiryTimer = setTimeout(() => loadSettings(() => {
+      if (siteAllowed()) activateInitiallyFocusedField(); else { teardown(); syncPausedOwnership(); }
+    }),Math.min(2147483647,Math.max(1,until - Date.now() + 25)));
+  }
+
+  function reflectAppPause(status) {
+    if (state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true &&
+        (!status || status.ok !== true || typeof status.appAssistancePaused !== "boolean")) status = state.bridgeStatus;
+    state.bridgeStatus = status;
+    if (!status || status.appAssistancePaused !== true || !state.active) return false;
+    state.entries = []; state.groups = []; state.selectedId = null; state.selectedGroupId = null;
+    state.deterministicIssues = []; state.deterministicText = null;
+    state.aiContext = null; state.aiDetectionFingerprint = 0;
+    for (const [id,authorization] of state.pendingTextAuthorizations)
+      if (!["performAction","learnDictionaryTerm"].includes(authorization.purpose)) revokeTextAuthorization(id);
+    state.checkStatus = "appPaused";
+    if (!state.fixingGroup) { BeanOverlay.clear(); renderAssistant(); }
+    return true;
+  }
+
+  function scheduleAppPauseRefresh() {
+    if (appPauseRefreshTimer) clearTimeout(appPauseRefreshTimer);
+    const el = state.active;
+    if (!el || !siteAllowed()) { appPauseRefreshTimer = null; return; }
+    appPauseRefreshTimer = setTimeout(async () => {
+      appPauseRefreshTimer = null;
+      if (state.active !== el || !writingSourceIsFocused(el) || eligibleEditableSurface(el) !== el) return;
+      const wasPaused = state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true;
+      const status = await requestBridgeStatus("localCheck");
+      if (state.active !== el || !siteAllowed() || !writingSourceIsFocused(el)) return;
+      const paused = reflectAppPause(status);
+      if (wasPaused && !paused && !state.fixingGroup) scheduleCheck();
+      scheduleAppPauseRefresh();
+    },5000);
   }
 
   function uuid() { return (Date.now().toString(36) + Math.random().toString(36).slice(2)); }
@@ -155,6 +211,7 @@
     const issues = [];
     const chunks = BeanTrustPolicy.localCheckChunks(checkedText);
     let complete = true;
+    const protectedRanges = [];
     for (const chunk of chunks) {
       if (!fieldSnapshotMatches(el, text, generation)) return {issues:[],complete:false};
       if (!chunk.text.trim()) continue;
@@ -175,12 +232,16 @@
         } catch (_error) { finish(null); }
       });
       if (!fieldSnapshotMatches(el, text, generation)) return {issues:[],complete:false};
-      if (!response || response.ok !== true || !Array.isArray(response.issues)) return {issues,complete:false};
-      if (response.localSpellingAvailable !== true) complete = false;
+      if (!response || response.ok !== true || !Array.isArray(response.issues)) return {issues,complete:false,protectedRanges};
+      if (response.localSpellingAvailable !== true || response.localCheckComplete !== true) complete = false;
+      if (Array.isArray(response.protectedRanges)) for (const range of response.protectedRanges) {
+        if (Number.isInteger(range.start) && Number.isInteger(range.end) && range.start >= 0 && range.end > range.start && range.end <= chunk.text.length)
+          protectedRanges.push({start:range.start + chunk.start,end:range.end + chunk.start});
+      }
       const mapped = BeanTrustPolicy.mergeLocalIssues(chunk.text,[],response.issues,32);
       issues.push(...mapped.map((issue) => ({...issue,start:issue.start + chunk.start,end:issue.end + chunk.start})));
     }
-    return {issues,complete};
+    return {issues,complete,protectedRanges};
   }
 
   function rememberBridgeUnavailable(code, now) {
@@ -265,7 +326,7 @@
   }
   chrome.storage.onChanged.addListener(() => loadSettings(() => {
     bridgeCooldownUntil = 0; // settings changed → re-evaluate bridge
-    if (!siteAllowed()) teardown();
+    if (!siteAllowed()) { teardown(); syncPausedOwnership(); }
     else activateInitiallyFocusedField();
   }));
 
@@ -423,7 +484,7 @@
     // add password/OTP/search/card attributes while the content-free status
     // handshake is in flight; text must not leave merely because the field was
     // ordinary when the debounce began.
-    if (!el || !siteAllowed() || eligibleEditableSurface(el) !== el) return false;
+    if (!el || !siteAllowed() || state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true || eligibleEditableSurface(el) !== el) return false;
     const context = eligibleAIContext(el, getText(el));
     return !!context && context.text === text;
   }
@@ -446,6 +507,7 @@
     if (typeof requestId !== "string" || !requestId) return false;
     const el = state.active;
     if (!el || !siteAllowed() || eligibleEditableSurface(el) !== el) return false;
+    if (state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true && !["performAction","learnDictionaryTerm"].includes(purpose)) return false;
     const fullText = getText(el);
     const context = snapshot || eligibleAIContext(el, fullText);
     if (!context || context.text !== text || !context.stillMatches() ||
@@ -514,12 +576,26 @@
   }
 
   function ownsFocusedField() {
-    const el = state.active;
-    return !!el && state.assistantVisible && document.visibilityState !== "hidden" &&
+    const paused = suppressionNeeded();
+    const el = paused ? state.suppressedField : state.active;
+    return !!el && (paused || state.assistantVisible) && document.visibilityState !== "hidden" &&
       (typeof document.hasFocus !== "function" || document.hasFocus()) &&
-      document.contains(el) && siteAllowed() && eligibleEditableSurface(el) === el &&
+      document.contains(el) && (paused || siteAllowed()) && eligibleEditableSurface(el) === el &&
       (document.activeElement === el || (el.contains && el.contains(document.activeElement)) ||
         isBeanOverlayNode(document.activeElement));
+  }
+
+  function syncPausedOwnership() {
+    const paused = suppressionNeeded();
+    const target = paused ? eligibleEditableSurface(document.activeElement) : null;
+    if (target !== state.suppressedField) releaseOwnership();
+    state.suppressedField = target;
+    if (target) renewOwnership();
+  }
+
+  function suppressionNeeded() {
+    return state.settingsAvailable && (!!BeanSitePolicy.until(state.pausedSites,host()) ||
+      state.blockedSites.some((blockedHost) => hostIsBlocked(host(),blockedHost)));
   }
 
   function sendOwnership(active, token = state.fieldToken) {
@@ -558,15 +634,16 @@
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") { releaseOwnership(); clearPendingTextAuthorizations(); }
-    else if (state.active) { renderAssistant(); scheduleCheck(); }
+    else if (state.active) { renderAssistant(); scheduleCheck(); scheduleAppPauseRefresh(); }
+    else syncPausedOwnership();
   });
   window.addEventListener("blur",releaseOwnership);
-  window.addEventListener("focus",() => { if (state.active) { renderAssistant(); scheduleCheck(); } });
+  window.addEventListener("focus",() => { if (state.active) { renderAssistant(); scheduleCheck(); scheduleAppPauseRefresh(); } else syncPausedOwnership(); });
   window.addEventListener("pagehide",teardown);
 
   // --- Lifecycle ------------------------------------------------------------
   document.addEventListener("focusin", (e) => {
-    if (!siteAllowed()) return;
+    if (!siteAllowed()) { syncPausedOwnership(); return; }
     if (isBeanOverlayEvent(e)) return;
     const disabledSurface = editableSurface(e.target);
     if (disabledSurface && state.disabledFields.has(disabledSurface)) {
@@ -643,13 +720,16 @@
     state.disabledControlTarget = null;
     setFieldDisabledOverlay(false);
     state.active = el;
+    lastInputAt = null;
     state.aiContext = null;
     state.aiDetectionFingerprint = 0;
     state.ignored = [];
-    state.ignoredText = getText(el);
-    state.checkStatus = "waiting";
+    const appPaused = state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true;
+    state.ignoredText = appPaused ? "" : getText(el);
+    state.checkStatus = appPaused ? "appPaused" : "waiting";
     state.localSpellingAvailable = false;
     state.composing = false;
+    state.suppressedField = null;
     el.addEventListener("input", onInput, true);
     el.addEventListener("compositionstart", onCompositionStart, true);
     el.addEventListener("compositionend", onCompositionEnd, true);
@@ -657,6 +737,7 @@
     document.addEventListener("keydown", onDocKeyDown, true);
     renderAssistant();
     scheduleCheck();
+    scheduleAppPauseRefresh();
   }
 
   function withBeanEdit(operation) {
@@ -781,6 +862,7 @@
   }
 
   function onCompositionStart() {
+    cancelWritingOperation(false);
     state.composing = true;
     state.reqGen++;
     clearPendingTextAuthorizations();
@@ -794,6 +876,7 @@
   }
 
   function onInput(event) {
+    if (!state.applyingEdit) cancelWritingOperation(false);
     state.actionTarget = null; state.actionSourceText = null;
     // Sites can change autocomplete/role/inputmode after focus (OTP widgets do
     // this often). Re-evaluate semantics before reading or capturing any text.
@@ -802,6 +885,12 @@
       teardown();
       return;
     }
+    if (state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true) {
+      state.reqGen++; clearPendingTextAuthorizations();
+      state.aiContext = null; reflectAppPause(state.bridgeStatus);
+      scheduleCheck(); return;
+    }
+    lastInputAt = Date.now();
     reconcileIgnored(getText(state.active));
     // Typing hides the overlay; invalidate in-flight requests; re-check later.
     state.reqGen++;
@@ -844,9 +933,11 @@
     if (BeanOverlay && typeof BeanOverlay.clearAssistant === "function") BeanOverlay.clearAssistant();
   }
   function teardown() {
+    cancelWritingOperation(false);
     state.actionTarget = null; state.actionSourceText = null;
     state.assistantVisible = false;
     releaseOwnership();
+    if (appPauseRefreshTimer) { clearTimeout(appPauseRefreshTimer); appPauseRefreshTimer = null; }
     if (focusoutTimer) { clearTimeout(focusoutTimer); focusoutTimer = null; }
     if (debounce) { clearTimeout(debounce); debounce = null; }
     if (state.active) {
@@ -914,13 +1005,20 @@
     if (!el || !document.contains(el) || eligibleEditableSurface(el) !== el) {
       teardown(); return;
     }
+    if (state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true) {
+      const status = await requestBridgeStatus("localCheck");
+      if (state.active !== el || !siteAllowed() || eligibleEditableSurface(el) !== el) return;
+      if (reflectAppPause(status)) return;
+    }
     const text = getText(el);
     if (state.composing) return;
     if (!text || text.length > 50000) { state.checkStatus = text.length > 50000 ? "tooLong" : "empty"; clearOverlay(); renderAssistant(); return; }
     const fp = fingerprint(text);
     const fieldType = el.isContentEditable ? "contenteditable" : (el.tagName || "").toLowerCase();
     const gen = ++state.reqGen;
-    let localIssues = BeanDetector.detect(text);
+    const analysisStarted = Date.now(), feedbackStarted = lastInputAt;
+    let localIssues = filterLearnedCandidates(text,BeanDetector.detect(text));
+    state.deterministicText = text; state.deterministicIssues = localIssues;
     state.fingerprint = fp;
     state.shownFingerprint = fp;
     state.entries = mapEntries(el, text, localIssues);
@@ -930,7 +1028,10 @@
 
     const localResult = await bridgeLocalIssues(el,text,gen,fieldType);
     if (!fieldSnapshotMatches(el,text,gen)) return;
+    if (reflectAppPause(state.bridgeStatus)) return;
+    state.protectedText = text; state.protectedRanges = localResult.protectedRanges || [];
     if (BeanTrustPolicy.mergeLocalIssues) localIssues = BeanTrustPolicy.mergeLocalIssues(text,localIssues,localResult.issues,64);
+    localIssues = filterLearnedCandidates(text,localIssues);
     state.localSpellingAvailable = localResult.complete;
     state.entries = mapEntries(el,text,localIssues);
     state.checkStatus = localResult.complete ? "nativeLocal" : "localLimited";
@@ -938,6 +1039,12 @@
       state.checkStatus = "mappingLimited";
     }
     renderOverlay();
+
+    recordMetric("browserAnalysis",analysisStarted,text.length,state.entries.length,localResult.complete ? "complete" : "basic");
+    if (feedbackStarted !== null && feedbackStarted === lastInputAt) {
+      recordMetric("typingPauseToFeedback",feedbackStarted,text.length,state.entries.length,localResult.complete ? "complete" : "basic");
+      lastInputAt = null;
+    }
 
     // Focus alone is deliberately local-only. AI becomes eligible only after a
     // trusted edit, and receives the captured changed block instead of the field.
@@ -953,14 +1060,14 @@
     bridgeIssues(context.text, fieldType, remainingIssueSlots).then((result) => {
       // Stale typing/refocus is harmless, but a live sensitive-state change must
       // be handled before this callback reads the field or renders anything.
-      if (gen !== state.reqGen || el !== state.active) return;
+      if (gen !== state.reqGen || el !== state.active || state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true) return;
       if (eligibleEditableSurface(el) !== el) {
         reason("fieldBecameIneligible");
         teardown();
         return;
       }
       if (getText(el) !== text || !context.stillMatches()) return;
-      const candidates = BeanTrustPolicy.mergeIssues(localIssues, result.issues || [], 16);
+      const candidates = filterLearnedCandidates(text,BeanTrustPolicy.mergeIssues(localIssues, result.issues || [], 16));
       state.fingerprint = fp;
       state.shownFingerprint = fp;
       state.entries = mapEntries(el, text, candidates);
@@ -1000,12 +1107,23 @@
     const oldEnd = before.length - suffix, delta = text.length - before.length;
     state.ignored = state.ignored.filter((record) => {
       if (record.start == null) return false;
-      if (record.end <= prefix) return true;
+      if (record.end <= prefix) return ignoredOccurrenceMatches(text,record);
       if (record.start < oldEnd) return false;
       record.start += delta; record.end += delta;
-      return text.slice(record.start, record.end) === record.original;
+      return ignoredOccurrenceMatches(text,record);
     });
     state.ignoredText = text;
+  }
+
+  function ignoredOccurrenceMatches(text,record) {
+    if (text.slice(record.start,record.end) !== record.original) return false;
+    const word = (character) => !!character && /^[\p{L}\p{M}\p{N}_]$/u.test(character);
+    const original = Array.from(record.original);
+    const previous = record.start > 0 ? Array.from(text.slice(Math.max(0,record.start - 2),record.start)).at(-1) : null;
+    const next = record.end < text.length ? Array.from(text.slice(record.end,record.end + 2))[0] : null;
+    // Extending either word boundary changes this occurrence, even when its
+    // old substring still matches. Removing that extension must check anew.
+    return !(word(original[0]) && word(previous) || word(original.at(-1)) && word(next));
   }
 
   function issueOffset(text, issue) {
@@ -1243,11 +1361,14 @@
         if (entry) dismissEntry(entry);
         dropIssue(id);
       },
+      learnWordAvailable: !!state.bridgeStatus && state.bridgeStatus.learnWordAvailable === true,
+      onLearnWord:(id,event) => learnWord(id,event),
       onApply: (id) => applyIssue(id),
       onApplyAlternative:(id,suggestion) => applyIssue(id,suggestion),
       onUndo: () => undoLastApply(),
       onEnableField: () => enableDisabledField(state.disabledControlTarget),
       onDisableField: () => disableCurrentField(),
+      onPauseSite:(event) => pauseCurrentSite(event),
       onDisableSite: () => disableCurrentSite()
     });
 
@@ -1300,6 +1421,7 @@
       onUndo: () => undoLastApply(),
       onEnableField: () => enableDisabledField(state.disabledControlTarget),
       onDisableField: () => disableCurrentField(),
+      onPauseSite:(event) => pauseCurrentSite(event),
       onDisableSite: () => disableCurrentSite()
     });
     renderAssistant();
@@ -1319,13 +1441,16 @@
       },
       onClose: () => restoreFieldFocus(el),
       actionScope:actionScope(el),
-      onPrepareActions:() => {
+      safeFixCount:safeFixPlan(el)?.edits.length || 0,
+      onFixAll:(event) => fixAllObvious(event),
+      onPrepareActions:(_event,scope) => {
         if (document.activeElement === el || el.contains && el.contains(document.activeElement) ||
-            !state.actionTarget || state.actionSourceText !== getText(el)) captureActionTarget(el);
+            !state.actionTarget || state.actionSourceText !== getText(el) || scope) captureActionTarget(el,scope);
         return state.actionTarget && state.actionTarget.scope || actionScope(el);
       },
       onWritingAction:(action,event) => performWritingAction(action,event),
       onDisableField: () => disableCurrentField(),
+      onPauseSite:(event) => pauseCurrentSite(event),
       onDisableSite: () => disableCurrentSite()
     });
     state.assistantVisible = shown !== false;
@@ -1333,12 +1458,43 @@
     renewOwnership();
   }
 
-  function captureActionTarget(el) {
-    state.actionTarget = explicitActionTarget(el);
+  function captureActionTarget(el,scope) {
+    // Scope controls keep the selection captured when the assistant opened.
+    // A fresh opening from the editor must capture its current selection/caret.
+    if (state.actionTarget && state.actionTarget.scope === "selection" && state.actionSourceText === getText(el) &&
+        (scope || document.activeElement !== el && !(el.contains && el.contains(document.activeElement)))) return;
+    state.actionTarget = explicitActionTarget(el,scope);
     state.actionSourceText = getText(el);
   }
 
+  function writingSourceIsFocused(el) {
+    return document.visibilityState !== "hidden" &&
+      (typeof document.hasFocus !== "function" || document.hasFocus()) &&
+      (document.activeElement === el || el.contains && el.contains(document.activeElement) ||
+        isBeanOverlayNode(document.activeElement));
+  }
+
+  function cancelWritingOperation(showNotice) {
+    const operation = state.writingOperation;
+    if (!operation) return false;
+    operation.cancelled = true;
+    state.writingOperation = null;
+    state.reqGen++;
+    clearPendingTextAuthorizations();
+    state.fixingGroup = false;
+    if (operation.resolve) operation.resolve();
+    try { chrome.runtime.sendMessage({type:"cancelWritingAction",requestId:operation.requestId}, () => { void chrome.runtime.lastError; }); } catch (_error) {}
+    if (typeof BeanOverlay.clearParagraphBusy === "function") BeanOverlay.clearParagraphBusy();
+    if (showNotice && state.active === operation.element && siteAllowed()) {
+      renderOverlay(); scheduleCheck();
+      BeanOverlay.flash(fieldRect(operation.element),"Cancelled. Your writing is unchanged. Provider work already sent may still be billed.");
+      if (writingSourceIsFocused(operation.element)) restoreFieldFocus(operation.element);
+    }
+    return true;
+  }
+
   function actionScope(el) {
+    if (state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true) return "draft";
     if (!el.isContentEditable) {
       return el.selectionEnd > el.selectionStart ? "selection" : getText(el).length <= 8000 ? "draft" : "paragraph";
     }
@@ -1348,14 +1504,14 @@
     return ceBlockReplaceable(el) ? "draft" : "paragraph";
   }
 
-  function explicitActionTarget(el) {
+  function explicitActionTarget(el,preferredScope) {
     if (!el.isContentEditable) {
       const before = el.value;
       let start = Number.isInteger(el.selectionStart) ? el.selectionStart : 0;
       let end = Number.isInteger(el.selectionEnd) ? el.selectionEnd : start;
-      const scope = end > start ? "selection" : before.length <= 8000 ? "draft" : "paragraph";
+      const scope = end > start ? "selection" : preferredScope === "paragraph" || before.length > 8000 ? "paragraph" : "draft";
       if (start === end) {
-        if (before.length <= 8000) { start = 0; end = before.length; }
+        if (scope === "draft") { start = 0; end = before.length; }
         else {
           start = before.lastIndexOf("\n",Math.max(0,start - 1)) + 1;
           end = before.indexOf("\n",start); if (end < 0) end = before.length;
@@ -1381,8 +1537,9 @@
         const before = el.textContent;
         const text = before.slice(offsets.start,offsets.end);
         return {text,scope:"selection",stillMatches:() => el.textContent === before,
-          replace:(corrected) => {
+          replace:(corrected,options = {}) => {
             if (el.textContent !== before || eligibleEditableSurface(el) !== el) return null;
+            if (options.minimal || !ceBlockReplaceable(el)) return applyMinimalContentEditable(el,offsets.start,offsets.end,text,corrected,"selection");
             const range = BeanMapping.rangeFromOffsets(el,offsets.start,offsets.end);
             const after = BeanMapping.replaceRangePreservingBoundaries(before,offsets.start,offsets.end,corrected);
             if (!range || range.toString() !== text || after === null) return null;
@@ -1395,9 +1552,9 @@
     // Whole-field replacement is safe only when literal DOM text matches what
     // was sent. Rich email editors retain their structure by checking the
     // current plain paragraph instead.
-    const block = ceBlockReplaceable(el) ? el :
+    const block = preferredScope !== "paragraph" && ceProofreadScope(el) ? el :
       (selection && selection.anchorNode ? blockAncestor(selection.anchorNode,el) : null);
-    const target = block && ceBlockReplaceable(block) ? paragraphTarget(el,{kind:"ce",block}) : null;
+    const target = block && ceProofreadScope(block) ? paragraphTarget(el,{kind:"ce",block}) : null;
     return target ? {...target,scope:block === el ? "draft" : "paragraph"} : null;
   }
 
@@ -1416,26 +1573,32 @@
       restoreFieldFocus(el); return;
     }
     const text = getText(el), generation = ++state.reqGen;
+    const operation = {element:el,generation,requestId:uuid(),resolve:null,cancelled:false};
+    state.writingOperation = operation;
     clearPendingTextAuthorizations();
     state.fixingGroup = true;
     BeanOverlay.clear();
-    BeanOverlay.showParagraphBusy(anchor,action === "proofread" ? "Proofreading…" : "Rewriting…");
-    const current = () => fieldSnapshotMatches(el,text,generation) && target.stillMatches(target.text);
+    BeanOverlay.showParagraphBusy(anchor,action === "proofread" ? "Proofreading…" : "Rewriting…",
+      (event) => { if (event && event.isTrusted === true) cancelWritingOperation(true); });
+    const current = () => state.writingOperation === operation && !operation.cancelled && writingSourceIsFocused(el) &&
+      fieldSnapshotMatches(el,text,generation) && target.stillMatches(target.text);
     let corrected = null, message = "", usedAI = false, uncertainCount = 0;
+    const acceptanceStarted = Date.now();
     try {
       const status = await requestBridgeStatus();
       if (!current()) return;
       state.bridgeStatus = status;
       if (status && status.ok && status.compatible !== false && status.performActionAvailable === true && status.providerConfigured === true) {
-        const requestId = uuid();
+        const requestId = operation.requestId;
         const context = {text:target.text,stillMatches:current};
         if (!registerTextAuthorization(requestId,target.text,"performAction",context)) return;
         const result = await new Promise((resolve) => {
           let done = false;
           const finish = (response) => {
-            if (done) return; done = true; clearTimeout(timer); revokeTextAuthorization(requestId); resolve(response);
+            if (done) return; done = true; clearTimeout(timer); revokeTextAuthorization(requestId); operation.resolve = null; resolve(response);
           };
           const timer = setTimeout(() => finish(null),bridgeOperationTimeout(status));
+          operation.resolve = () => finish({ok:false,errorCode:"cancelled"});
           try {
             chrome.runtime.sendMessage({type:"performAction",request:{id:requestId,type:"performAction",action,
               source:{surface:"browserExtension",urlHost:host(),fieldType:el.isContentEditable ? "contenteditable" : el.tagName.toLowerCase()},
@@ -1444,16 +1607,16 @@
         });
         if (!current()) return;
         if (result && result.ok === true && result.reviewRequired !== true && typeof result.text === "string") {
-          const sanitized = BeanMapping.sanitizeProofreadParagraphOutput(result.text);
+          const sanitized = BeanMapping.sanitizeProofreadParagraphOutput(result.text,target.text);
           corrected = sanitized && sanitized.text; usedAI = true;
         } else message = result && result.message || "Bean couldn’t finish this action. Your text is unchanged.";
       } else if (action === "proofread") {
         const local = await bridgeLocalIssues(el,text,generation,
           el.isContentEditable ? "contenteditable" : el.tagName.toLowerCase(),target.text,() => target.stillMatches(target.text));
         if (!current()) return;
-        const issues = BeanTrustPolicy.mergeLocalIssues
+        const issues = filterLearnedCandidates(target.text,BeanTrustPolicy.mergeLocalIssues
           ? BeanTrustPolicy.mergeLocalIssues(target.text,BeanDetector.detect(target.text),local.issues,64)
-          : BeanDetector.detect(target.text);
+          : BeanDetector.detect(target.text),local.protectedRanges || []);
         corrected = target.text;
         uncertainCount = issues.filter((issue) => typeof issue.confidence === "number" && issue.confidence < 0.8).length;
         for (const issue of [...issues].filter((issue) => typeof issue.confidence !== "number" || issue.confidence >= 0.8)
@@ -1466,20 +1629,143 @@
       } else message = "Add and verify an API key in Bean Settings to use Rewrite.";
       if (!current()) return;
       if (typeof corrected === "string" && corrected && corrected !== target.text) {
-        const record = target.replace(corrected);
+        const record = target.replace(corrected,{minimal:action === "proofread"});
         if (record) {
+          recordMetric("browserAcceptance",acceptanceStarted,text.length,1,record.partial ? "partial" : "applied");
           offerUndo(record);
-          BeanOverlay.flash(anchor,usedAI ? "Writing action applied" :
+          if (state.active === el && siteAllowed()) { renderOverlay(); scheduleCheck(); }
+          BeanOverlay.flash(anchor,record.partial ? "Some fixes applied; the remaining changes stopped. Undo is available." : usedAI ? "Writing action applied" :
             uncertainCount ? `Local fixes applied · ${uncertainCount} suggestions need review` : "Local fixes applied");
         } else BeanOverlay.flash(anchor,"Bean couldn’t verify the edit. Review the field before trying again.");
       } else BeanOverlay.flash(anchor,message || "AI found no additional changes.");
     } finally {
+      if (state.writingOperation !== operation) return;
+      const shouldRestore = current();
+      state.writingOperation = null;
       state.fixingGroup = false;
       if (typeof BeanOverlay.clearParagraphBusy === "function") BeanOverlay.clearParagraphBusy();
-      if (state.active === el && eligibleEditableSurface(el) === el) {
+      if (shouldRestore && state.active === el && eligibleEditableSurface(el) === el) {
         restoreFieldFocus(el); renderOverlay(); scheduleCheck();
       }
     }
+  }
+
+  function dictionaryWordKey(value) { return String(value).normalize("NFC").toLocaleLowerCase(); }
+  function filterLearnedCandidates(text,issues,ranges = state.protectedText === text ? state.protectedRanges : []) {
+    return issues.filter((issue) => !state.learnedTerms.has(dictionaryWordKey(issue.original)) &&
+      !ranges.some((range) => Number.isInteger(issue.start) && Number.isInteger(issue.end) &&
+        issue.start < range.end && issue.end > range.start));
+  }
+
+  async function learnWord(id,event) {
+    if (!event || event.isTrusted !== true || state.fixingGroup) return;
+    const el = state.active, entry = state.entries.find((candidate) => candidate.id === id);
+    if (!el || !entry || entry.issue.type !== "spelling" || !verifyTarget(el,entry)) return;
+    const word = entry.issue.original;
+    if (word.length > 96 || !/^\p{L}[\p{L}\p{M}]*(?:['’\-]\p{L}[\p{L}\p{M}]*)*$/u.test(word)) return;
+    const text = getText(el), generation = state.reqGen;
+    const current = () => fieldSnapshotMatches(el,text,generation) && state.entries.some((item) => item.id === id) && !!verifyTarget(el,entry);
+    const status = await requestBridgeStatus("learnDictionaryTerm");
+    if (!current()) return;
+    state.bridgeStatus = status;
+    if (!status || status.ok !== true || status.compatible === false || status.learnWordAvailable !== true) {
+      BeanOverlay.flash(fieldRect(el),"Open Bean to save words to your dictionary."); renderOverlay(); return;
+    }
+    const requestId = uuid(), context = {text:word,stillMatches:current};
+    if (!registerTextAuthorization(requestId,word,"learnDictionaryTerm",context)) return;
+    const response = await new Promise((resolve) => {
+      let done = false;
+      const finish = (value) => { if (done) return; done = true; clearTimeout(timer); revokeTextAuthorization(requestId); resolve(value); };
+      const timer = setTimeout(() => finish(null),10000);
+      try { chrome.runtime.sendMessage({type:"learnDictionaryTerm",request:{id:requestId,type:"learnDictionaryTerm",text:word,
+        source:{surface:"browserExtension",urlHost:host(),fieldType:el.isContentEditable ? "contenteditable" : el.tagName.toLowerCase()}}},
+        (value) => { void chrome.runtime.lastError; finish(value); }); } catch (_error) { finish(null); }
+    });
+    if (!current()) return;
+    if (response && response.ok === true && typeof response.learnedTerm === "string" &&
+        dictionaryWordKey(response.learnedTerm) === dictionaryWordKey(word)) {
+      state.learnedTerms.add(dictionaryWordKey(word));
+      while (state.learnedTerms.size > 2000) state.learnedTerms.delete(state.learnedTerms.values().next().value);
+      state.entries = state.entries.filter((item) => dictionaryWordKey(item.issue.original) !== dictionaryWordKey(word));
+      state.selectedId = null; renderOverlay(); scheduleCheck();
+      BeanOverlay.flash(fieldRect(el),"Word saved to your Bean dictionary.");
+    } else BeanOverlay.flash(fieldRect(el),"That word couldn’t be saved. Check your dictionary in Bean Settings.");
+  }
+
+  function safeFixPlan(el) {
+    if (!el || state.fixingGroup || state.bridgeStatus && state.bridgeStatus.appAssistancePaused === true || getText(el) !== state.deterministicText || !BeanMapping.validateEditPlan) return null;
+    const edits = [];
+    for (const entry of state.entries) {
+      const issue = entry.issue;
+      if (!state.deterministicIssues.some((known) => known.original === issue.original && known.suggestion === issue.suggestion &&
+          known.start === issue.start && known.end === issue.end)) continue;
+      const target = verifyTarget(el,entry);
+      if (!target) continue;
+      const offsets = target.kind === "ce" ? BeanMapping.rangeOffsets(el,target.range) : target;
+      if (!offsets) continue;
+      edits.push({start:offsets.start,end:offsets.end,original:issue.original,replacement:issue.suggestion});
+      if (edits.length >= 64) break;
+    }
+    return edits.length ? BeanMapping.validateEditPlan(el.isContentEditable ? el.textContent : el.value,edits) : null;
+  }
+
+  function fixAllObvious(event) {
+    if (!event || event.isTrusted !== true) return;
+    const el = state.active, plan = safeFixPlan(el);
+    if (!plan || !siteAllowed() || !writingSourceIsFocused(el)) return;
+    const anchor = fieldRect(el);
+    const acceptanceStarted = Date.now();
+    let record = null;
+    if (el.isContentEditable) {
+      const valid = () => state.active === el && siteAllowed() && writingSourceIsFocused(el) && eligibleEditableSurface(el) === el && !state.composing;
+      const result = withBeanEdit(() => BeanMapping.applyContentEditableEdits(el,plan,{validateDestination:valid}));
+      if (result.undoPlan && (result.ok || result.partial)) record = {partial:!result.ok,scope:"field",label:"Undo obvious fixes",anchor,
+        undo:() => valid() && el.textContent === result.undoPlan.original && BeanMapping.applyContentEditableEdits(el,result.undoPlan,{validateDestination:valid}).ok};
+    } else {
+      const first = plan.edits[0], last = plan.edits.at(-1), start = first.start, end = last.end;
+      const suffixLength = plan.original.length - end;
+      const replacement = plan.replacement.slice(start,plan.replacement.length - suffixLength);
+      const original = plan.original.slice(start,end);
+      const selection = {start:el.selectionStart,end:el.selectionEnd};
+      const result = withBeanEdit(() => BeanMapping.applyTextControlRange(el,start,end,replacement));
+      if (result.ok && el.value === plan.replacement) {
+        record = valueUndoRecord(el,start,plan.original,plan.replacement,original,replacement,"field","Undo obvious fixes",anchor);
+        const translated = (offset) => {
+          let delta = 0;
+          for (const edit of plan.edits) {
+            if (offset < edit.start) break;
+            if (offset < edit.end) return edit.start + delta + Math.min(offset - edit.start,edit.replacement.length);
+            delta += edit.replacement.length - (edit.end - edit.start);
+          }
+          return offset + delta;
+        };
+        if (result.selectionOwned && writingSourceIsFocused(el) && Number.isInteger(selection.start) && Number.isInteger(selection.end))
+          el.setSelectionRange(translated(selection.start),translated(selection.end));
+      }
+    }
+    recordMetric("browserAcceptance",acceptanceStarted,plan.original.length,plan.edits.length,record ? record.partial ? "partial" : "applied" : "refused");
+    if (record) { offerUndo(record); BeanOverlay.flash(anchor,record.partial ? "Some fixes applied; the remaining changes stopped. Undo is available." : `${plan.edits.length} obvious issues fixed`); }
+    else BeanOverlay.flash(anchor,"Bean couldn’t finish these fixes safely. Review suggestions one by one.");
+    if (state.active === el && siteAllowed()) { renderOverlay(); scheduleCheck(); }
+  }
+
+  function pauseCurrentSite(event) {
+    if (!event || event.isTrusted !== true) return;
+    const el = state.active, anchor = el && fieldRect(el), previous = state.pausedSites;
+    const paused = BeanSitePolicy.mutate(previous,host(),"pause");
+    if (!paused) return;
+    state.pausedSites = paused;
+    teardown(); schedulePauseExpiry(); syncPausedOwnership();
+    chrome.runtime.sendMessage({type:"mutateSitePause",operation:"pause"},(result) => {
+      const error = chrome.runtime.lastError;
+      const saved = result && result.ok && BeanSitePolicy.normalize(result.pausedSites);
+      if (error || !saved) {
+        state.pausedSites = previous; schedulePauseExpiry(); activateInitiallyFocusedField();
+        if (anchor) BeanOverlay.flash(anchor,"This website pause couldn’t be saved. Try again."); return;
+      }
+      state.pausedSites = saved; schedulePauseExpiry(); syncPausedOwnership();
+      if (anchor) BeanOverlay.flash(anchor,"Bean paused on this website for one hour. Resume any time from the extension button.");
+    });
   }
 
   function setFieldDisabledOverlay(disabled, field) {
@@ -1548,6 +1834,7 @@
       state.settingsAvailable = true;
       state.blockedSites = result.blockedSites;
       teardown();
+      syncPausedOwnership();
       if (rect) {
         BeanOverlay.flash({ x: rect.left + window.scrollX, y: rect.top + window.scrollY,
                             w: rect.width, h: rect.height }, `Bean disabled on ${currentHost}`);
@@ -1656,22 +1943,45 @@
     };
   }
 
+  function ceProofreadScope(block) {
+    return !!block && document.contains(block) && typeof block.textContent === "string" &&
+      block.textContent === block.innerText && !block.querySelector('[contenteditable="false"],br,script,style,code,pre');
+  }
+
+  function applyMinimalContentEditable(el,start,end,original,corrected,scope,scopeRoot = el) {
+    const before = el.textContent;
+    if (before.slice(start,end) !== original) return null;
+    const localPlan = BeanMapping.buildMinimalEditPlan(original,corrected);
+    if (!localPlan) return null;
+    const plan = BeanMapping.validateEditPlan(before,localPlan.edits.map((edit) =>
+      ({...edit,start:edit.start + start,end:edit.end + start})));
+    if (!plan) return null;
+    const validateDestination = () => eligibleEditableSurface(el) === el && state.active === el && siteAllowed() && writingSourceIsFocused(el) && !state.composing;
+    const result = withBeanEdit(() => BeanMapping.applyContentEditableEdits(el,plan,{validateDestination,scopeRoot}));
+    if (!(result.ok || result.partial) || !result.undoPlan || el.textContent !== result.undoPlan.original) return null;
+    return {scope,partial:!result.ok,label:"Undo writing changes",anchor:fieldRect(el),undo:() => {
+      if (!document.contains(el) || el.textContent !== result.undoPlan.original || !validateDestination()) return false;
+      return BeanMapping.applyContentEditableEdits(el,result.undoPlan,{validateDestination,scopeRoot}).ok;
+    }};
+  }
+
   // Read the live paragraph text + a verifier/replacer for this group. Returns
   // null if the paragraph boundary can't be located safely.
   function paragraphTarget(el, g) {
     if (g.kind === "ce") {
       const block = g.block;
-      if (!block || !document.contains(block) || !ceBlockReplaceable(block)) return null;
+      if (!block || !ceProofreadScope(block)) return null;
       return {
         text: block.innerText,
         stillMatches: (sent) => document.contains(block) && block.innerText === sent,
-        replace: (corrected) => {
+        replace: (corrected,options = {minimal:true}) => {
           const range = document.createRange();
           range.selectNodeContents(block);     // whole block, not the editor
           const offsets = BeanMapping.rangeOffsets(el, range);
           if (!offsets) return null;
           const before = el.textContent;
           const original = before.slice(offsets.start, offsets.end);
+          if (options.minimal || !ceBlockReplaceable(block)) return applyMinimalContentEditable(el,offsets.start,offsets.end,original,corrected,"block",block);
           const after = BeanMapping.replaceRangePreservingBoundaries(
             before, offsets.start, offsets.end, corrected
           );
@@ -1785,7 +2095,7 @@
 
     let corrected = null, usedFallback = false;
     if (bridge.text !== null) {
-      const clean = BeanMapping.sanitizeProofreadParagraphOutput(bridge.text);
+      const clean = BeanMapping.sanitizeProofreadParagraphOutput(bridge.text,sent);
       if (clean.zeroWidthStripped > 0) reason("zeroWidthStripped:" + clean.zeroWidthStripped);
       if (BeanTrustPolicy.isMeaningfulEdit(sent, clean.text)) corrected = clean.text;
       else reason("paragraphAINoEdit");
@@ -1793,7 +2103,7 @@
     if (corrected === null) {
       if (bridge.text === null) reason("paragraphProofreadUnavailable");
       const local = localParagraphFix(sent);
-      const clean = BeanMapping.sanitizeProofreadParagraphOutput(local);
+      const clean = BeanMapping.sanitizeProofreadParagraphOutput(local,sent);
       corrected = clean.text;
       usedFallback = true;
     }
@@ -1868,6 +2178,12 @@
       restoreFieldFocus(el);
       return;
     }
+    if (undoRecord.partial) {
+      offerUndo(undoRecord);
+      flashAt(g,"Some fixes applied; the remaining changes stopped. Undo is available.");
+      renderOverlay(); scheduleCheck();
+      return;
+    }
     restoreFieldFocus(el);
     reason("paragraphReplacementVerified");
     reason(usedFallback ? "paragraphProofreadSucceededLocal" : "paragraphProofreadSucceeded");
@@ -1907,6 +2223,7 @@
       return;
     }
 
+    const acceptanceStarted = Date.now();
     // SAFETY: only apply to a range whose live text equals issue.original.
     const verified = verifyTarget(el, entry);
     if (!verified) { reason("applyRangeMismatch"); dropIssue(id); return; } // drop, never replace nearby text
@@ -1962,7 +2279,9 @@
         );
       }
     }
+    recordMetric("browserAcceptance",acceptanceStarted,entry.issue.original.length,1,ok && undoRecord ? "applied" : "refused");
     if (!ok || !undoRecord) { teardown(); return; }
+    if (!writingSourceIsFocused(el)) { offerUndo(undoRecord); return; }
     restoreFieldFocus(el);
     reason("lineBreakPreserved");
     reason("applySucceeded");

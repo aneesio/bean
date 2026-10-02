@@ -59,8 +59,35 @@ final class NativeEditingPathTests: XCTestCase {
 
     func testIndividualRichDocumentCorrectionCannotRewriteUnrelatedSignature() {
         XCTAssertFalse(TextSelectionService.canUseWholeFieldRangeFallback(role: "AXWebArea"))
-        XCTAssertTrue(TextSelectionService.canUseWholeFieldRangeFallback(role: "AXTextArea"))
+        XCTAssertFalse(TextSelectionService.canUseWholeFieldRangeFallback(role: "AXTextArea"))
         XCTAssertTrue(TextSelectionService.canUseWholeFieldRangeFallback(role: "AXTextField"))
+        XCTAssertFalse(TextSelectionService.canUseWholeFieldRangeFallback(role: "AXTextField", value: "Text\nSignature"))
+        XCTAssertFalse(TextSelectionService.canUseWholeFieldRangeFallback(role: "AXTextField", value: "Text \u{fffc}"))
+        XCTAssertTrue(TextSelectionService.canUseWholeFieldRangeFallback(role: "AXTextField", value: "Plain sentence"))
+    }
+
+    func testWholeDraftRewriteCannotBypassSurgicalRichDocumentProtection() {
+        for role: String? in ["AXTextArea", "AXWebArea", nil] {
+            XCTAssertTrue(TextSelectionService.requiresSurgicalEdits(mode: .focusedFieldFullText,
+                strategy: .selectedSpan, role: role, valueBefore: "Original draft", corrected: "Rewritten draft"))
+        }
+        XCTAssertTrue(TextSelectionService.requiresSurgicalEdits(mode: .focusedFieldFullText,
+            strategy: .selectedSpan, role: "AXTextField", valueBefore: "Text\nSignature", corrected: "New\nSignature"))
+        XCTAssertTrue(TextSelectionService.requiresSurgicalEdits(mode: .focusedFieldFullText,
+            strategy: .selectedSpan, role: "AXTextField", valueBefore: "Text \u{fffc}", corrected: "New \u{fffc}"))
+        XCTAssertTrue(TextSelectionService.requiresSurgicalEdits(mode: .focusedFieldFullText,
+            strategy: .selectedSpan, role: "AXTextField", valueBefore: "Original", corrected: "New\nParagraph"))
+        XCTAssertTrue(TextSelectionService.requiresSurgicalEdits(mode: .focusedFieldFullText,
+            strategy: .selectedSpan, role: nil, valueBefore: nil, corrected: "Rewritten draft"))
+    }
+
+    func testExplicitSelectedPassageAndProvenPlainFieldKeepDirectPaste() {
+        XCTAssertFalse(TextSelectionService.requiresSurgicalEdits(mode: .selectedText, strategy: .selectedSpan,
+            role: "AXWebArea", valueBefore: "Paragraph\nRich signature \u{fffc}", corrected: "Selected passage"))
+        XCTAssertFalse(TextSelectionService.requiresSurgicalEdits(mode: .focusedFieldFullText, strategy: .selectedSpan,
+            role: "AXTextField", valueBefore: "Original", corrected: "New"))
+        XCTAssertTrue(TextSelectionService.requiresSurgicalEdits(mode: .selectedText, strategy: .minimalProofread,
+            role: "AXTextArea", valueBefore: "teh", corrected: "the"))
     }
 
     func testKnownNativeOrBrowserTargetCanRevalidateLimitedAXSelectionExactly() {

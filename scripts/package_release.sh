@@ -36,7 +36,7 @@ if [[ -n "${GITHUB_REF_NAME:-}" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
 fi
 
 if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
-    ARTIFACT_NAME="Bean-$VERSION"
+    ARTIFACT_NAME="Bean-$VERSION-build$BUILD"
     if [[ -z "${APPLE_NOTARY_PROFILE:-}" ]]; then
         echo "error: APPLE_NOTARY_PROFILE is required for a Developer ID release." >&2
         exit 1
@@ -47,20 +47,57 @@ else
         echo "       For a clearly labelled GitHub beta, set BEAN_ALLOW_ADHOC_RELEASE=1." >&2
         exit 1
     fi
-    ARTIFACT_NAME="Bean-$VERSION-unnotarized"
+    ARTIFACT_NAME="Bean-$VERSION-build$BUILD-unnotarized"
 fi
 
-STAGE="$RELEASE_DIR/$ARTIFACT_NAME"
-ZIP="$RELEASE_DIR/$ARTIFACT_NAME.zip"
-DMG="$RELEASE_DIR/$ARTIFACT_NAME.dmg"
-CHECKSUMS="$RELEASE_DIR/$ARTIFACT_NAME.sha256"
+FINAL_STAGE="$RELEASE_DIR/$ARTIFACT_NAME"
+FINAL_ZIP="$RELEASE_DIR/$ARTIFACT_NAME.zip"
+FINAL_DMG="$RELEASE_DIR/$ARTIFACT_NAME.dmg"
+FINAL_CHECKSUMS="$RELEASE_DIR/$ARTIFACT_NAME.sha256"
 
 echo "==> Packaging Bean $VERSION (build $BUILD)"
 
 echo "==> Preparing release output…"
-mkdir -p "$STAGE"
-rm -rf "$STAGE"
-rm -f "$ZIP" "$DMG" "$CHECKSUMS"
+if [[ -e "$FINAL_STAGE" || -e "$FINAL_ZIP" || -e "$FINAL_DMG" || -e "$FINAL_CHECKSUMS" ]]; then
+    echo "error: artifacts for build $BUILD already exist; increment CFBundleVersion to preserve prior releases." >&2
+    exit 1
+fi
+mkdir -p "$RELEASE_DIR"
+PACKAGE_LOCK="$RELEASE_DIR/.$ARTIFACT_NAME.lock"
+if ! mkdir "$PACKAGE_LOCK" 2>/dev/null; then
+    echo "error: another package operation is active for this build." >&2; exit 1
+fi
+WORK_ROOT=""
+PACKAGE_COMMITTED=false
+PUBLISHED_STAGE=false
+PUBLISHED_ZIP=false
+PUBLISHED_DMG=false
+PUBLISHED_CHECKSUMS=false
+cleanup_package() {
+    local status=$?
+    if [[ "$PACKAGE_COMMITTED" != true && -n "$WORK_ROOT" ]]; then
+        # These paths were absent while we acquired the lock. Move only our
+        # newly published artifacts back into scratch before cleanup.
+        if [[ "$PUBLISHED_STAGE" == true && -e "$FINAL_STAGE" ]]; then mv "$FINAL_STAGE" "$WORK_ROOT/$ARTIFACT_NAME"; fi
+        if [[ "$PUBLISHED_ZIP" == true && -e "$FINAL_ZIP" ]]; then mv "$FINAL_ZIP" "$WORK_ROOT/$ARTIFACT_NAME.zip"; fi
+        if [[ "$PUBLISHED_DMG" == true && -e "$FINAL_DMG" ]]; then mv "$FINAL_DMG" "$WORK_ROOT/$ARTIFACT_NAME.dmg"; fi
+        if [[ "$PUBLISHED_CHECKSUMS" == true && -e "$FINAL_CHECKSUMS" ]]; then mv "$FINAL_CHECKSUMS" "$WORK_ROOT/$ARTIFACT_NAME.sha256"; fi
+    fi
+    [[ -z "$WORK_ROOT" ]] || rm -rf "$WORK_ROOT"
+    rmdir "$PACKAGE_LOCK"
+    return "$status"
+}
+trap cleanup_package EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [[ -e "$FINAL_STAGE" || -e "$FINAL_ZIP" || -e "$FINAL_DMG" || -e "$FINAL_CHECKSUMS" ]]; then
+    echo "error: artifacts for this build already exist." >&2; exit 1
+fi
+WORK_ROOT="$(mktemp -d "$RELEASE_DIR/.Bean-package.XXXXXX")"
+STAGE="$WORK_ROOT/$ARTIFACT_NAME"
+ZIP="$WORK_ROOT/$ARTIFACT_NAME.zip"
+DMG="$WORK_ROOT/$ARTIFACT_NAME.dmg"
+CHECKSUMS="$WORK_ROOT/$ARTIFACT_NAME.sha256"
 mkdir -p "$STAGE"
 
 if [[ "${BEAN_REGENERATE_ICONS:-0}" == "1" ]]; then
@@ -88,13 +125,14 @@ done
 
 if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
     echo "==> Notarizing app…"
-    NOTARY_DIR="$(mktemp -d)"
-    trap 'rm -rf "$NOTARY_DIR"' EXIT
+    NOTARY_DIR="$WORK_ROOT/notary"
+    mkdir -p "$NOTARY_DIR"
     ditto -c -k --sequesterRsrc --keepParent "$STAGE/Bean.app" "$NOTARY_DIR/Bean.zip"
     xcrun notarytool submit "$NOTARY_DIR/Bean.zip" --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
     xcrun stapler staple "$STAGE/Bean.app"
     xcrun stapler validate "$STAGE/Bean.app"
 fi
+codesign --verify --deep --strict --verbose=2 "$STAGE/Bean.app"
 
 echo "==> Creating ZIP…"
 # ditto preserves the code signature and resource forks (better than `zip`).
@@ -121,11 +159,17 @@ fi
 
 echo "==> Writing checksums…"
 (
-    cd "$RELEASE_DIR"
+    cd "$WORK_ROOT"
     files=("$(basename "$ZIP")")
     [[ -f "$(basename "$DMG")" ]] && files+=("$(basename "$DMG")")
     shasum -a 256 "${files[@]}" > "$(basename "$CHECKSUMS")"
 )
+
+PUBLISHED_STAGE=true; mv "$STAGE" "$FINAL_STAGE"
+PUBLISHED_ZIP=true; mv "$ZIP" "$FINAL_ZIP"
+if [[ -f "$DMG" ]]; then PUBLISHED_DMG=true; mv "$DMG" "$FINAL_DMG"; fi
+PUBLISHED_CHECKSUMS=true; mv "$CHECKSUMS" "$FINAL_CHECKSUMS"
+PACKAGE_COMMITTED=true
 
 echo ""
 echo "Release ready in: $RELEASE_DIR"

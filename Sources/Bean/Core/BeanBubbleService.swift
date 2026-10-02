@@ -10,6 +10,7 @@ final class BeanBubbleService {
     private let settings: AppSettings
     private let statusHUD: StatusHUD
     private let runAction: (WritingAction) -> Void
+    private let runParagraphAction: ((WritingAction) -> Void)?
     private let openFullMenu: () -> Void
     private let openAISettings: () -> Void
 
@@ -26,10 +27,12 @@ final class BeanBubbleService {
     init(settings: AppSettings, statusHUD: StatusHUD,
          runAction: @escaping (WritingAction) -> Void,
          openFullMenu: @escaping () -> Void,
-         openAISettings: @escaping () -> Void) {
+         openAISettings: @escaping () -> Void,
+         runParagraphAction: ((WritingAction) -> Void)? = nil) {
         self.settings = settings
         self.statusHUD = statusHUD
         self.runAction = runAction
+        self.runParagraphAction = runParagraphAction
         self.openFullMenu = openFullMenu
         self.openAISettings = openAISettings
     }
@@ -69,6 +72,7 @@ final class BeanBubbleService {
 
     func evaluate(fallbackOrigin: CGPoint? = nil) {
         guard settings.bubbleEnabled else { return hide() }
+        guard !settings.isAssistancePaused(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) else { return hide("appPaused") }
         guard PermissionService.isAccessibilityGranted else { return hide("noPermission") }
         guard let field = AccessibilityService.focusedField() else {
             if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
@@ -163,7 +167,10 @@ final class BeanBubbleService {
             near: CGPoint(x: frame.minX, y: frame.minY),
             intent: intent,
             aiAvailable: settings.hasAPIKey,
+            scope: offsetElement.flatMap { AccessibilityService.selectedRange(of: $0) }
+                .map { $0.length > 0 ? "selected text" : "draft" } ?? "draft",
             onSelect: { [weak self] action in self?.choose(action) },
+            onParagraphSelect: runParagraphAction == nil ? nil : { [weak self] action in self?.choose(action, currentParagraph: true) },
             onSetUpAI: { [weak self] _ in self?.showAISetup() },
             onMore: { [weak self] in
                 self?.performInSourceApp(afterHiding: "more") { [weak self] in self?.openFullMenu() }
@@ -172,10 +179,13 @@ final class BeanBubbleService {
         )
     }
 
-    private func choose(_ action: WritingAction) {
+    private func choose(_ action: WritingAction, currentParagraph: Bool = false) {
         // Re-acquisition + validation happens inside the coordinator's pipeline.
         diag(["menuActionChosen": action.rawValue])
-        performInSourceApp(afterHiding: "actionChosen") { [weak self] in self?.runAction(action) }
+        performInSourceApp(afterHiding: "actionChosen") { [weak self] in
+            if currentParagraph, let paragraph = self?.runParagraphAction { paragraph(action) }
+            else { self?.runAction(action) }
+        }
     }
 
     private func showAISetup() {

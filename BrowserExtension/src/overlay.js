@@ -11,6 +11,7 @@
   let undoEl = null, undoTimer = null, fieldDisabledEl = null;
   let keyboardActivationPending = false, keyboardActivationTimer = null;
   let keyboardExitHandler = null, assistantEl = null, assistantCardEl = null;
+  let assistantCardState = null;
 
   function officialMarkURL() {
     try {
@@ -61,6 +62,7 @@
             border:0; border-bottom:2px solid var(--bean-accent); background:transparent; box-sizing:border-box; }
       .ul:hover,.ul:focus-visible { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .card { position:absolute; pointer-events:auto; width:min(300px,calc(100vw - 16px));
+              max-height:calc(100vh - 16px); overflow:auto; overscroll-behavior:contain;
               font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
               background:var(--bean-surface); color:var(--bean-ink); border:1px solid var(--bean-line);
               border-radius:13px; box-shadow:0 12px 32px rgba(0,0,0,.2); padding:13px; }
@@ -75,6 +77,8 @@
       .sugg { color:var(--bean-accent); font-weight:650; }
       .expl { font-size:11px; color:var(--bean-muted); margin:6px 0 9px; }
       .actions { display:flex; gap:7px; align-items:center; }
+      .alternatives { flex-wrap:wrap; margin-bottom:8px; }
+      .alternatives button.b { min-width:0; max-width:100%; overflow-wrap:anywhere; }
       .spacer { flex:1; }
       button.b { min-height:32px; border-radius:8px; border:1px solid var(--bean-line);
                  background:var(--bean-surface); color:var(--bean-ink); padding:5px 10px; cursor:pointer; font-size:12px; }
@@ -95,6 +99,11 @@
       .pico img { display:block; width:24px; height:24px; border-radius:7px; }
       .pico:hover { border-color:var(--bean-accent); transform:translateY(-1px); }
       .gactions { display:flex; gap:7px; flex-wrap:wrap; margin-top:8px; }
+      .gactions[hidden] { display:none; }
+      .scope { display:flex; gap:3px; margin:10px 0; padding:3px; border:1px solid var(--bean-line); border-radius:9px; }
+      .scope[hidden] { display:none; }
+      .scope button { flex:1; min-height:32px; border:0; border-radius:6px; background:transparent; color:var(--bean-ink); cursor:pointer; font-size:11px; }
+      .scope button[aria-pressed="true"] { background:color-mix(in srgb,var(--bean-accent) 14%,transparent); font-weight:650; }
       .overflow-wrap { position:relative; margin-left:auto; }
       .overflow-menu { position:absolute; right:0; bottom:38px; z-index:2; width:210px; padding:5px;
                        border:1px solid var(--bean-line); border-radius:10px; background:var(--bean-surface);
@@ -165,6 +174,7 @@
   // the next page control. Page scripts still cannot query or click Apply/AI.
   function keyboardScope() {
     if (paragraphReviewEl) return paragraphReviewEl;
+    if (paragraphBusyEl) return paragraphBusyEl;
     if (assistantCardEl) return assistantCardEl;
     if (cardEl) return cardEl;
     if (groupCardEl) return groupCardEl;
@@ -243,6 +253,9 @@
     const controls = keyboardControls();
     const fallbackIndex = Math.max(0, controls.indexOf(active));
     if (active === assistantEl) return { kind:"assistant", fallbackIndex };
+    if (assistantCardEl && assistantCardEl.contains(active)) {
+      return {kind:"assistantCard",action:cardAction(active),fallbackIndex};
+    }
     if (active.dataset && active.dataset.beanIssue) {
       const matches = [...underlineLayer.querySelectorAll("button")].filter((button) =>
         button.dataset && button.dataset.beanIssue === active.dataset.beanIssue
@@ -267,7 +280,8 @@
   function restoreKeyboardFocus(token) {
     if (!token || !shadow) return;
     let target = null;
-    if (token.kind === "assistant") target = assistantEl;
+    if (token.kind === "assistant" && focusWithoutScroll(assistantEl)) return;
+    if (token.kind === "assistantCard") target = findCardAction(assistantCardEl,token.action);
     if (token.kind === "issue" || token.kind === "issueCard") {
       if (token.kind === "issueCard" && cardEl && cardEl.dataset.beanIssueCard === token.id) {
         target = findCardAction(cardEl, token.action);
@@ -297,13 +311,18 @@
     if (typeof keyboardExitHandler === "function") keyboardExitHandler(-1);
   }
 
-  function clear() {
+  function clearFindings() {
     if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
     if (underlineLayer) underlineLayer.replaceChildren();
     if (cardEl) { cardEl.remove(); cardEl = null; }
     if (groupLayer) groupLayer.replaceChildren();
     if (groupCardEl) { groupCardEl.remove(); groupCardEl = null; }
+  }
+
+  function clear() {
+    clearFindings();
     if (assistantCardEl) { assistantCardEl.remove(); assistantCardEl = null; }
+    assistantCardState = null;
     if (paragraphReviewEl) { paragraphReviewEl.remove(); paragraphReviewEl = null; }
     if (paragraphReviewShield) { paragraphReviewShield.remove(); paragraphReviewShield = null; }
     if (paragraphBusyEl) { paragraphBusyEl.remove(); paragraphBusyEl = null; }
@@ -366,7 +385,10 @@
   function render(entries, selectedId, position, handlers) {
     const focusToken = keyboardFocusToken();
     try {
-      if (!entries || !entries.length) { clear(); return; }
+      // Empty async results/scroll updates clear findings while retaining a
+      // still-valid expanded assistant. Explicit content invalidation calls
+      // clear() and removes its captured action scope as well.
+      if (!entries || !entries.length) { clearFindings(); return; }
       ensureHost();
       underlineLayer.replaceChildren();
       for (const entry of entries) {
@@ -418,6 +440,7 @@
       <button class="more" type="button" data-act="more" aria-label="More options" aria-haspopup="menu" aria-expanded="false">•••</button>
       <div class="overflow-menu" role="menu" hidden>
         <button type="button" role="menuitem" data-act="disableField">Disable on this field</button>
+        <button type="button" role="menuitem" data-act="pauseSite">Pause on this website for 1 hour</button>
         <button type="button" role="menuitem" data-act="disableSite">Disable on this website</button>
       </div>
     </div>`;
@@ -480,6 +503,7 @@
       if (event.key === "ArrowUp" && items.length) { event.preventDefault(); items[(index - 1 + items.length) % items.length].focus(); }
     });
     wire(card, '[data-act="disableField"]', () => call(handlers, "onDisableField"));
+    wire(card, '[data-act="pauseSite"]', (event) => call(handlers, "onPauseSite",event));
     wire(card, '[data-act="disableSite"]', () => call(handlers, "onDisableSite"));
   }
 
@@ -493,6 +517,7 @@
       <div class="source"></div><div class="fix"><span class="orig"></span><span class="arrow" aria-hidden="true">→</span><span class="sugg"></span></div>
       ${issue.explanation ? '<div class="expl"></div>' : ""}
       ${Array.isArray(issue.alternatives) && issue.alternatives.length ? '<div class="alternatives"></div>' : ''}
+      ${issue.type === "spelling" ? '<div class="gactions"><button class="b" type="button" data-act="learn">Add to Dictionary</button></div>' : ''}
       <div class="actions"><button class="b" type="button" data-act="ignore">Dismiss</button><span class="spacer"></span>
         ${position && position.total > 1 ? '<button class="b" type="button" data-act="next" aria-label="Next suggestion">Next</button>' : ""}
         <button class="b primary" type="button" data-act="apply">Accept</button>${overflowMarkup()}</div>`;
@@ -518,6 +543,12 @@
       }
     }
     wire(card, ".x", () => call(handlers, "onClose"));
+    const learn = card.querySelector('[data-act="learn"]');
+    if (learn) {
+      learn.disabled = !handlers || handlers.learnWordAvailable !== true;
+      learn.title = learn.disabled ? "Open Bean to save words to your dictionary" : "Save this word in your Bean dictionary";
+      wireButton(learn,(event) => call(handlers,"onLearnWord",entry.id,event));
+    }
     wire(card, '[data-act="ignore"]', (event) => {
       queueFocusForActivationEvent(event);
       call(handlers, "onIgnore", entry.id);
@@ -640,6 +671,7 @@
   }
 
   function assistantDescription(status, count) {
+    if (status === "appPaused") return "Automatic checks paused for this app";
     if (status === "waiting") return "Checks update when you pause typing";
     if (status === "checkingLocal") return "Checking spelling on this Mac…";
     if (status === "checking") return "Checking the changed paragraph with AI…";
@@ -659,7 +691,7 @@
       clearAssistant(); return false;
     }
     ensureHost();
-    const wasFocused = assistantEl && shadow.activeElement === assistantEl;
+    const focusToken = keyboardFocusToken();
     if (assistantEl) assistantEl.remove();
     const button = document.createElement("button");
     button.type = "button";
@@ -689,48 +721,92 @@
     });
     shadow.appendChild(button);
     assistantEl = button;
-    if (wasFocused) focusWithoutScroll(button);
+    if (assistantCardState && assistantCardEl) {
+      const scope = assistantCardState.handlers.actionScope;
+      Object.assign(assistantCardState.handlers,handlers || {});
+      assistantCardState.handlers.actionScope = scope;
+      assistantCardState.refresh(rect,status,count);
+    }
+    restoreKeyboardFocus(focusToken);
     return true;
   }
 
   function showAssistantCard(rect, status, handlers, count = 0) {
+    handlers = {...(handlers || {})};
     if (assistantCardEl) assistantCardEl.remove();
     const close = () => {
       if (assistantCardEl) assistantCardEl.remove();
       assistantCardEl = null;
+      assistantCardState = null;
       call(handlers, "onClose");
     };
     const card = dialogCard("Bean writing assistant", close);
     card.innerHTML = `<div class="row"><strong></strong><button class="x" type="button" aria-label="Close writing assistant">✕</button></div>
       <div class="expl"></div>
-      <div class="actions">${count ? '<button class="b" type="button" data-act="review">Review suggestions</button>' : ''}
+      <div class="scope" role="group" aria-label="Writing scope">
+        <button type="button" data-act="scopeDraft">Whole draft</button>
+        <button type="button" data-act="scopeParagraph">Current paragraph</button>
+      </div>
+      <div class="actions"><button class="b" type="button" data-act="review">Review suggestions</button>
         <button class="b primary" type="button" data-act="proofread">Proofread</button></div>
-      <div class="expl" data-part="rewriteScope">Rewrite with AI</div><div class="actions">
+      <div class="gactions" data-part="fixAllGroup"><button class="b" type="button" data-act="fixAll"></button></div>
+      <div class="expl" data-part="rewriteScope">Rewrite with AI</div><div class="gactions">
         <button class="b" type="button" data-act="makeClearer">Clearer</button>
         <button class="b" type="button" data-act="makeConcise">Concise</button>
         <button class="b" type="button" data-act="makeProfessional">Professional</button>
         <button class="b" type="button" data-act="makeCasual">Friendly</button>
       </div>${overflowMarkup()}`;
-    card.querySelector("strong").textContent = assistantDescription(status, count);
-    const scope = handlers && handlers.actionScope === "selection" ? "selected text" :
-      handlers && handlers.actionScope === "paragraph" ? "current paragraph" : "draft";
-    card.querySelector('[data-act="proofread"]').textContent = `Proofread ${scope}`;
-    card.querySelector('[data-part="rewriteScope"]').textContent = `Rewrite ${scope} with AI`;
-    card.querySelector(".expl").textContent = ["nativeLocal","ai"].includes(status)
+    const updateScope = () => {
+      const actual = handlers && handlers.actionScope || "draft";
+      const scope = actual === "selection" ? "selected text" : actual === "paragraph" ? "current paragraph" : "draft";
+      card.querySelector('[data-act="proofread"]').textContent = `Proofread ${scope}`;
+      card.querySelector('[data-part="rewriteScope"]').textContent = `Rewrite ${scope} with AI`;
+      const group = card.querySelector(".scope");
+      group.hidden = actual === "selection";
+      card.querySelector('[data-act="scopeDraft"]').setAttribute("aria-pressed",String(actual === "draft"));
+      card.querySelector('[data-act="scopeParagraph"]').setAttribute("aria-pressed",String(actual === "paragraph"));
+    };
+    for (const [name,scope] of [["scopeDraft","draft"],["scopeParagraph","paragraph"]]) {
+      wire(card,`[data-act="${name}"]`,(event) => {
+        if (!event || event.isTrusted !== true || handlers.actionScope === "selection") return;
+        const actual = call(handlers,"onPrepareActions",event,scope);
+        if (actual) handlers.actionScope = actual;
+        updateScope();
+        if (actual !== scope) announce("This editor supports the current paragraph. Select a passage to change a different section.");
+      });
+    }
+    const refresh = (nextRect,nextStatus,nextCount) => {
+      card.querySelector("strong").textContent = assistantDescription(nextStatus,nextCount);
+      card.querySelector('[data-act="review"]').hidden = nextCount === 0;
+      card.querySelector('[data-part="fixAllGroup"]').hidden = !(handlers.safeFixCount > 0);
+      card.querySelector('[data-act="fixAll"]').textContent = `Fix ${handlers.safeFixCount || 0} obvious ${handlers.safeFixCount === 1 ? "issue" : "issues"}`;
+      updateScope();
+      card.querySelector(".expl").textContent = nextStatus === "appPaused"
+      ? "Automatic checking is paused in Bean Settings. Proofread and Rewrite remain available when you choose them. Resume this app from Bean’s menu or Settings."
+      : ["nativeLocal","ai"].includes(nextStatus)
       ? "Spelling and basic grammar checks run on your Mac. AI checks, when enabled, cover the paragraph you last edited."
-      : status === "mappingLimited" ? "Bean found possible corrections but couldn’t verify their exact range in this editor. Select the text to proofread or use Bean’s Mac keyboard shortcut."
-      : status === "tooLong" ? "Select a smaller section to proofread or rewrite."
-      : ["waiting","checkingLocal","checking","empty"].includes(status)
+      : nextStatus === "mappingLimited" ? "Bean found possible corrections but couldn’t verify their exact range in this editor. Select the text to proofread or use Bean’s Mac keyboard shortcut."
+      : nextStatus === "tooLong" ? "Select a smaller section to proofread or rewrite."
+      : ["waiting","checkingLocal","checking","empty"].includes(nextStatus)
         ? "Proofread selected text or your current draft in one action. Local proofreading works without an API key."
         : "Common typo and spacing checks are available. Full spelling needs the Bean app connection. Local results don’t mean the text is error-free.";
+      anchor(card,nextRect);
+    };
     wire(card, ".x", close);
     wire(card,'[data-act="review"]',() => call(handlers,"onReview"));
+    const all = card.querySelector('[data-act="fixAll"]');
+    if (all) { all.textContent = `Fix ${handlers.safeFixCount} obvious ${handlers.safeFixCount === 1 ? "issue" : "issues"}`;
+      wireButton(all,(event) => call(handlers,"onFixAll",event)); }
     for (const action of ["proofread","makeClearer","makeConcise","makeProfessional","makeCasual"]) {
-      wire(card,`[data-act="${action}"]`,(event) => call(handlers,"onWritingAction",action,event));
+      wire(card,`[data-act="${action}"]`,(event) => {
+        queueFocusForActivationEvent(event);
+        call(handlers,"onWritingAction",action,event);
+      });
     }
     wireOverflow(card, handlers);
     shadow.appendChild(card); assistantCardEl = card;
-    anchor(card, rect);
+    assistantCardState = {handlers,refresh};
+    refresh(rect,status,count);
     focusAfterKeyboardActivation(card, '[data-act="proofread"]');
   }
 
@@ -739,9 +815,10 @@
     assistantEl = null;
     if (assistantCardEl) assistantCardEl.remove();
     assistantCardEl = null;
+    assistantCardState = null;
   }
 
-  function showParagraphBusy(pageRect, message) {
+  function showParagraphBusy(pageRect, message, onCancel) {
     ensureHost();
     clearParagraphBusy();
     const card = document.createElement("div");
@@ -756,10 +833,19 @@
     detail.className = "expl";
     detail.textContent = "You can keep typing. Bean will stop if this paragraph changes.";
     card.append(title, detail);
+    if (typeof onCancel === "function") {
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "b"; cancel.dataset.act = "cancel"; cancel.textContent = "Cancel";
+      wireButton(cancel,onCancel); card.appendChild(cancel);
+      card.addEventListener("keydown",(event) => {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCancel(event); }
+      });
+    }
     shadow.appendChild(card);
     paragraphBusyEl = card;
     anchor(card, pageRect || { x:window.scrollX + window.innerWidth / 2, y:window.scrollY + 120, w:1, h:1 });
     announce(title.textContent);
+    focusAfterKeyboardActivation(card,'[data-act="cancel"]');
   }
 
   function clearParagraphBusy() {

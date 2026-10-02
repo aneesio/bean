@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
+const sitePolicySource = fs.readFileSync(path.join(__dirname, "..", "src", "sitePolicy.js"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "..", "src", "contentScript.js"), "utf8");
 
 // Source-level lifecycle contract: an ineligible contenteditable block returns
@@ -30,6 +31,8 @@ async function run() {
   const timers = new Map();
   const bridgeMessages = [];
   const localBridgeMessages = [],ownershipMessages = [],actionMessages = [];
+  const learnMessages=[],cancelMessages=[],pauseMessages=[];
+  const metricMessages=[];
   const localChecks = [];
   const extraFields = new Set();
   const savedSettings = { blockedSites: [] };
@@ -51,6 +54,10 @@ async function run() {
   let localCheckAvailable = false,localSpellingAvailable = false,nativeLocalIssues = [];
   let delayLocal = false,pendingLocalCallback = null;
   let providerConfigured = true,performActionAvailable = false,actionResult = null;
+  let learnWordAvailable=false,learnResult=null,delayLearn=false,pendingLearnCallback=null;
+  let delayAction=false,pendingActionCallback=null,busyCancel=null;
+  let localCheckComplete=null,nativeProtectedRanges=[];
+  let appAssistancePaused=false;
   let fieldPresent = true;
   let now = 1_000_000;
   const domNodes = new Set();
@@ -170,21 +177,38 @@ async function run() {
       id: "bean-extension-id",
       onMessage: { addListener: (listener) => { runtimeMessageListener = listener; } },
       sendMessage: (message, callback) => {
+        if (message.type === "recordAssistanceMetric") {metricMessages.push(message);callback({ok:true});return;}
         if (message.type === "fieldOwnership") {
           ownershipMessages.push(message); callback({ok:true,ownershipAccepted:true}); return;
         }
         if (message.type === "getStatus" && message.purpose === "localCheck") {
           localBridgeMessages.push(message);
-          callback({ok:true,bridgeAvailable:true,protocolVersion:1,compatible:true,localCheckAvailable}); return;
+          callback({ok:true,bridgeAvailable:true,protocolVersion:1,compatible:true,localCheckAvailable:localCheckAvailable && !appAssistancePaused,learnWordAvailable,appAssistancePaused}); return;
         }
         if (message.type === "localCheck") {
           localBridgeMessages.push(message);
           if (delayLocal) pendingLocalCallback = callback;
-          else callback({ok:true,issues:nativeLocalIssues,localSpellingAvailable});
+          else callback({ok:true,issues:nativeLocalIssues,localSpellingAvailable,localCheckComplete:localCheckComplete ?? localSpellingAvailable,protectedRanges:nativeProtectedRanges});
           return;
         }
         if (message.type === "performAction") {
-          actionMessages.push(message); callback(actionResult || {ok:true,text:message.request.text}); return;
+          actionMessages.push(message);
+          if (delayAction) pendingActionCallback=callback;
+          else callback(actionResult || {ok:true,text:message.request.text}); return;
+        }
+        if (message.type === "learnDictionaryTerm") {
+          learnMessages.push(message);
+          if (delayLearn) pendingLearnCallback=callback;
+          else callback(learnResult || {ok:true,learnedTerm:message.request.text}); return;
+        }
+        if (message.type === "cancelWritingAction") {
+          cancelMessages.push(message);callback({ok:true,cancelled:true});return;
+        }
+        if (message.type === "mutateSitePause") {
+          pauseMessages.push(message);
+          if (storageSetFailure) {callback({ok:false,errorCode:"settingsUnavailable"});return;}
+          savedSettings.pausedSites=message.operation === "pause" ? {"example.com":now + 3600000} : {};
+          callback({ok:true,pausedSites:savedSettings.pausedSites});return;
         }
         bridgeMessages.push(message);
         if (message.type === "getStatus" && delayStatus) {
@@ -197,6 +221,8 @@ async function run() {
             compatible: true,
             providerConfigured,
             performActionAvailable,
+            learnWordAvailable,
+            appAssistancePaused,
             webInlineEnabled: true,
             automaticAccountingAvailable
           });
@@ -310,8 +336,9 @@ async function run() {
     },
     renderGroups: (_groups, _selected, handlers) => { groupHandlers = handlers; },
     flash: (_rect, message) => { flashMessages.push(message); },
-    showParagraphBusy: (_rect, message) => {
+    showParagraphBusy: (_rect, message, onCancel) => {
       paragraphBusy = true;
+      busyCancel=onCancel;
       busyEvents.push(["show", message]);
     },
     clearParagraphBusy: () => {
@@ -381,7 +408,7 @@ async function run() {
   const context = {
     window, document, chrome, BeanDetector, BeanTrustPolicy, BeanMapping, BeanOverlay,
     Node: { ELEMENT_NODE: 1 }, location: { hostname: "example.com", host: "example.com", pathname: "/" },
-    Event: function Event() {}, Date: { now: () => now }, Math, Promise, Set, WeakSet, Map, Object, Array,
+    Event: function Event() {}, URL, Date: { now: () => now }, Math, Promise, Set, WeakSet, Map, Object, Array,
     setTimeout, clearTimeout
   };
   const actualTrustContext = {window:{}};
@@ -389,8 +416,12 @@ async function run() {
   for (const name of ["mergeLocalIssues","localCheckChunks","localBridgeReadiness","isPlainTextContentEditableBlock"]) {
     BeanTrustPolicy[name] = actualTrustContext.window.BeanTrustPolicy[name];
   }
+  const actualMappingContext={window:{}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,"..","src","issueMapping.js"),"utf8"),actualMappingContext);
+  for (const name of ["validateEditPlan","buildMinimalEditPlan","inverseEditPlan"])
+    BeanMapping[name]=actualMappingContext.window.BeanMapping[name];
   window.window = window;
-  vm.runInNewContext(source, context);
+  vm.runInNewContext(sitePolicySource + "\n" + source, context);
 
   runTimers();
   await settle();
@@ -822,7 +853,7 @@ async function run() {
   field.selectionStart = field.value.length;
   document.activeElement = field;
   detectedIssues = [{ original: "recieve", suggestion: "receive", type: "spelling" }];
-  document.activeElement = { id: "keyboard-activated-bean-control" };
+  document.activeElement = { id: "keyboard-activated-bean-control",getRootNode:() => ({host:{id:"bean-inline-host"}}) };
   documentListeners.focusin({ target: field });
   runTimers();
   await settle();
@@ -1022,6 +1053,29 @@ async function run() {
   assert.equal(renderedEntries.filter((entry) => entry.original === "recieve").length, 1,
     "dismissing one typo leaves the other occurrence reviewable");
 
+  // Changing a dismissed word at either boundary ends the dismissal, even
+  // when removing that new character later restores the old typo verbatim.
+  // These run the real deterministic detector through the production lifecycle.
+  for(const changed of ["tehh","hteh","teh1","1teh","teh_","_teh","teh𐐀","𐐀teh","teh\u0301"]) {
+    field.value="teh";field.selectionStart=field.selectionEnd=3;
+    elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+    assert.equal(renderedEntries.length,1);
+    renderHandlers.onIgnore(renderedEntries[0].id);
+    assert.equal(renderedEntries.length,0);
+    field.value=changed;
+    elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+    field.value="teh";
+    elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+    assert.equal(renderedEntries.length,1,`word continuation ${JSON.stringify(changed)} invalidates the dismissed occurrence`);
+  }
+  renderHandlers.onIgnore(renderedEntries[0].id);
+  for(const unrelated of ["teh!","teh","hello teh","hello teh in another sentence","teh in another sentence","teh"]) {
+    field.value=unrelated;
+    elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+    assert.equal(renderedEntries.filter((entry) => entry.original === "teh").length,0,
+      "punctuation and unrelated edits preserve a dismissed exact word");
+  }
+
   const requestsBeforeComposition = bridgeMessages.length;
   elementListeners.compositionstart();
   field.value = "i";
@@ -1142,6 +1196,171 @@ async function run() {
   assert.equal(field.value,"Please take your time.");
   assert.equal(undoOffer.handler(),true);
   assert.equal(field.value,"please tme now");
+  // Scope is captured at activation. A selected passage remains selected even
+  // if the scope picker requests a broader draft before the provider runs.
+  field.value="first old\nsecond old\nthird old";
+  field.selectionStart=field.selectionEnd=14;
+  elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+  assert.equal(assistantCalls.at(-1).handlers.onPrepareActions({isTrusted:true},"paragraph"),"paragraph");
+  actionResult={ok:true,text:"second new"};
+  await assistantCalls.at(-1).handlers.onWritingAction("makeClearer",{isTrusted:true});
+  assert.equal(actionMessages.at(-1).request.text,"second old");
+  assert.equal(field.value,"first old\nsecond new\nthird old");
+  assert.equal(undoOffer.handler(),true);
+  field.selectionStart=10;field.selectionEnd=16;
+  assert.equal(assistantCalls.at(-1).handlers.onPrepareActions({isTrusted:true},"draft"),"selection");
+  assert.equal(assistantCalls.at(-1).handlers.onPrepareActions({isTrusted:true},"paragraph"),"selection");
+  actionResult={ok:true,text:"better"};
+  await assistantCalls.at(-1).handlers.onWritingAction("makeClearer",{isTrusted:true});
+  assert.equal(actionMessages.at(-1).request.text,"second");
+  assert.equal(field.value,"first old\nbetter old\nthird old");
+  assert.equal(undoOffer.handler(),true);
+  // The assistant captures a fresh passage on each editor activation. Its
+  // previous selection is immutable only while using that same open assistant.
+  field.selectionStart=0;field.selectionEnd=5;
+  assert.equal(assistantCalls.at(-1).handlers.onPrepareActions({isTrusted:true}),"selection");
+  assistantCalls.at(-1).handlers.onClose();
+  field.selectionStart=10;field.selectionEnd=16;
+  assert.equal(assistantCalls.at(-1).handlers.onPrepareActions({isTrusted:true}),"selection");
+  actionResult={ok:true,text:"better"};
+  await assistantCalls.at(-1).handlers.onWritingAction("makeClearer",{isTrusted:true});
+  assert.equal(actionMessages.at(-1).request.text,"second","reopening with a new selection cannot rewrite the old first passage");
+  assert.equal(field.value,"first old\nbetter old\nthird old");
+  assert.equal(undoOffer.handler(),true);
+  field.selectionStart=0;field.selectionEnd=5;
+  assert.equal(assistantCalls.at(-1).handlers.onPrepareActions({isTrusted:true}),"selection");
+  assistantCalls.at(-1).handlers.onClose();
+  field.selectionStart=field.selectionEnd=field.value.length;
+  assert.equal(assistantCalls.at(-1).handlers.onPrepareActions({isTrusted:true}),"draft",
+    "reopening after collapsing a selection captures current caret scope");
+
+  // Cancellation resolves immediately, revokes the single-use authorization,
+  // and cannot apply a late result or steal focus from a different field.
+  field.selectionStart=field.selectionEnd=field.value.length;
+  elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+  delayAction=true;
+  const canceledAction=assistantCalls.at(-1).handlers.onWritingAction("makeClearer",{isTrusted:true});
+  await settle();assert.equal(typeof pendingActionCallback,"function");
+  const canceledRequest=actionMessages.at(-1).request.id, originalCanceledText=field.value;
+  busyCancel({isTrusted:true});await canceledAction;
+  assert.equal(cancelMessages.at(-1).requestId,canceledRequest);
+  assert.equal(challenge(canceledRequest).ok,false,"cancel removes DOM authorization before any late challenge");
+  const otherField={...field,value:"other writing"};extraFields.add(otherField);document.activeElement=otherField;
+  pendingActionCallback({ok:true,text:"late replacement"});await settle();
+  assert.equal(field.value,originalCanceledText);
+  assert.equal(document.activeElement,otherField,"a canceled provider callback cannot restore the old field’s focus");
+  delayAction=false;document.activeElement=field;
+
+  // Learn writes one word only after a trusted action and the exact live issue
+  // snapshot. Failed persistence retains the suggestion; stale text cannot learn.
+  learnWordAvailable=true;providerConfigured=false;performActionAvailable=false;
+  field.value="Beaniverse and tme";field.selectionStart=field.selectionEnd=field.value.length;
+  nativeLocalIssues=[{original:"Beaniverse",suggestion:"Universe",start:0,end:10,category:"spelling"}];
+  elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+  await renderHandlers.onLearnWord(renderedEntries[0].id,{isTrusted:false});assert.equal(learnMessages.length,0);
+  delayLearn=true;
+  const learned=renderHandlers.onLearnWord(renderedEntries[0].id,{isTrusted:true});await settle();
+  assert.equal(learnMessages.at(-1).request.text,"Beaniverse");
+  const learnedId=learnMessages.at(-1).request.id;
+  assert.equal(challenge(learnedId).ok,true);assert.equal(challenge(learnedId).ok,false,"dictionary activation is single use");
+  pendingLearnCallback({ok:true,learnedTerm:"Beaniverse"});await learned;
+  assert.equal(renderedEntries.length,0);assert.match(flashMessages.at(-1),/saved/);
+  elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+  assert.equal(renderedEntries.length,0,"acknowledged terms stay suppressed before the next native dictionary reload");
+  delayLearn=false;learnResult={ok:false,errorCode:"dictionarySaveFailed"};
+  nativeLocalIssues=[{original:"tme",suggestion:"time",start:15,end:18,category:"spelling"}];
+  elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+  await renderHandlers.onLearnWord(renderedEntries[0].id,{isTrusted:true});
+  assert.equal(renderedEntries.length,1);assert.match(flashMessages.at(-1),/couldn’t be saved/);
+  delayLearn=true;
+  const staleLearn=renderHandlers.onLearnWord(renderedEntries[0].id,{isTrusted:true});await settle();
+  const staleLearnId=learnMessages.at(-1).request.id;
+  field.value += " newer";
+  assert.equal(challenge(staleLearnId).ok,false,"unrelated full-field changes revoke dictionary authorization");
+  pendingLearnCallback({ok:true,learnedTerm:"tme"});await staleLearn;
+  assert.equal(renderedEntries.length,1,"stale acknowledgment cannot remove a current suggestion");
+  delayLearn=false;learnResult=null;
+
+  // Basic detector candidates overlapping native dictionary/code protection
+  // are removed; an incomplete native scan never claims full Mac spelling.
+  field.value="teh example";nativeLocalIssues=[];
+  detectedIssues=[{original:"teh",suggestion:"the",type:"spelling",start:0,end:3}];
+  nativeProtectedRanges=[{start:0,end:3}];localCheckComplete=false;
+  elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+  assert.equal(renderedEntries.length,0);
+  assert.notEqual(assistantCalls.at(-1).status,"nativeLocal");
+  nativeProtectedRanges=[];localCheckComplete=null;localCheckAvailable=false;localSpellingAvailable=false;
+
+  // Fix All uses only deterministic local candidates, one guarded text-control
+  // transaction and one Undo. A page caret takeover stays owned by the page.
+  field.value="teh and teh";field.selectionStart=field.selectionEnd=5;
+  detectedIssues=[{original:"teh",suggestion:"the",type:"spelling",start:0,end:3},
+    {original:"teh",suggestion:"the",type:"spelling",start:8,end:11}];
+  elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+  assert.equal(assistantCalls.at(-1).handlers.safeFixCount,2);
+  assistantCalls.at(-1).handlers.onFixAll({isTrusted:false});assert.equal(field.value,"teh and teh");
+  const originalTextControlApply=BeanMapping.applyTextControlRange;
+  let fixTransactions=0;
+  BeanMapping.applyTextControlRange=(...args) => {fixTransactions++;const result=originalTextControlApply(...args);
+    args[0].setSelectionRange(0,0);return {...result,selectionOwned:false};};
+  assistantCalls.at(-1).handlers.onFixAll({isTrusted:true});
+  assert.equal(field.value,"the and the");assert.equal(fixTransactions,1);
+  assert.equal(field.selectionStart,0,"Fix All cannot override a page caret move during input");
+  assert.equal(undoOffer.handler(),true);assert.equal(field.value,"teh and teh");
+  BeanMapping.applyTextControlRange=originalTextControlApply;detectedIssues=[];
+  nativeLocalIssues=[{original:"teh",suggestion:"the",start:0,end:3,category:"spelling",confidence:0.9}];
+  localCheckAvailable=true;localSpellingAvailable=true;
+  elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+  assert.equal(assistantCalls.at(-1).handlers.safeFixCount,0,"OS suggestions are review choices, not deterministic Fix All inputs");
+
+  // App pause is discovered through content-free status even without typing.
+  // Once known, input/focus performs no local text scan; explicit Rewrite works.
+  appAssistancePaused=true;runTimers();await settle();
+  assert.equal(assistantCalls.at(-1).status,"appPaused");
+  assert.equal(renderedEntries.length,0);
+  const checkedBeforeAppPause=localChecks.length,macBeforeAppPause=localBridgeMessages.filter((m) => m.type === "localCheck").length;
+  field.value="changed while paused";field.selectionStart=field.selectionEnd=field.value.length;
+  elementListeners.input({isTrusted:true,isComposing:false});runTimers();await settle();
+  assert.equal(localChecks.length,checkedBeforeAppPause,"known app pause does not scan writing on input");
+  assert.equal(localBridgeMessages.filter((m) => m.type === "localCheck").length,macBeforeAppPause);
+  providerConfigured=true;performActionAvailable=true;actionResult={ok:true,text:"Intentional rewrite."};
+  await assistantCalls.at(-1).handlers.onWritingAction("makeClearer",{isTrusted:true});
+  assert.equal(field.value,"Intentional rewrite.","manual writing actions remain usable during app pause");
+  assert.equal(undoOffer.handler(),true);
+  providerConfigured=false;performActionAvailable=false;
+  appAssistancePaused=false;runTimers();await settle();runTimers();await settle();
+  assert.notEqual(assistantCalls.at(-1).status,"appPaused","content-free refresh discovers app resume without a field reload");
+
+  // Website pause stops listeners/requests immediately, retains content-free
+  // native ownership, and expires in this same unsent field without a reload.
+  const textBeforePause=field.value,localBeforePause=localBridgeMessages.length;
+  assistantCalls.at(-1).handlers.onPauseSite({isTrusted:false});assert.equal(pauseMessages.length,0);
+  assistantCalls.at(-1).handlers.onPauseSite({isTrusted:true});
+  assert.equal(pauseMessages.length,1);assert.equal(typeof elementListeners.input,"undefined");
+  assert.equal(ownershipMessages.at(-1).ownership.active,true,"paused website suppresses native Chrome duplicates");
+  storageChangedListener({pausedSites:{newValue:savedSettings.pausedSites}},"local");
+  assert.equal(ownershipMessages.at(-1).ownership.active,true,"storage delivery cannot accidentally revoke paused ownership");
+  runTimers();await settle();assert.equal(localBridgeMessages.length,localBeforePause);
+  now += 3600001;runTimers();await settle();runTimers();await settle();
+  assert.equal(typeof elementListeners.input,"function","expiry resumes the current draft without reload");
+  assert.equal(field.value,textBeforePause);
+  // Feedback latency includes the pause after the last input, native bridge
+  // wait and render. Detector-only time must not be mislabeled as this metric.
+  delayLocal=true;field.value="timed feedback";
+  elementListeners.input({isTrusted:false,isComposing:false});
+  now += 450;runTimers();await settle();
+  now += 120;pendingLocalCallback({ok:true,issues:[],localSpellingAvailable:true,localCheckComplete:true});
+  await settle();delayLocal=false;
+  assert.equal(metricMessages.filter((m) => m.sample.kind === "typingPauseToFeedback").at(-1).sample.elapsedMilliseconds,570);
+  assert.equal(metricMessages.filter((m) => m.sample.kind === "browserAnalysis").at(-1).sample.elapsedMilliseconds,120);
+  assert.ok(metricMessages.some((m) => m.sample.kind === "typingPauseToFeedback"));
+  assert.ok(metricMessages.some((m) => m.sample.kind === "browserAnalysis"));
+  assert.ok(metricMessages.some((m) => m.sample.kind === "browserAcceptance"));
+  for(const message of metricMessages) {
+    assert.deepEqual(Object.keys(message.sample).sort(),["elapsedMilliseconds","inputLength","issueCount","kind","outcome"]);
+    assert.equal(Number.isInteger(message.sample.elapsedMilliseconds),true);
+    assert.equal(JSON.stringify(message).includes("example.com"),false);
+  }
   assert.ok(ownershipMessages.some((message) => message.ownership.active === true));
   document.visibilityState = "hidden";
   documentListeners.visibilitychange();

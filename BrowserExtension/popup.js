@@ -98,6 +98,8 @@ function assessBridgeStatus(response) {
 
 let currentTab = null;
 let blockedSites = [];
+let pausedSites = {};
+let pauseTimer = null;
 let siteChangeOwnsMessage = false;
 let siteSettingsAvailable = false;
 
@@ -125,6 +127,8 @@ function renderSite() {
   const detail = byId("site-detail");
   const state = byId("site-state");
   const action = byId("site-action");
+  const pause = byId("site-pause");
+  if (pause) { pause.hidden = !currentTab; pause.disabled = true; }
   if (!currentTab) {
     if (name) name.textContent = "Bean is unavailable here";
     if (detail) detail.textContent = "Browser and extension pages do not allow writing helpers.";
@@ -141,6 +145,10 @@ function renderSite() {
   }
   const matches = matchingBlocks(currentTab.host, blockedSites);
   const blocked = matches.length > 0;
+  const until = BeanSitePolicy.until(pausedSites,currentTab.host);
+  if (pause) { pause.hidden = blocked; pause.disabled = false; pause.textContent = until ? "Resume on this website" : "Pause for 1 hour"; }
+  if (pauseTimer) clearTimeout(pauseTimer);
+  if (until) pauseTimer = setTimeout(renderSite,Math.max(1,until - Date.now() + 25));
   const coveringRule = blocked
     ? [...matches].sort((left, right) => left.split(".").length - right.split(".").length || left.length - right.length)[0]
     : null;
@@ -150,8 +158,9 @@ function renderSite() {
     ? (coveredByParent
       ? `Blocked by ${coveringRule} and its subdomains.`
       : "Bean stays hidden on this website.")
+    : until ? `Paused for ${Math.max(1,Math.ceil((until - Date.now()) / 60000))} more minutes. Your draft stays where it is.`
     : "Bean checks supported writing fields locally.";
-  if (state) { state.textContent = blocked ? "Blocked" : "Active"; state.className = `pill ${blocked ? "blocked" : "active"}`; }
+  if (state) { state.textContent = blocked ? "Blocked" : until ? "Paused" : "Active"; state.className = `pill ${blocked ? "blocked" : "active"}`; }
   if (action) {
     action.disabled = false;
     action.textContent = blocked
@@ -159,6 +168,21 @@ function renderSite() {
       : "Block this website";
     action.className = blocked ? "primary" : "";
   }
+}
+
+function toggleSitePause() {
+  const api = extensionAPI();
+  if (!api || !currentTab || !siteSettingsAvailable) return;
+  const button = byId("site-pause");
+  if (button) button.disabled = true;
+  const resuming = !!BeanSitePolicy.until(pausedSites,currentTab.host);
+  siteChangeOwnsMessage = true;
+  api.runtime.sendMessage({type:"mutateSitePause",operation:resuming ? "resume" : "pause",host:currentTab.host},(result) => {
+    const error = api.runtime.lastError, saved = result && result.ok && BeanSitePolicy.normalize(result.pausedSites);
+    if (error || !saved) { showMessage("Could not save this website pause.",true); renderSite(); return; }
+    pausedSites = saved; renderSite();
+    showMessage(resuming ? "Bean resumed. Your draft stays where it is." : "Paused for one hour. Resume here any time.");
+  });
 }
 
 function toggleCurrentSite() {
@@ -235,10 +259,12 @@ function load() {
     showMessage("Preview mode — extension controls are unavailable.");
     return;
   }
-  api.storage.local.get(["blockedSites"], (settings) => {
+  api.storage.local.get(["blockedSites","pausedSites"], (settings) => {
     const readError = api.runtime.lastError;
     const sites = settings && settings.blockedSites;
-    siteSettingsAvailable = !readError && !!settings && (sites === undefined ||
+    const pauses = settings && BeanSitePolicy.normalize(settings.pausedSites);
+    pausedSites = pauses || {};
+    siteSettingsAvailable = !readError && !!settings && !!pauses && (sites === undefined ||
       (Array.isArray(sites) && sites.every((value) => !!normalizeStoredHost(value))));
     blockedSites = siteSettingsAvailable ? normalizeStoredSites(sites) : [];
     if (!api.tabs || typeof api.tabs.query !== "function") { renderSite(); return; }
@@ -249,10 +275,12 @@ function load() {
   });
   if (api.storage.onChanged && typeof api.storage.onChanged.addListener === "function") {
     api.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "local" || !changes.blockedSites) return;
-      const sites = changes.blockedSites.newValue;
-      siteSettingsAvailable = sites === undefined ||
-        (Array.isArray(sites) && sites.every((value) => !!normalizeStoredHost(value)));
+      if (areaName !== "local" || !changes || (!changes.blockedSites && !changes.pausedSites)) return;
+      const sites = changes.blockedSites ? changes.blockedSites.newValue : blockedSites;
+      const pauses = changes.pausedSites ? BeanSitePolicy.normalize(changes.pausedSites.newValue) : pausedSites;
+      pausedSites = pauses || {};
+      siteSettingsAvailable = !!pauses && (sites === undefined ||
+        (Array.isArray(sites) && sites.every((value) => !!normalizeStoredHost(value))));
       blockedSites = siteSettingsAvailable ? normalizeStoredSites(sites) : [];
       renderSite();
     });
@@ -262,6 +290,8 @@ function load() {
 
 const siteAction = byId("site-action");
 if (siteAction) siteAction.addEventListener("click", toggleCurrentSite);
+const sitePause = byId("site-pause");
+if (sitePause) sitePause.addEventListener("click",toggleSitePause);
 const settingsButton = byId("open-settings");
 if (settingsButton) settingsButton.addEventListener("click", () => {
   const api = extensionAPI();
