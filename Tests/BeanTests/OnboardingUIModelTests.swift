@@ -59,6 +59,32 @@ final class OnboardingUIModelTests: XCTestCase {
         XCTAssertTrue(model.granted)
     }
 
+    func testPermissionRecoveryPreservesSetupAndReadyReviewUsesExistingResetFlow() throws {
+        let suite = "bean.onboarding-recovery.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        settings.onboardingComplete = true
+        settings.onboardingStepRawValue = OnboardingStep.ready.rawValue
+        var permissionRecoveryCount = 0
+        let actions = SettingsActions(checkPermissions: {}, resetOnboarding: {
+            settings.onboardingComplete = false
+            settings.onboardingStepRawValue = OnboardingStep.welcome.rawValue
+        }, openReadme: {}, openTesting: {}, fullReset: {
+            FullResetResult(completedAreas: [], failures: [], skippedAreas: [], terminationRequested: false)
+        }, applyShortcut: { _, _ in nil })
+
+        actions.reviewSetupOrRecoverAccessibility(accessibilityGranted: false) { permissionRecoveryCount += 1 }
+        XCTAssertEqual(permissionRecoveryCount, 1)
+        XCTAssertTrue(settings.onboardingComplete, "Recovering one permission must not restart completed setup")
+        XCTAssertEqual(settings.onboardingStepRawValue, OnboardingStep.ready.rawValue)
+
+        actions.reviewSetupOrRecoverAccessibility(accessibilityGranted: true) { permissionRecoveryCount += 1 }
+        XCTAssertEqual(permissionRecoveryCount, 1, "Review Setup does not open macOS permission recovery")
+        XCTAssertFalse(settings.onboardingComplete)
+        XCTAssertEqual(settings.onboardingStepRawValue, OnboardingStep.welcome.rawValue)
+    }
+
     func testBriefPermissionPollingStopsAfterGrant() async throws {
         var checks = 0
         let model = AccessibilityPermissionModel(

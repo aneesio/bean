@@ -88,11 +88,12 @@ Always excluded:
 - disabled, read-only, hidden, or tiny controls;
 - code editors and `pre`/`code` regions;
 - Google Docs canvas editing;
-- Slack web's complex ProseMirror composer in the 1.6 beta;
 - interactive buttons and links nested inside editable regions.
 
-Complex rich editors may decline highlighting when DOM text cannot be mapped to
-one exact live range. That refusal is intentional.
+Framework-based rich editors, including Slack web's ProseMirror composer, are
+evaluated by their editing capabilities and remain unverified on this candidate.
+Highlighting or replacement can be declined when DOM text cannot be mapped to
+one exact safe live range. That refusal is intentional.
 
 ## Safety behavior
 
@@ -107,8 +108,9 @@ one exact live range. That refusal is intentional.
 - Whole-paragraph replacement rechecks the paragraph and refuses rich blocks
   containing markup that cannot be preserved safely.
 - Provider wrappers, wrapping quotes, and zero-width artifacts are sanitized.
-- Explicit writing actions apply safe output directly to an unchanged source and
-  offer **Undo**. Fact-changing or suspicious output is refused. The card states
+- Explicit writing actions apply checked output directly to an unchanged source and
+  offer **Undo** when safely restorable. Output failing bounded content or shape
+  safeguards is refused; these checks do not guarantee meaning preservation. The card states
   its scope: selected text, draft, or current paragraph. Rich multi-block editors
   retain their structure by proofreading the current safely editable paragraph
   or selection; the native Mac shortcut remains available for whole-field work.

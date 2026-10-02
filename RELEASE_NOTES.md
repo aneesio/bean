@@ -1,6 +1,6 @@
 # Bean 1.7.0 — public beta candidate
 
-Build **12**, with Chromium extension **0.8.0**. This candidate focuses on writing
+Build **13**, with Chromium extension **0.8.0**. This candidate focuses on writing
 in other apps; ordinary launch and completed setup return to the menu-bar
 experience.
 

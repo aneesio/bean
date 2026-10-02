@@ -13,6 +13,11 @@ struct SettingsActions {
     /// message to show, or nil on success.
     var applyShortcut: (ShortcutSlot, GlobalShortcut) -> String?
     var openWriter: () -> Void = {}
+
+    func reviewSetupOrRecoverAccessibility(accessibilityGranted: Bool, recoverAccessibility: () -> Void) {
+        if accessibilityGranted { resetOnboarding() }
+        else { recoverAccessibility() }
+    }
 }
 
 // Bean's Settings window — a native, sidebar-organised preferences experience.
@@ -221,20 +226,26 @@ struct SettingsView: View {
                 IconBadge(symbol: isAccessibilityReady ? "checkmark.seal.fill" : "lock.shield",
                           tint: isAccessibilityReady ? BeanDesign.success : BeanDesign.warning, size: 34)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(isAccessibilityReady ? "Accessibility is ready" : "Allow access to use Bean in other apps")
+                    Text(isAccessibilityReady ? "Accessibility is ready" : "Restore help where you type")
                         .font(.headline)
                     Text(isAccessibilityReady
                          ? (hasVerifiedAIConfiguration
                             ? "Free local help is ready. AI is connected for deliberate actions."
                             : "Local writing help is available; AI is optional.")
-                         : "The guided setup can take you directly to the required macOS permission.")
+                         : "Open macOS Accessibility, enable Bean, then return here.")
                         .font(.caption).foregroundColor(BeanDesign.secondaryText)
                 }
                 Spacer()
-                Button(isAccessibilityReady ? "Review Setup" : "Continue Setup") {
-                    actions.resetOnboarding()
+                Button(isAccessibilityReady ? "Review Setup" : "Open Accessibility Settings") {
+                    actions.reviewSetupOrRecoverAccessibility(accessibilityGranted: isAccessibilityReady) {
+                        PermissionService.requestAccessibility()
+                        PermissionService.openAccessibilitySettings()
+                        permissionStatus.beginBriefPolling()
+                    }
                 }
-                .accessibilityHint("Opens Bean's three-step setup guide")
+                .accessibilityHint(isAccessibilityReady
+                    ? "Opens Bean's three-step setup guide"
+                    : "Opens the macOS Accessibility permission list and refreshes Bean’s status")
             }
             HStack(spacing: 14) {
                 compactCheck("Accessibility", permissionStatus.granted)
@@ -337,7 +348,7 @@ struct SettingsView: View {
                      : String(format: "US$ %.2f", month.estimatedCostUSD))
                     .monospacedDigit()
             }
-            Text("Quick Fix and Live suggestions are free. Optional AI activity appears below.")
+            Text("Quick Fix and basic local suggestions are free. Optional AI checks and writing actions use your provider; their usage appears below.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
         }
     }
@@ -676,7 +687,7 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 Text(settings.primaryShortcutAction == .quickFix
                      ? "Corrects obvious typos and spacing privately on your Mac."
-                     : "Proofreads and replaces the selected text or active field with your connected AI provider. Undo is available after replacement.")
+                     : "Proofreads and replaces the selected text or active field with your connected AI provider. Bean offers Undo when it can safely restore the original.")
                     .font(.caption)
                     .foregroundColor(BeanDesign.secondaryText)
             }

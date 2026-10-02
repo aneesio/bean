@@ -546,7 +546,7 @@ struct PermissionsSection: View {
             if !compact {
                 Text("Grant Accessibility")
                     .font(.title2).bold()
-                Text("Bean needs Accessibility access to copy, paste, and replace text in other apps. It can't read or change anything until you act.")
+                Text("Bean needs Accessibility to check supported text fields while you type and apply corrections you choose. Proofread and Rewrite replace text when you run them.")
                     .font(.callout)
                     .foregroundColor(BeanDesign.secondaryText)
             }

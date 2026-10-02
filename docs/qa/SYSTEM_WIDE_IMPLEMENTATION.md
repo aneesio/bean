@@ -38,8 +38,8 @@ No personal writing or paid provider requests are needed for the automated
 work. Developer signing and notarization are deferred, so local candidates must
 remain truthfully labelled ad hoc and unnotarized.
 
-Final combined checks: `scripts/run_all_tests.sh` passed 565 Swift test cases
-(558 passed, seven skipped), all 13 browser suites, standalone logic, shell
+Final combined checks: `scripts/run_all_tests.sh` passed 566 Swift test cases
+(559 passed, seven skipped), all 13 browser suites, standalone logic, shell
 syntax, release metadata and repository audit. The skips are five unavailable
 own-process AX web-area tests and two explicitly opt-in evaluations. The actual
 macOS quality evaluation was run separately; the provider dry-run generated

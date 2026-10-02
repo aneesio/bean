@@ -125,23 +125,23 @@ struct OnboardingView: View {
 
             HStack(spacing: BeanDesign.Spacing.md) {
                 BenefitCard(
-                    symbol: "square.and.pencil",
-                    title: "A place to write",
-                    subtitle: "Review suggestions as you type in Bean Writer."
-                )
-                BenefitCard(
                     symbol: "laptopcomputer",
-                    title: "Free by default",
-                    subtitle: "Quick Fix runs privately on your Mac."
+                    title: "Where you type",
+                    subtitle: "Live suggestions in supported text fields."
                 )
                 BenefitCard(
-                    symbol: "hand.raised",
-                    title: "You stay in control",
-                    subtitle: "AI and browser help are always optional."
+                    symbol: "lock.shield",
+                    title: "Checks stay local",
+                    subtitle: "Spelling and basic grammar run on this Mac."
+                )
+                BenefitCard(
+                    symbol: "text.badge.checkmark",
+                    title: "Fix in place",
+                    subtitle: "Accept a correction, Proofread, or Rewrite."
                 )
             }
 
-            Text("Start with a draft in Bean Writer. Allow one macOS permission to use Bean in your other apps too.")
+            Text("Allow Accessibility to enable help in your apps. Set up the browser extension for website suggestions and direct edits. AI rewriting is optional.")
                 .font(BeanDesign.Typography.caption())
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -207,7 +207,7 @@ struct OnboardingView: View {
             if !permission.granted {
                 Divider().opacity(0.4)
                 Label(
-                    "You can continue and try Bean's local checker here. Cross-app shortcuts will wait until this permission is allowed.",
+                    "You can try the local sample before allowing permission. Live suggestions and direct replacement in your apps require Accessibility.",
                     systemImage: "info.circle"
                 )
                 .font(BeanDesign.Typography.caption())
@@ -225,11 +225,11 @@ struct OnboardingView: View {
                     size: 40
                 )
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(permission.granted ? "Bean is ready" : "Bean's free checker is ready")
+                    Text(permission.granted ? "Bean is ready in your apps" : "Try Bean while you finish setup")
                         .font(BeanDesign.Typography.title())
                     Text(permission.granted
-                         ? "Quick Fix is available here and in your other apps."
-                         : "Try it below now. Allow Accessibility later to use it in other apps.")
+                         ? "Start typing in a supported field. Click Bean to review suggestions or improve your writing."
+                         : "The local sample works below. Allow Accessibility to enable help where you type.")
                         .font(BeanDesign.Typography.caption())
                         .foregroundColor(.secondary)
                 }
@@ -238,20 +238,23 @@ struct OnboardingView: View {
             tryoutCard
 
             BeanCard {
-                Text("Suggestions in your other apps").font(.headline)
+                Text("Live suggestions").font(.headline)
                 Toggle("Underline issues while I type", isOn: $settings.inlineHighlightsEnabled)
                     .disabled(!permission.granted)
                 Text(permission.granted
-                     ? "Local checks are on by default. Click an underline or the issue button beside your field to fix a suggestion."
+                     ? "Local checks are on by default. Click the Bean control beside your field to review issues, Proofread, or Rewrite. Underlines appear when precise text placement is available."
                      : "Allow Accessibility to activate live checking and direct replacement in your apps.")
                     .font(BeanDesign.Typography.caption())
                     .foregroundColor(.secondary)
             }
 
-            Text("Use Bean anywhere")
+            Text("Shortcuts in your apps")
                 .font(.headline)
             BeanCard {
-                shortcutRow("Quick Fix · Free & private", settings.shortcut.displayString)
+                shortcutRow(settings.primaryShortcutAction.displayName, settings.shortcut.displayString)
+                Text(settings.primaryShortcutAction.detail)
+                    .font(BeanDesign.Typography.caption())
+                    .foregroundColor(.secondary)
                 Divider().opacity(0.4)
                 shortcutRow("Open Bean menu", settings.beanMenuShortcut.displayString)
             }
@@ -265,7 +268,7 @@ struct OnboardingView: View {
 
     private var tryoutCard: some View {
         BeanCard {
-            Text("Try Quick Fix").font(.headline)
+            Text("Try a local sample").font(.headline)
             TextEditor(text: $tryoutText)
                 .focused($tryoutFocused)
                 .font(.system(size: 13))
@@ -280,7 +283,7 @@ struct OnboardingView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(BeanDesign.subtleBorder)
                 )
-                .accessibilityLabel("Quick Fix sample text")
+                .accessibilityLabel("Local proofreading sample")
                 .onAppear {
                     DispatchQueue.main.async { tryoutFocused = true }
                 }
@@ -306,12 +309,21 @@ struct OnboardingView: View {
                     .foregroundColor(.secondary)
             }
 
-            Text(permission.granted
-                 ? "This button demonstrates Quick Fix. The same action is available with \(settings.shortcut.displayString) in supported text fields."
-                 : "This sample needs no permission. Allow Accessibility before using \(settings.shortcut.displayString) in another app.")
+            Text(sampleGuidance)
                 .font(BeanDesign.Typography.caption())
                 .foregroundColor(.secondary)
         }
+    }
+
+    private var sampleGuidance: String {
+        let action = settings.primaryShortcutAction
+        let shortcut = settings.shortcut.displayString
+        let actionGuidance = action == .quickFix
+            ? "\(shortcut) runs \(action.displayName) locally on selected text or the focused field."
+            : "\(shortcut) runs \(action.displayName) using your configured AI provider on selected text or the focused field."
+        return permission.granted
+            ? "This sample demonstrates local corrections. Return to your app to try your shortcut. \(actionGuidance)"
+            : "This sample needs no permission. Allow Accessibility before using the shortcut in another app. \(actionGuidance)"
     }
 
     @ViewBuilder
@@ -351,7 +363,7 @@ struct OnboardingView: View {
                 IconBadge(symbol: "globe", size: 32)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Add Bean to your browser").font(.callout.weight(.semibold))
-                    Text("Optional inline help for ordinary writing fields on websites.")
+                    Text("Live suggestions and direct Proofread or Rewrite in supported website fields.")
                         .font(BeanDesign.Typography.caption())
                         .foregroundColor(.secondary)
                 }

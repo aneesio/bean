@@ -8,12 +8,12 @@ service.
 > **Public beta.** Replacement and UI behavior depend on what each macOS app
 > exposes through Accessibility. Review important text before sending it.
 >
-> Current release contract: Bean **1.7.0 (build 12)** with Bean for the Web
+> Current release contract: Bean **1.7.0 (build 13)** with Bean for the Web
 > **0.8.0**.
 
 ## What works today
 
-- Checks spelling, grammar, and spacing while you type in editable macOS fields.
+- Checks spelling, basic grammar, and spacing while you type in editable macOS fields.
   Local live assistance and the Bean button are on by default.
 - Draws underlines when an app supplies exact text positions, with a compact
   issue button and correction cards when that geometry is unavailable.
@@ -86,12 +86,12 @@ builds.
 
 Checksum verification is an optional advanced safety check, not part of the
 normal Finder-only install. Download the release's `.sha256` file beside the DMG,
-then, for example, run the following for version 1.7.0, build 12 and compare the printed
+then, for example, run the following for version 1.7.0, build 13 and compare the printed
 value with the `.dmg` line in that file:
 
 ```bash
 cd ~/Downloads
-shasum -a 256 Bean-1.7.0-build12-unnotarized.dmg
+shasum -a 256 Bean-1.7.0-build13-unnotarized.dmg
 ```
 
 Developer ID-signed and notarized artifacts, if introduced later, will omit the
@@ -181,8 +181,9 @@ steps, detects its ID, and installs or repairs the local bridge without Terminal
 Local checks work across ordinary websites by default; users can disable Bean
 for the current field or block a website from the correction UI. See
 [BrowserExtension/README.md](BrowserExtension/README.md). Slack web and other
-complex rich editors are not supported in 1.6; Bean stays hidden when it cannot
-verify a safe text range.
+framework-based rich editors remain unverified on this candidate. Bean evaluates
+their editing capabilities and declines changes when it cannot verify a safe
+text range.
 
 ## Updates
 

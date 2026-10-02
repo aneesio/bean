@@ -1,6 +1,6 @@
 # Supported Apps and Surfaces
 
-Policy revision: **1.7.0 candidate, build 12 / extension 0.8.0, October 2, 2026**. Capability
+Policy revision: **1.7.0 candidate, build 13 / extension 0.8.0, October 2, 2026**. Capability
 routing is covered by `FieldCapabilityPolicyTests`; implementation checks are
 covered by focused-field, native-editing, issue-mapping, and geometry tests.
 These do not substitute for live compatibility checks in each application.
@@ -137,10 +137,11 @@ read draft text on those sites. Temporary site pause retains suppression for its
 focused field; browser toolbar/address controls remain separate.
 
 The unpacked Chromium extension works best in plain text inputs, textareas, and
-simple contenteditable editors such as basic Gmail composition. Complex rich
-editors vary. Slack web's ProseMirror composer, Google Docs canvas editing,
-Slack desktop, Safari, password/search/email-address fields, and code editors
-are excluded from the Chromium extension path for this candidate.
+simple contenteditable editors such as basic Gmail composition. Framework-based
+rich editors, including Slack web's ProseMirror composer, are evaluated by their
+editing capabilities and remain unverified on this candidate. Google Docs canvas
+editing, password/search/email-address fields, and code editors are excluded.
+Slack desktop and Safari use the native path rather than the Chromium extension.
 
 When an unsupported or ambiguous target is detected, the correct behavior is to
 show no highlight or decline replacement—not to guess.
