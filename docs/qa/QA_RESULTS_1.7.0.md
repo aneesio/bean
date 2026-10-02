@@ -322,3 +322,60 @@ owned fixture. The hardware shortcut remains unchanged. Installation, any
 required ad hoc Accessibility refresh, actual build 15 replacement/Bean Undo,
 settings restoration and Chrome 0.8.1 reload remain pending. No paid request or
 external message was sent.
+
+
+## Build 15 installation after unlocking
+
+The user unlocked the Mac. Bean 14 was quit through its normal UI, and the
+installer verified/published the exact staged build 15 bundle. Actual Settings
+shows **1.7.0 (15)**. Strict installed signature and complete installed/staged
+bundle identity pass; the executable matches the build/ZIP/DMG hash above.
+The immediately previous build 14 is retained at
+`build/installed-backups/installed.gCcT2U/Bean.app`. Log:
+`/private/tmp/bean-install-build15.log`.
+
+General requested recovery of the existing Accessibility authorization. System
+Settings showed Bean enabled, but refreshing the switch presented a Touch ID
+sheet. The physical authentication step was handed to the user; no bypass was
+attempted. Live build 15 replacement/Undo and settings restoration follow once
+actual access is ready. Extension 0.8.1 reload and page refresh were also
+requested; there is no actual Chrome candidate pass yet.
+
+
+## Final build 15 live result and handoff
+
+The user completed Touch ID and refreshed the existing permission. Actual build
+15 General reports **Accessibility is ready**. The user also reports reloading
+the Chrome extension and refreshing pages; that is a user-reported activation,
+not an independently observed Chrome edit/Undo pass.
+
+The saved owned TextEdit fixture was focused with its caret after the first
+sentence. After the requested physical Quick Fix, actual AX and pixels show
+**`This is the draft. Please receive it.`**. Both spelling changes are exact;
+`draft` remains bold, the caret remains after `it.`, and the complete emoji,
+launch date/time and email paragraph is unchanged. The user then chose **Undo
+Last Bean Change**. Actual AX and pixels show the exact original `teh` and
+`recieve` restored together, with rich text and surrounding content intact.
+**Build 15 live Quick Fix and Bean one-action Undo pass for this journey.**
+The fixture was saved and closed normally before restoring automatic AI.
+
+Actual Settings confirms the original **AI Proofread** shortcut action and
+**Deeper AI suggestions on** are restored. The shortcut itself remains **⌘⇧G**;
+no key-combination reset occurred. Live suggestions, the Bean button and launch
+at login retain their enabled settings. Browser Settings reports its Mac
+connection installed and browser deeper checks enabled; live browser connection
+and transport are checked inside the extension, not certified by that screen.
+No paid QA request, personal-draft edit, clipboard inspection or external
+message occurred.
+
+Remaining product-quality work is explicit: the strict heldout preferred
+correction gate still fails (92.5% versus 99%). A development-only ranking review
+found all 488 returned development suggestions correct; it did not inspect
+heldout cases or justify a weight tweak. Better confidence calibration and
+candidate diagnostics can support a contextual reranker, but improved preferred
+corrections require independently reviewed development data and a fresh holdout.
+No heuristic was tuned to erase the known failure. Real provider evaluation
+still awaits a budget, and broader candidate app journeys, VoiceOver, actual
+feedback/acceptance latency and real-app edit reliability remain unverified.
+Developer ID signing/notarization remains explicitly postponed by the user.
+This final local candidate is not universal-app or Grammarly-parity sign-off.

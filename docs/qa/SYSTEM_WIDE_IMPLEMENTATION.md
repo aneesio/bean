@@ -83,11 +83,23 @@ strict writing-quality gate and broader real-app certification remain open.
 
 Final build 15 source `dcb3b2f` was packaged. Universal payload, strict signatures,
 ZIP/DMG byte identity, checksums, all 30 extension files and eight mounted DMG
-support documents pass. Build 14 remains installed while computer use awaits
-unlocking the Mac. See the candidate record for exact hashes and live-test status.
+support documents pass. Build 15 is now installed and verified; the previous build 14 is retained for
+rollback. See the candidate record for exact hashes and live-test status.
 
 
 Build 15 also passed all three private fault suites without changing its
-candidate bundle. Installation and settings restoration are pending the Mac's
-unlock; no live build 15 or Chrome 0.8.1 result is claimed. Build 14's verified
-TextEdit replacement and one-action Bean Undo remain the latest actual result.
+candidate bundle. Actual build 15 General reports Accessibility ready after the user refreshed
+the existing grant. Direct AX/pixel observation confirms both TextEdit typos
+corrected, rich content and caret preserved, and Bean one-action Undo restoring
+the complete original. The owned fixture was saved/closed; AI Proofread and
+Deeper AI on were restored. The user reports extension reload/page refresh; no
+independent Chrome 0.8.1 transport pass is claimed.
+
+
+The accepted milestone's feature implementations are present; quality outcomes
+are not all complete. The known strict heldout preferred-correction failure
+requires principled ranking work and fresh independent evaluation. Development
+suggestions are already 488/488 correct, so changing weights to fit known
+heldout failures is not justified. Real provider/human evaluation, broader
+candidate app/VoiceOver journeys, live latency and edit reliability remain open.
+Historical roadmap items outside this accepted milestone are not claimed done.
