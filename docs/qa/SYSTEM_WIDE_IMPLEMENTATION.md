@@ -38,11 +38,14 @@ No personal writing or paid provider requests are needed for the automated
 work. Developer signing and notarization are deferred, so local candidates must
 remain truthfully labelled ad hoc and unnotarized.
 
-Final combined checks: `scripts/run_all_tests.sh` passed 566 Swift test cases
-(559 passed, seven skipped), all 13 browser suites, standalone logic, shell
-syntax, release metadata and repository audit. The skips are five unavailable
-own-process AX web-area tests and two explicitly opt-in evaluations. The actual
-macOS quality evaluation was run separately; the provider dry-run generated
+Latest build 14 combined checks: `scripts/run_all_tests.sh` passed 579 Swift
+test cases (571 passed, eight skipped), all 13 browser suites, standalone logic,
+shell syntax, release metadata and repository audit. The skips are five
+unavailable own-process AX web-area fixtures, one SwiftUI descendant fixture
+whose plain Button baseline also lacks AX descendants, and two opt-in
+evaluations. Native replacement repairs additionally pass 85 focused tests,
+including owned rich AppKit selected-text edits and native Undo. The actual
+macOS quality evaluation was run separately; the provider dry run generated
 36 review plans with zero requests. See [writing-quality evidence](WRITING_QUALITY_2026-10-02.md)
 for provenance, exact counts and the failing strict quality gate. These results
 do not certify universal editor support or Grammarly parity.
@@ -52,3 +55,9 @@ architectures, matching installed/ZIP/DMG executables, checksum verification,
 mounted DMG documents and all three private fault suites passed. See the
 [candidate QA record](QA_RESULTS_1.7.0.md) for exact hashes, retained rollback
 bundles, installed UI observations and outstanding validation.
+
+The live build 13 TextEdit replacement failed and damaged a synthetic word; the
+source fixture was restored. Build 14 adds capability-based selected-text edits,
+settled selection proof, captured-process fallback commands and no retry after
+unconfirmed delivery. The [candidate QA record](QA_RESULTS_1.7.0.md) distinguishes
+owned regression passes from the required installed-app retest.

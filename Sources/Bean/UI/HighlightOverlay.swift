@@ -116,6 +116,14 @@ final class HighlightOverlayController {
         panel.ignoresMouseEvents = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         let view = HighlightHitView()
+        // Underlines are pointer shortcuts to the same suggestions available
+        // through the field control. A separate blank six-pixel window per
+        // issue adds no useful accessibility navigation or action.
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityChildren([])
+        panel.setAccessibilityIdentifier("com.bean.overlay.underline.\(id.uuidString)")
+        view.setAccessibilityElement(false)
+        view.setAccessibilityChildren([])
         view.onClick = { [weak self] in self?.activateIssue(id, intent: .pointer) }
         panel.contentView = view
         panel.orderFrontRegardless()
@@ -175,6 +183,7 @@ final class HighlightOverlayController {
             panel.contentViewController = host
             cardPanel = panel
         }
+        cardPanel?.describeAccessibility(title: "Bean writing suggestion", identifier: "com.bean.overlay.correction")
         cardPanel?.allowsKeyInteraction = cardIsInteractive
         cardPanel?.setContentSize(host.view.fittingSize)
         let anchor = preferTrayCardAnchor ? trayPanel?.frame : entry.rect
@@ -230,9 +239,14 @@ final class HighlightOverlayController {
     }
 
     private func showTray(issueCount: Int) {
-        let host = NSHostingController(rootView: NativeAssistantBadgeView(state: assistantState,
+        let view = NativeAssistantBadgeView(state: assistantState,
             onOpen: { [weak self] in self?.openAssistant(intent: .pointer) },
-            onKeyboardOpen: { [weak self] in self?.openAssistant(intent: .explicit) }))
+            onKeyboardOpen: { [weak self] in self?.openAssistant(intent: .explicit) })
+        let host: NSHostingController<NativeAssistantBadgeView>
+        if let existing = trayPanel?.contentViewController as? NSHostingController<NativeAssistantBadgeView> {
+            existing.rootView = view
+            host = existing
+        } else { host = NSHostingController(rootView: view) }
         let panel: OverlayPanel
         if let existing = trayPanel { panel = existing }
         else {
@@ -247,7 +261,8 @@ final class HighlightOverlayController {
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             trayPanel = panel
         }
-        panel.contentViewController = host
+        panel.describeAccessibility(title: "Bean writing control", identifier: "com.bean.overlay.field-control")
+        if panel.contentViewController !== host { panel.contentViewController = host }
         panel.setContentSize(host.view.fittingSize)
         let screens = OverlayScreenArea.current
         let screen = sourceAnchor.flatMap { OverlayGeometry.screen(containing: $0, from: screens) }
@@ -301,6 +316,7 @@ final class HighlightOverlayController {
             panel.contentViewController = host
             cardPanel = panel
         }
+        cardPanel?.describeAccessibility(title: "Bean writing assistant", identifier: "com.bean.overlay.assistant")
         cardPanel?.allowsKeyInteraction = cardIsInteractive
         cardPanel?.setContentSize(host.view.fittingSize)
         if let anchor = trayPanel?.frame ?? sourceAnchor { anchorCard(cardPanel!, to: anchor) }
@@ -346,6 +362,15 @@ final class OverlayPanel: NSPanel {
     var onExplicitInteraction: (() -> Void)?
     override var canBecomeKey: Bool { allowsKeyInteraction }
     override var canBecomeMain: Bool { false }
+
+    fileprivate func describeAccessibility(title: String, identifier: String) {
+        self.title = title
+        setAccessibilityTitle(title)
+        setAccessibilityIdentifier(identifier)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.window)
+        setAccessibilitySubrole(.floatingWindow)
+    }
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown { onExplicitInteraction?() }

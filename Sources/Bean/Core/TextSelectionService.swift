@@ -531,11 +531,11 @@ final class TextSelectionService {
                 selectedRange: { AccessibilityService.selectedRange(of: element) },
                 setSelectedRange: { AccessibilityService.setSelectedRange($0, on: element) },
                 sendEdit: { replacement in
-                    if replacement.isEmpty { ClipboardService.simulateDelete() }
+                    if replacement.isEmpty { ClipboardService.simulateDelete(to: app.processIdentifier) }
                     else {
                         ClipboardService.writeString(replacement)
                         ownedClipboardCount = ClipboardService.changeCount
-                        ClipboardService.simulatePaste()
+                        ClipboardService.simulatePaste(to: app.processIdentifier)
                     }
                 },
                 verify: { before, expected in
@@ -545,7 +545,11 @@ final class TextSelectionService {
                     }
                     return await Self.verifyReplacement(valueBefore: before, expectedAfter: expected,
                         readValue: { AccessibilityService.value(of: element) }, wait: { await Task.pause($0) })
-                }))
+                },
+                readSelectedText: { AccessibilityService.selectedText(of: element) },
+                replaceSelectedText: field.isSelectedTextSettable
+                    ? { AccessibilityService.setSelectedText($0, on: element) } : nil,
+                settleSelection: { await Task.pause(.milliseconds(35)) }))
         if outcome.editWasSent { undoStore.discard() }
         if !outcome.confirmedEdits.isEmpty,
            Self.exactTextMatches(AccessibilityService.value(of: element), outcome.confirmedValue),
@@ -588,6 +592,11 @@ final class TextSelectionService {
             return .failed(reason: "The suggestion no longer matches this field.")
         }
         if Self.exactTextMatches(original, replacement) { return .noChangesNeeded }
+        if AccessibilityService.isSelectedRangeSettable(element) {
+            return await replaceEdits(app: app, element: element, valueBefore: valueBefore,
+                edits: [NativeTextEdit(range: range, original: original, replacement: replacement)],
+                selectionToRestore: selectionToRestore)
+        }
         guard await reactivateAndConfirm(app),
               let field = AccessibilityService.focusedField(in: app),
               field.acceptsTextInput,
@@ -908,7 +917,8 @@ final class TextSelectionService {
         )
 
         let expectedAfter: String?
-        let beanClipboardChangeCount: Int
+        var beanClipboardChangeCount: Int?
+        var attemptedSelectedTextSetter = false
         switch validation {
         case .nativeRange:
             guard let target = pending.focusedElement else {
@@ -944,10 +954,21 @@ final class TextSelectionService {
             // Prove the captured range again immediately before the edit. A
             // normal paste lets Cocoa, Chromium and Electron update their own
             // editing model and native Undo history.
-            ClipboardService.writeString(corrected)
-            beanClipboardChangeCount = ClipboardService.changeCount
-            if corrected.isEmpty { ClipboardService.simulateDelete() }
-            else { ClipboardService.simulatePaste() }
+            guard Self.exactTextMatches(AccessibilityService.selectedText(of: target), original) else {
+                return .failed(reason: "The selected text changed. Bean left the current text intact.")
+            }
+            if AccessibilityService.isSelectedTextSettable(target) {
+                attemptedSelectedTextSetter = true
+                let accepted = AccessibilityService.setSelectedText(corrected, on: target)
+                if !accepted, Self.exactTextMatches(AccessibilityService.value(of: target), pending.valueBefore) {
+                    return .failed(reason: "This editor could not apply the correction safely.")
+                }
+            } else {
+                ClipboardService.writeString(corrected)
+                beanClipboardChangeCount = ClipboardService.changeCount
+                if corrected.isEmpty { ClipboardService.simulateDelete(to: pending.targetApp?.processIdentifier) }
+                else { ClipboardService.simulatePaste(to: pending.targetApp?.processIdentifier) }
+            }
         case .clipboardExact:
             // Slack/Electron can expose the focused element and value while
             // withholding AXSelectedTextRange, or no AX element at all. Copy
@@ -983,7 +1004,8 @@ final class TextSelectionService {
             return .copiedToClipboardFallback
         }
 
-        let result = await verifyPaste(pending: pending, expectedAfter: expectedAfter)
+        let verification = await verifyPaste(pending: pending, expectedAfter: expectedAfter)
+        let result = attemptedSelectedTextSetter ? Self.directSelectedTextVerificationResult(verification) : verification
         if result == .replacedConfirmed,
            let selection = pending.selectionToRestore,
            let element = pending.focusedElement,
@@ -991,11 +1013,12 @@ final class TextSelectionService {
             restoreSelection(selection, afterReplacing: range, with: corrected,
                              originalValue: before, on: element)
         }
-        return await finishClipboard(
-            for: result,
-            saved: clipboardToRestore,
-            beanClipboardChangeCount: beanClipboardChangeCount
-        )
+        if let beanClipboardChangeCount {
+            return await finishClipboard(for: result, saved: clipboardToRestore,
+                                         beanClipboardChangeCount: beanClipboardChangeCount)
+        }
+        Self.restoreClipboardIfOwned(clipboardToRestore, beanOwnedChangeCount: pending.clipboardOwnershipChangeCount)
+        return result
     }
 
     // MARK: - Focused-field replacement
@@ -1050,7 +1073,7 @@ final class TextSelectionService {
             // unchanged), but the exact readable empty value already does.
             ClipboardService.writeString(corrected)
             let ownedCount = ClipboardService.changeCount
-            ClipboardService.simulatePaste()
+            ClipboardService.simulatePaste(to: pending.targetApp?.processIdentifier)
             let result = await verifyPaste(pending: pending, expectedAfter: corrected)
             if result == .replacedConfirmed { restoreWholeFieldSelection(pending, replacement: corrected, on: target) }
             return await finishClipboard(for: result, saved: clipboardToRestore,
@@ -1153,6 +1176,13 @@ final class TextSelectionService {
             if result == .replacedConfirmed { return result }
         }
         return result
+    }
+
+    /// An accepted AX setter may finish asynchronously. Its unconfirmed result
+    /// cannot claim that a correction was copied or authorize a delivered edit
+    /// retry; this path intentionally never touches the clipboard.
+    nonisolated static func directSelectedTextVerificationResult(_ result: ReplacementResult) -> ReplacementResult {
+        result == .replacedConfirmed ? .replacedConfirmed : .replacementSentUnconfirmed
     }
 
     nonisolated static func selectedText(value: String?, range: NSRange?) -> String? {
@@ -1682,8 +1712,8 @@ final class TextSelectionService {
                 readString: { ClipboardService.readString() },
                 writeCorrection: { ClipboardService.writeString($0) },
                 simulatePaste: {
-                    if corrected.isEmpty { ClipboardService.simulateDelete() }
-                    else { ClipboardService.simulatePaste() }
+                    if corrected.isEmpty { ClipboardService.simulateDelete(to: pending.targetApp?.processIdentifier) }
+                    else { ClipboardService.simulatePaste(to: pending.targetApp?.processIdentifier) }
                 }
             )
         )

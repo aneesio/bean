@@ -1,6 +1,6 @@
 # Bean Testing Guide
 
-Current candidate: **Bean 1.7.0 (13), Chromium extension 0.8.0**. A checklist
+Current candidate: **Bean 1.7.0 (14), Chromium extension 0.8.0**. A checklist
 below is a required test, not a recorded pass. Historical user reports and the
 current automated evidence must be recorded separately.
 
@@ -288,7 +288,7 @@ manual reset gate against personal API keys, personalization, or browser data.
   active style as a canonical built-in or `custom`, and omit custom profile
   names, personalization text, full app/native-host paths, hostnames, and field
   labels.
-- About shows Bean 1.7.0 (13), identifies the community-supported public beta,
+- About shows Bean 1.7.0 (14), identifies the community-supported public beta,
   and opens only the canonical `aneesio/bean` GitHub, Support, Privacy, License,
   Changelog, and manual update-check destinations. At the minimum width and
   larger Accessibility text sizes, links reflow and **Open Update Check…** lands
@@ -323,7 +323,7 @@ Verify:
 
 - the app is universal (`arm64` and `x86_64`);
 - the ZIP and DMG names include `-unnotarized`;
-- filenames also include build 13; packaging must refuse overwriting an already
+- filenames also include build 14; packaging must refuse overwriting an already
   committed build, while an interrupted/failed package can be retried safely;
 - the SHA-256 file matches both artifacts;
 - the app contains current README, TESTING, QA_TEST_PLAN, SUPPORT, PRIVACY, LICENSE, CHANGELOG,

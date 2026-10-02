@@ -1,6 +1,6 @@
 # Supported Apps and Surfaces
 
-Policy revision: **1.7.0 candidate, build 13 / extension 0.8.0, October 2, 2026**. Capability
+Policy revision: **1.7.0 candidate, build 14 / extension 0.8.0, October 2, 2026**. Capability
 routing is covered by `FieldCapabilityPolicyTests`; implementation checks are
 covered by focused-field, native-editing, issue-mapping, and geometry tests.
 These do not substitute for live compatibility checks in each application.
@@ -11,8 +11,10 @@ application's Accessibility tree where supported, and reads range text when
 AXValue is unavailable. Editable WebKit surfaces are identified by editing
 capabilities and use their text-marker APIs when ordinary text attributes are
 missing. This routing does not require a list of supported app names.
-Normal Paste/Delete events drive native replacements, with exact source and
-outcome checks. Readable rich drafts use bounded, verified span edits for
+Native span replacement prefers a writable selected-text capability after
+checking the settled range, actual selected text and complete source. Where that
+setter is unavailable, normal Paste/Delete events target the captured app. Both
+paths require an exact output check; an uncertain delivered edit is not retried. Readable rich drafts use bounded, verified span edits for
 Proofread and whole-field Rewrite instead of replacing the entire document as
 plain text. Bean Undo is available only for an exact output in the same field
 and a safe restoration path.
@@ -52,9 +54,10 @@ unreadable controls or report those as clean.
   actions to 8,000; a larger field is not treated as a successful clean review.
 
 Optional AXEditable/AXReadOnly attributes are not implemented by every app.
-Readable text with a settable selection can be paste-editable despite having no
-AXValue setter, so Bean verifies the actual result of a single normal paste.
-It does not repeat a failed paste blindly.
+Readable text with a settable selection can be editable despite having no
+AXValue setter. Bean proves the actual selection before using the supported
+selected-text setter or one guarded Paste/Delete command, then verifies the
+complete result. It does not repeat an uncertain delivered edit blindly.
 
 ## Scope, rich content and Undo
 

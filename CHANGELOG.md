@@ -23,8 +23,11 @@ once public release tags begin.
 - Replace routine proofreading and rewrites in one action, including whole
   fields, with exact source validation and an Undo action. Failures use a compact
   notice instead of a comparison window.
-- Use normal edit/paste events for replacement so rich editors update their
-  document model and native undo history.
+- Prefer a supported selected-text edit after proving the exact range and
+  source. Fallback Paste/Delete targets the captured app with isolated key
+  state; uncertain edits never authorize another replacement attempt.
+- Give native writing controls and review panels descriptive accessibility
+  names; decorative underlines stay out of the navigation tree.
 - Add offline grammar checks, safe repeated-word/pronoun corrections, and a
   compact issue tray for fields without exact underline geometry.
 - Give supported browser fields one Bean control for suggestions, direct

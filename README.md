@@ -8,7 +8,7 @@ service.
 > **Public beta.** Replacement and UI behavior depend on what each macOS app
 > exposes through Accessibility. Review important text before sending it.
 >
-> Current release contract: Bean **1.7.0 (build 13)** with Bean for the Web
+> Current release contract: Bean **1.7.0 (build 14)** with Bean for the Web
 > **0.8.0**.
 
 ## What works today
@@ -86,12 +86,12 @@ builds.
 
 Checksum verification is an optional advanced safety check, not part of the
 normal Finder-only install. Download the release's `.sha256` file beside the DMG,
-then, for example, run the following for version 1.7.0, build 13 and compare the printed
+then, for example, run the following for version 1.7.0, build 14 and compare the printed
 value with the `.dmg` line in that file:
 
 ```bash
 cd ~/Downloads
-shasum -a 256 Bean-1.7.0-build13-unnotarized.dmg
+shasum -a 256 Bean-1.7.0-build14-unnotarized.dmg
 ```
 
 Developer ID-signed and notarized artifacts, if introduced later, will omit the

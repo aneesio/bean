@@ -141,6 +141,20 @@ final class NativeEditingPathTests: XCTestCase {
         XCTAssertEqual(unexpected, .replacementSentUnconfirmed)
     }
 
+    @MainActor
+    func testAcceptedButDelayedSelectedTextSetterNeverClaimsClipboardFallbackOrRetry() async {
+        var reads = 0
+        let verification = await TextSelectionService.verifyReplacement(
+            valueBefore: "recieve", expectedAfter: "receive", readValue: { reads += 1; return "recieve" },
+            wait: { _ in })
+        XCTAssertEqual(reads, 3)
+        XCTAssertEqual(verification, .copiedToClipboardFallback)
+        let result = TextSelectionService.directSelectedTextVerificationResult(verification)
+        XCTAssertEqual(result, .replacementSentUnconfirmed,
+                       "A delivered setter is never a copied correction or permission to retry")
+        XCTAssertEqual(TextSelectionService.directSelectedTextVerificationResult(.replacedConfirmed), .replacedConfirmed)
+    }
+
     func testWhitespaceAndPunctuationDeletionRetainExactRangeProofForUndo() {
         let original = "Please  reply!"
         let spacing = (original as NSString).range(of: "  ")

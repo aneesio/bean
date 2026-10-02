@@ -93,9 +93,135 @@ final class NativeEditTransactionTests: XCTestCase {
         XCTAssertTrue(uncertain.confirmedEdits.isEmpty)
     }
 
+    func testDeferredSelectionCollapseCannotTurnSpanReplacementIntoInsertion() async throws {
+        let model = Model()
+        model.text = "Please recieve it."
+        let plan = try XCTUnwrap(NativeEditPlan.proofread(original: model.text, corrected: "Please receive it."))
+        let effects = NativeEditTransaction.Effects(destinationIsValid: { true }, readValue: { model.text },
+            selectedRange: { model.selection }, setSelectedRange: { model.selection = $0; return true },
+            sendEdit: { _ in XCTFail("A collapsed selection must never receive Paste") },
+            verify: { _, _ in XCTFail("No command should be delivered"); return .replacementSentUnconfirmed },
+            readSelectedText: { (model.text as NSString).substring(with: model.selection) },
+            settleSelection: { model.selection = NSRange(location: NSMaxRange(model.selection), length: 0) })
+        let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: model.selection, effects: effects)
+        XCTAssertFalse(outcome.editWasSent)
+        XCTAssertEqual(model.text, plan.original)
+    }
+
+    func testPendingEditorAutocorrectionMustSettleBeforeSourceProof() async throws {
+        let model = Model()
+        model.text = "Please recieve it."
+        let plan = try XCTUnwrap(NativeEditPlan.proofread(original: model.text, corrected: "Please receive it."))
+        let effects = NativeEditTransaction.Effects(destinationIsValid: { true }, readValue: { model.text },
+            selectedRange: { model.selection }, setSelectedRange: { model.selection = $0; return true },
+            sendEdit: { _ in XCTFail("Never paste a fragment into an autonomously corrected word") },
+            verify: { _, _ in .replacementSentUnconfirmed },
+            readSelectedText: { (model.text as NSString).substring(with: model.selection) },
+            settleSelection: { model.text = "Please receive it."; model.selection = NSRange(location: 13, length: 0) })
+        let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: model.selection, effects: effects)
+        XCTAssertFalse(outcome.editWasSent)
+        XCTAssertEqual(model.text, "Please receive it.")
+        XCTAssertTrue(outcome.confirmedEdits.isEmpty, "The editor's own correction is not a Bean confirmation")
+    }
+
+    func testCachedRangeWithoutMatchingSelectedTextCannotAuthorizeAnEdit() async throws {
+        let model = Model()
+        let plan = try XCTUnwrap(NativeEditPlan.proofread(original: model.text, corrected: "the first and the second"))
+        let effects = NativeEditTransaction.Effects(destinationIsValid: { true }, readValue: { model.text },
+            selectedRange: { model.selection }, setSelectedRange: { model.selection = $0; return true },
+            sendEdit: { _ in XCTFail("A range echo alone cannot authorize Paste") },
+            verify: { _, _ in .replacementSentUnconfirmed }, readSelectedText: { "" })
+        let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: model.selection, effects: effects)
+        XCTAssertFalse(outcome.editWasSent)
+        XCTAssertEqual(model.text, plan.original)
+    }
+
+    func testFailedSelectedTextSetterNeverFallsBackToQueuedPaste() async throws {
+        let model = Model()
+        let plan = try XCTUnwrap(NativeEditPlan.proofread(original: model.text, corrected: "the first and the second"))
+        var setters = 0
+        let effects = NativeEditTransaction.Effects(destinationIsValid: { true }, readValue: { model.text },
+            selectedRange: { model.selection }, setSelectedRange: { model.selection = $0; return true },
+            sendEdit: { _ in XCTFail("A supported setter failure must not become a queued Paste retry") },
+            verify: { _, _ in XCTFail("An unchanged rejected setter is a refusal"); return .replacementSentUnconfirmed },
+            readSelectedText: { (model.text as NSString).substring(with: model.selection) },
+            replaceSelectedText: { _ in setters += 1; return false })
+        let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: model.selection, effects: effects)
+        XCTAssertEqual(setters, 1)
+        XCTAssertFalse(outcome.editWasSent)
+        XCTAssertEqual(model.text, plan.original)
+    }
+
+    func testEmptyNumericRangeWithNonemptyActualSelectionCannotAuthorizeInsertion() async throws {
+        let model = Model(); model.text = "Ready"
+        let plan = try XCTUnwrap(NativeEditPlan.proofread(original: model.text, corrected: "Ready."))
+        let effects = NativeEditTransaction.Effects(destinationIsValid: { true }, readValue: { model.text },
+            selectedRange: { model.selection }, setSelectedRange: { model.selection = $0; return true },
+            sendEdit: { _ in XCTFail("A cached caret must not delete an actual nonempty selection") },
+            verify: { _, _ in .replacementSentUnconfirmed }, readSelectedText: { "Ready" })
+        let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: model.selection, effects: effects)
+        XCTAssertFalse(outcome.editWasSent)
+        XCTAssertEqual(model.text, plan.original)
+    }
+
+    func testAmbiguousSelectedTextSetterMutationIsNeverRetried() async throws {
+        let model = Model()
+        let plan = try XCTUnwrap(NativeEditPlan.proofread(original: model.text, corrected: "the first and the second"))
+        var setters = 0
+        let effects = NativeEditTransaction.Effects(destinationIsValid: { true }, readValue: { model.text },
+            selectedRange: { model.selection }, setSelectedRange: { model.selection = $0; return true },
+            sendEdit: { _ in XCTFail("A possible mutation must never trigger Paste") },
+            verify: { _, expected in model.text == expected ? .replacedConfirmed : .replacementSentUnconfirmed },
+            readSelectedText: { (model.text as NSString).substring(with: model.selection) },
+            replaceSelectedText: { _ in setters += 1; model.text += " unexpected editor mutation"; return false })
+        let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: model.selection, effects: effects)
+        XCTAssertEqual(setters, 1)
+        XCTAssertTrue(outcome.editWasSent)
+        XCTAssertEqual(outcome.result, .replacementSentUnconfirmed)
+        XCTAssertTrue(outcome.confirmedEdits.isEmpty)
+    }
+
     private final class RichTextView: NSTextView {
         let ownUndoManager = UndoManager()
         override var undoManager: UndoManager? { ownUndoManager }
+    }
+
+    func testActualOwnedAccessibilitySelectedTextEditsReproWithoutKeyboardPasteAndPreservesUndo() async throws {
+        let view = RichTextView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+        view.isRichText = true; view.allowsUndo = true; view.ownUndoManager.groupsByEvent = false
+        let original = NSMutableAttributedString(string: "This is teh draft. Please recieve it. Test.\n\n👩🏽‍💻 The launch is on October 2 at 10:30. Contact hello@example.test.")
+        let bold = (original.string as NSString).range(of: "draft")
+        original.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 14), range: bold)
+        let attachment = NSTextAttachment()
+        original.append(NSAttributedString(attachment: attachment))
+        try XCTUnwrap(view.textStorage).setAttributedString(original)
+        view.setSelectedRange(NSRange(location: original.length, length: 0))
+        let corrected = LocalQuickChecker.corrected(original.string, dictionary: [])
+        let plan = try XCTUnwrap(NativeEditPlan.proofread(original: original.string, corrected: corrected))
+        XCTAssertEqual(plan.edits.map(\.original), ["eh", "ie"])
+        XCTAssertEqual(plan.edits.map(\.replacement), ["he", "ei"])
+        let effects = NativeEditTransaction.Effects(destinationIsValid: { true }, readValue: { view.string },
+            selectedRange: { view.selectedRange() },
+            setSelectedRange: { view.setAccessibilitySelectedTextRange($0); return true },
+            sendEdit: { _ in XCTFail("The supported selected-text setter must avoid clipboard/keyboard transport") },
+            verify: { _, expected in view.string.utf16.elementsEqual(expected.utf16) ? .replacedConfirmed : .replacementSentUnconfirmed },
+            readSelectedText: { view.accessibilitySelectedText() },
+            replaceSelectedText: { replacement in
+                view.ownUndoManager.beginUndoGrouping()
+                view.setAccessibilitySelectedText(replacement)
+                view.ownUndoManager.endUndoGrouping()
+                return true
+            }, settleSelection: { await Task.yield() })
+        let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: view.selectedRange(), effects: effects)
+        XCTAssertEqual(outcome.result, .replacedConfirmed)
+        XCTAssertEqual(view.string, corrected)
+        XCTAssertEqual(outcome.confirmedEdits.count, 2)
+        let storage = try XCTUnwrap(view.textStorage)
+        XCTAssertTrue(storage.attributedSubstring(from: bold).isEqual(to: original.attributedSubstring(from: bold)))
+        XCTAssertTrue(storage.attribute(.attachment, at: storage.length - 1, effectiveRange: nil) as? NSTextAttachment === attachment)
+        XCTAssertTrue(view.ownUndoManager.canUndo)
+        for _ in plan.edits { view.ownUndoManager.undo() }
+        XCTAssertTrue(storage.isEqual(to: original), "Actual AppKit accessibility edits retain native attributed Undo")
     }
 
     func testOwnedRichEditorPreservesUnchangedAttributesAttachmentAndNativeUndo() async throws {

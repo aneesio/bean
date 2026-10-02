@@ -12,6 +12,23 @@ enum NativeEditTransaction {
         let setSelectedRange: (NSRange) -> Bool
         let sendEdit: (String) -> Void
         let verify: (_ before: String, _ expected: String) async -> TextSelectionService.ReplacementResult
+        let readSelectedText: (() -> String?)?
+        let replaceSelectedText: ((String) -> Bool)?
+        let settleSelection: (() async -> Void)?
+
+        init(destinationIsValid: @escaping () -> Bool, readValue: @escaping () -> String?,
+             selectedRange: @escaping () -> NSRange?, setSelectedRange: @escaping (NSRange) -> Bool,
+             sendEdit: @escaping (String) -> Void,
+             verify: @escaping (String, String) async -> TextSelectionService.ReplacementResult,
+             readSelectedText: (() -> String?)? = nil,
+             replaceSelectedText: ((String) -> Bool)? = nil,
+             settleSelection: (() async -> Void)? = nil) {
+            self.destinationIsValid = destinationIsValid; self.readValue = readValue
+            self.selectedRange = selectedRange; self.setSelectedRange = setSelectedRange
+            self.sendEdit = sendEdit; self.verify = verify
+            self.readSelectedText = readSelectedText; self.replaceSelectedText = replaceSelectedText
+            self.settleSelection = settleSelection
+        }
     }
 
     struct Outcome {
@@ -50,15 +67,34 @@ enum NativeEditTransaction {
             }
             lastRequestedRange = edit.range
             guard let single = NativeEditPlan.validated(original: value, edits: [edit]),
-                  effects.setSelectedRange(edit.range), effects.selectedRange() == edit.range,
-                  effects.destinationIsValid(), exact(effects.readValue(), value) else {
+                  effects.setSelectedRange(edit.range) else {
                 return outcome(.failed(reason: confirmed.isEmpty
                     ? "This editor cannot safely target the correction. Select the text and try again."
                     : "Bean stopped after applying \(confirmed.count) changes because the next span could not be verified."))
             }
-            // No await between the last identity/source/range proof and the
-            // normal editing command. An insertion is an exact numeric caret.
-            effects.sendEdit(edit.replacement)
+            // Selection changes can commit an editor's pending autocorrection.
+            // Let its selection settle, then require both range and actual
+            // selected text; an immediate cached range alone is insufficient.
+            if let settle = effects.settleSelection { await settle() }
+            guard effects.destinationIsValid(), exact(effects.readValue(), value),
+                  effects.selectedRange() == edit.range,
+                  effects.readSelectedText.map({ exact($0(), edit.original) }) ?? true else {
+                return outcome(.failed(reason: confirmed.isEmpty
+                    ? "The field or selection changed. Bean left the current text intact."
+                    : "Bean stopped after applying \(confirmed.count) changes because the editor changed."))
+            }
+            // Prefer a supported synchronous selected-text edit. Never queue
+            // Paste as a retry after a setter that might already have edited.
+            if let replace = effects.replaceSelectedText {
+                let accepted = replace(edit.replacement)
+                if !accepted, exact(effects.readValue(), value) {
+                    return outcome(.failed(reason: confirmed.isEmpty
+                        ? "This editor could not apply the correction safely."
+                        : "Bean stopped after applying \(confirmed.count) changes because the editor rejected the next correction."))
+                }
+            } else {
+                effects.sendEdit(edit.replacement)
+            }
             sent = true
             let result = await effects.verify(value, single.replacement)
             guard result == .replacedConfirmed else {

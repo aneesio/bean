@@ -320,6 +320,20 @@ enum AccessibilityService {
         ) == .success
     }
 
+    /// A supported selected-text setter edits the editor's current span in its
+    /// own model. Callers must prove the live range/source before this call;
+    /// unlike a queued Paste, it cannot be routed to a later keyboard target.
+    @discardableResult
+    static func setSelectedText(_ text: String, on element: AXUIElement) -> Bool {
+        guard !isSecureElement(element), isSelectedTextSettable(element) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString,
+                                           text as CFString) == .success
+    }
+
+    static func isSelectedTextSettable(_ element: AXUIElement) -> Bool {
+        !isSecureElement(element) && isAttributeSettable(kAXSelectedTextAttribute as String, on: element)
+    }
+
     /// Reads the substring for a range via AXStringForRange, or nil.
     static func string(in element: AXUIElement, range: NSRange) -> String? {
         guard range.location >= 0, range.length >= 0, !isSecureElement(element) else { return nil }

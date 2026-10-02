@@ -1,6 +1,6 @@
 # Bean 1.7.0 — public beta candidate
 
-Build **13**, with Chromium extension **0.8.0**. This candidate focuses on writing
+Build **14**, with Chromium extension **0.8.0**. This candidate focuses on writing
 in other apps; ordinary launch and completed setup return to the menu-bar
 experience.
 
@@ -13,6 +13,11 @@ experience.
   rich drafts use bounded span edits to retain unchanged formatting, links,
   signatures and attachments. Selected text, whole draft and precise current
   paragraph are separate scopes; unsafe structural or ambiguous edits decline.
+- Native span corrections prefer the editor’s writable selected-text capability
+  after verifying the settled range, selected text and source. Fallback commands
+  target the captured app, and an uncertain edit cannot be blindly retried.
+- Native field controls and review windows have descriptive accessibility names;
+  decorative underlines are omitted from the navigation tree.
 - Exact source, focus, clipboard and UTF-16 checks protect newer writing.
   Unrelated carets are retained while Bean still owns the selection. Undo is
   offered for an exact confirmed change, including a safely verified partial

@@ -3,7 +3,7 @@
 Date: October 2, 2026. This is an implementation and local-candidate record,
 not public-release sign-off or universal-app certification.
 
-## Candidate and preservation
+## Build 13 baseline and preservation
 
 | Field | Recorded value |
 | --- | --- |
@@ -87,16 +87,34 @@ directory.
   after the ad hoc signature changed. Recovery routing preserves completed
   setup in the isolated regression test.
 
-Native live TextEdit transport, formatting/caret/Undo and final permission
-recovery remain pending the macOS Touch ID handoff. Browser and native fixture
-renders are recorded separately from real-app journeys.
+After the user completed Touch ID and Accessibility, installed Settings reported
+**Accessibility is ready**. The user's screenshot confirms two automatic native
+suggestions and the open assistant beside the rich TextEdit field. Browser and
+native fixture renders are recorded separately from real-app journeys.
 
-A newly created synthetic TextEdit rich document was closed and retained at
+The subsequent build 13 live replacement **failed**. Source:
+`This is teh draft. Please recieve it. Test.` followed by the unchanged synthetic
+emoji/date/time/email paragraph; `draft` was bold. After the shortcut attempt,
+actual TextEdit AX text and screenshot showed
+`This is teh draft. Please receieive it. Test.` and Bean displayed **Couldn’t Apply
+the Change**: **Bean sent the replacement but could not confirm what changed.**
+The user corrected their initial success answer to report this failure. Earlier
+tool-generated shortcut attempts and focus changes make attribution to one
+physical event uncertain; the corrupted output is an observed failure, not a
+pass or a proven transport root cause. No personal writing was involved.
+
+This is an open P1 in build 13. Native replacement and Undo certification remain
+withheld until the repaired transport is tested on the installed candidate.
+The synthetic word and temporary `Test.` addition were restored with targeted
+editor actions and saved for retesting, retaining the bold word and paragraph.
+
+The synthetic TextEdit rich document is retained at
 `/private/tmp/bean-native-live-candidate-qa/Bean build13 synthetic proofreading.rtf`
 for the pending journey. It contains a bold word, two known spelling errors,
 emoji, a date/time and a synthetic email address. No personal draft was changed
-or message sent. The temporarily changed shortcut action and Deeper AI setting
-were restored to their original AI Proofread/on values before handoff.
+or message sent. The prior handoff restored the shortcut and Deeper AI settings. For the current
+replacement retest, they are temporarily Quick Fix/off again; restoring the
+user’s AI Proofread/on settings is required before the next handoff.
 
 ## Process sampling
 
@@ -132,3 +150,40 @@ Live feedback/acceptance p95 goals and 99.5% real-app verified-edit reliability
 remain unmeasured. CPU/RSS process samples measure a different property from
 feedback latency. This candidate is not ready to be certified as Grammarly
 parity, universal compatibility, or a publicly signed/notarized release.
+
+## Build 14 replacement repair
+
+Build 14 repairs the generic native transport used by numeric-range corrections
+and selected rewriting. It prefers a supported `AXSelectedText` setter after
+settled range, actual selected text, complete source and destination proof.
+Fallback Paste/Delete targets the captured process using isolated key state.
+An unconfirmed setter cannot claim that text was copied or enable a replacement
+retry. Verified partial batches retain an exact-subset Undo and an honest count.
+The observed build 13 corruption remains a failure; its precise transport cause
+is a hypothesis because earlier queued attempts/focus changes were involved.
+
+Independent source review found no remaining blocker in the final repair. The
+focused native transport suite passes **85/85**, including the exact typo
+sequence, real owned NSTextView selected-text edits, rich attributes/attachment
+preservation and native Undo. Those are owned editor-model tests, not external
+Accessibility or physically held-shortcut certification.
+
+Native field controls and review windows now publish descriptive floating-window
+identities; decorative underline windows/views are omitted from accessibility
+navigation. Pointer behavior and explicit keyboard-focus guards remain covered.
+Passive updates reuse the badge host/view. Focused overlay tests: **five passed,
+one skipped, zero failures**. The skipped control-descendant fixture first
+proves the native NSButton walker, then finds that even a plain SwiftUI Button
+baseline publishes no descendants in this unit host. Panel/tree assertions pass
+separately; actual VoiceOver and external AXPress remain unverified.
+
+`scripts/run_all_tests.sh`: **PASS**, **579 Swift cases: 571 passed, eight skipped,
+zero failures**; all 13 browser suites, standalone logic, shell syntax, metadata
+and repository/credential audit pass. The eighth skip is the unavailable owned
+SwiftUI descendant fixture described above. Log:
+`/private/tmp/bean-build14-full-tests.log`. Focused logs:
+`/private/tmp/bean-native-transport-regression-tests.log` and
+`/private/tmp/bean-native-overlay-accessibility-tests.log`.
+
+Package, installation and real TextEdit verification follow separately. The live
+P1 is not resolved by these automated passes alone. No paid requests were made.
