@@ -46,3 +46,9 @@ macOS quality evaluation was run separately; the provider dry-run generated
 36 review plans with zero requests. See [writing-quality evidence](WRITING_QUALITY_2026-10-02.md)
 for provenance, exact counts and the failing strict quality gate. These results
 do not certify universal editor support or Grammarly parity.
+
+Build 13 was packaged and installed from `6d4acb3`; strict signatures, universal
+architectures, matching installed/ZIP/DMG executables, checksum verification,
+mounted DMG documents and all three private fault suites passed. See the
+[candidate QA record](QA_RESULTS_1.7.0.md) for exact hashes, retained rollback
+bundles, installed UI observations and outstanding validation.
