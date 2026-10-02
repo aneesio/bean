@@ -61,3 +61,18 @@ source fixture was restored. Build 14 adds capability-based selected-text edits,
 settled selection proof, captured-process fallback commands and no retry after
 unconfirmed delivery. The [candidate QA record](QA_RESULTS_1.7.0.md) distinguishes
 owned regression passes from the required installed-app retest.
+
+Build 14 repair source `f52e35d` was packaged and installed; actual Settings
+shows 1.7.0 (14). Universal payload, strict signatures, ZIP/DMG byte identity,
+checksums, staged support documents and three private fault suites pass. The
+prior installed build 13 is retained for rollback. The user completed the
+physical Touch ID/Accessibility refresh and actual General reports ready. The
+required installed TextEdit replacement/Undo result follows separately from
+owned automated tests.
+
+Actual build 14 hardware Quick Fix corrected both synthetic TextEdit typos;
+unchanged bold text, emoji/date/time/email, original caret, native Undo/Redo and
+Bean one-action Undo all pass by direct AX/pixel observation. The reported
+TextEdit corruption is resolved for that journey. A final recovery review found
+additional uncertain-delivery/Undo retry boundaries; those remain a P1 until the
+contained follow-up is complete and separately validated.

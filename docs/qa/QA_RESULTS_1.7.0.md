@@ -185,5 +185,62 @@ SwiftUI descendant fixture described above. Log:
 `/private/tmp/bean-native-transport-regression-tests.log` and
 `/private/tmp/bean-native-overlay-accessibility-tests.log`.
 
-Package, installation and real TextEdit verification follow separately. The live
-P1 is not resolved by these automated passes alone. No paid requests were made.
+Build 14 was packaged and installed from **`f52e35d`**. The actual Settings UI
+shows **1.7.0 (14)**. All three private build/install/package fault suites pass
+against this final candidate. Both architecture UUIDs and all file-backed
+sections match the current release product (37 arm64, 35 x86_64).
+
+Installed, build, staged, ZIP and mounted DMG executables match byte for byte;
+strict signatures, both checksum entries and `hdiutil verify` pass. Mounted DMG
+documents exactly match the eight public source documents and the Applications
+link is valid. The image was detached. All 30 bundled extension files match
+source; the running Chrome extension is not independently certified. The ZIP
+verification extraction is retained as `bean-build14-artifact-verify-fnfovj_6`
+under this Mac’s temporary directory.
+
+```text
+1b34a1e5af6b39c16a7b0dbe2f555eda1f1b6c1095e8a0f42821a714c9152b53  Bean executable
+523a363b7b08af711cb45ed5f1791fc00fc7dfc02b29f59fd296488cb262a1b1  Bean-1.7.0-build14-unnotarized.zip
+c082adf5ffe7d32c3f704ff6d1b6feaeee9afdc3cb181c2ff5dc2037031900be  Bean-1.7.0-build14-unnotarized.dmg
+```
+
+The immediately previous installed build 13 is retained at
+`build/installed-backups/installed.ItFqry/Bean.app`, in addition to the older
+rollback bundles. Completed build 13 release artifacts were preserved. Logs:
+`/private/tmp/bean-package-build14.log`, `/private/tmp/bean-install-build14.log`
+and `/private/tmp/bean-build14-{build,install,package}-fault-tests.log`.
+
+After installation, General requested Accessibility recovery despite the existing
+macOS switch being enabled. Refreshing it presented a Touch ID sheet. The user
+completed the prompt and refreshed the switch; actual build 14 General now
+reports **Accessibility is ready**. No authentication bypass was attempted.
+
+The restored synthetic TextEdit fixture was tested on installed build 14 with
+Quick Fix/offline assistance. A CUA app-scoped shortcut leaves the source
+unchanged; the user then pressed the hardware shortcut once. Actual TextEdit AX
+and pixels confirm **`This is the draft. Please receive it.`**, with `draft` still
+bold and the entire emoji/date/time/email paragraph unchanged. No error or retry
+was reported for this physical attempt.
+
+Caret proof: typing the owned ` Test.` sentinel placed it after `it.` at the
+original unrelated caret; native Undo removed only that sentinel. TextEdit native
+Undo then restored the two corrections separately (`teh`, then `recieve`), and
+native Redo restored the exact corrected draft. The user chose **Undo Last Bean
+Change**; actual AX/pixels show both original typos restored in one operation,
+with bold text and the second paragraph intact. The user separately confirmed
+Undo worked. The source fixture was saved again. **The reported TextEdit P1 is
+resolved on build 14 for this recorded journey.** Native Undo groups each span;
+it is not one native batch, while Bean Undo is one action. No personal draft or
+clipboard was read and no paid request was made.
+
+This live result does not certify every editor, Clipboard fallback transport,
+VoiceOver, or provider rewriting. CUA app retrieval opens/reopens Settings instead
+of exposing the field-side panels on this host, so actual panel controls remain
+separate from the passing owned panel/tree regressions.
+
+Final source review found additional failure-only P1 retry boundaries outside the
+successful journey: an unconfirmed Undo could re-register its old record, and
+unchanged text after a sent Paste could be classified as a retryable copied
+fallback. A setter error Boolean also does not distinguish a refusal from an AX
+messaging timeout. These are being repaired together before the final candidate;
+build 14 is retained as recorded evidence, not complete recovery certification.
