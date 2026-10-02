@@ -187,16 +187,20 @@
       return { ok: false, nativeUndoPreserved: false, inputEventVerified: false, changeEventVerified: false };
     }
 
+    const beforeInputs = [];
+    const onBeforeInput = (event) => { beforeInputs.push(event); };
     let inputSeen = false;
     let changeSeen = false;
     const onInput = () => { inputSeen = true; };
     const onChange = () => { changeSeen = true; };
     if (typeof el.addEventListener === "function") {
+      el.addEventListener("beforeinput", onBeforeInput, true);
       el.addEventListener("input", onInput, true);
       el.addEventListener("change", onChange, true);
     }
 
     let nativeUndoPreserved = false;
+    let commandAttempted = false, commandResult;
     let commandedSelection = null;
     const commandCaret = {start:start + replacement.length,end:start + replacement.length};
     const active = document.activeElement === el;
@@ -204,17 +208,22 @@
       try {
         el.setSelectionRange(start, end);
         commandedSelection = textControlSelection(el);
-        nativeUndoPreserved = document.execCommand("insertText", false, replacement) === true
-          && el.value === expected;
+        commandAttempted = true;
+        commandResult = document.execCommand("insertText", false, replacement);
+        nativeUndoPreserved = commandResult === true && el.value === expected;
       } catch (e) { nativeUndoPreserved = false; }
     }
 
     // A page listener may synchronously rewrite another part of the control in
     // response to execCommand. Never overwrite that newer page/user state with
     // the whole-value fallback; only fall back when the command left the exact
-    // pre-edit value untouched.
+    // pre-edit value untouched AND returned a definite no-op without delivering
+    // any editing event. A controlled editor can restore that same value while
+    // a delivered command is queued; another mutation would duplicate its work.
     const commandLeftUnexpectedValue = el.value !== before && el.value !== expected;
-    if (!commandLeftUnexpectedValue && el.value !== expected && document.activeElement === originalFocus &&
+    const noCommandDelivery = (!commandAttempted || commandResult === false) &&
+      beforeInputs.length === 0 && !inputSeen && !changeSeen;
+    if (noCommandDelivery && el.value === before && el.value !== expected && document.activeElement === originalFocus &&
         (!(commandedSelection || originalSelection) || selectionsMatch(textControlSelection(el),commandedSelection || originalSelection))) {
       try {
         const setter = nativeValueSetter(el);
@@ -228,11 +237,12 @@
       } catch (e) {}
     }
 
+    const commandCancelled = beforeInputs.some((event) => event.defaultPrevented);
     try {
-      if (!commandLeftUnexpectedValue && el.value === expected && !inputSeen) el.dispatchEvent(editEvent("input", replacement));
+      if (!commandCancelled && !commandLeftUnexpectedValue && el.value === expected && !inputSeen) el.dispatchEvent(editEvent("input", replacement));
       // React and ordinary DOM listeners can synchronously reject/revert the
       // input. Never report success or dispatch change for a reverted value.
-      if (!commandLeftUnexpectedValue && el.value === expected && !changeSeen) {
+      if (!commandCancelled && !commandLeftUnexpectedValue && el.value === expected && !changeSeen) {
         el.dispatchEvent(editEvent("change", replacement));
       }
     } catch (e) {}
@@ -248,6 +258,7 @@
       } catch (e) {}
     }
     if (typeof el.removeEventListener === "function") {
+      el.removeEventListener("beforeinput", onBeforeInput, true);
       el.removeEventListener("input", onInput, true);
       el.removeEventListener("change", onChange, true);
     }
@@ -414,35 +425,45 @@
       return { ok: false, nativeUndoPreserved: false, inputEventVerified: false, changeEventVerified: false };
     }
     const before = root.textContent;
+    const sourceStartNode = range.startContainer, sourceEndNode = range.endContainer;
     const originalSelection = contentEditableSelection(root), originalFocus = document.activeElement;
     let commandCaret = {start:offsets.start + replacement.length,end:offsets.start + replacement.length,
       startNode:range.startContainer,endNode:range.startContainer,
       startOffset:range.startOffset + replacement.length,endOffset:range.startOffset + replacement.length};
     let commandedSelection = null;
+    const beforeInputs = [];
+    const onBeforeInput = (event) => { beforeInputs.push(event); };
     let inputSeen = false, changeSeen = false;
     const onInput = () => { inputSeen = true; };
     const onChange = () => { changeSeen = true; };
+    root.addEventListener("beforeinput", onBeforeInput, true);
     root.addEventListener("input", onInput, true);
     root.addEventListener("change", onChange, true);
 
     let nativeUndoPreserved = false;
+    let commandAttempted = false, commandResult;
     try {
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(range);
       commandedSelection = contentEditableSelection(root);
       if (typeof document.execCommand === "function") {
-        nativeUndoPreserved = document.execCommand("insertText", false, replacement) === true &&
-          root.textContent === expectedText;
+        commandAttempted = true;
+        commandResult = document.execCommand("insertText", false, replacement);
+        nativeUndoPreserved = commandResult === true && root.textContent === expectedText;
       }
     } catch (e) { nativeUndoPreserved = false; }
 
-    if (root.textContent === before && document.activeElement === originalFocus &&
+    const noCommandDelivery = (!commandAttempted || commandResult === false) &&
+      beforeInputs.length === 0 && !inputSeen && !changeSeen;
+    if (noCommandDelivery && root.textContent === before && document.activeElement === originalFocus &&
+        (sourceStartNode === root || root.contains(sourceStartNode)) &&
+        (sourceEndNode === root || root.contains(sourceEndNode)) &&
         domSelectionsMatch(contentEditableSelection(root),commandedSelection)) {
       // A failed command can invalidate/collapse its Range. Rebuild from the
       // captured offsets before taking the narrow DOM fallback.
       const fallbackRange = rangeFromOffsets(root, offsets.start, offsets.end,
-        {startNode:range.startContainer,endNode:range.endContainer});
+        {startNode:sourceStartNode,endNode:sourceEndNode});
       try {
         if (fallbackRange) {
           fallbackRange.deleteContents();
@@ -455,15 +476,17 @@
       } catch (e) {}
     }
 
+    const commandCancelled = beforeInputs.some((event) => event.defaultPrevented);
     try {
-      if (root.textContent === expectedText && !inputSeen) root.dispatchEvent(editEvent("input", replacement));
-      if (root.textContent === expectedText && !changeSeen) root.dispatchEvent(editEvent("change", replacement));
+      if (!commandCancelled && root.textContent === expectedText && !inputSeen) root.dispatchEvent(editEvent("input", replacement));
+      if (!commandCancelled && root.textContent === expectedText && !changeSeen) root.dispatchEvent(editEvent("change", replacement));
     } catch (e) {}
     const ok = root.textContent === expectedText && inputSeen && changeSeen;
     const selectionOwned = document.activeElement === originalFocus && domSelectionsMatch(contentEditableSelection(root),commandCaret);
     const mappedSelection = options.preserveSelection !== false && selectionAfterEdits(originalSelection,
       [{start:offsets.start,end:offsets.end,replacement}]);
     const selectionPreserved = !!(ok && selectionOwned && mappedSelection && restoreContentEditableSelection(root,mappedSelection));
+    root.removeEventListener("beforeinput", onBeforeInput, true);
     root.removeEventListener("input", onInput, true);
     root.removeEventListener("change", onChange, true);
     return { ok, nativeUndoPreserved, selectionOwned, selectionPreserved,

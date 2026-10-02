@@ -149,10 +149,30 @@ final class NativeEditingPathTests: XCTestCase {
             wait: { _ in })
         XCTAssertEqual(reads, 3)
         XCTAssertEqual(verification, .copiedToClipboardFallback)
-        let result = TextSelectionService.directSelectedTextVerificationResult(verification)
+        let result = TextSelectionService.postDeliveryVerificationResult(verification)
         XCTAssertEqual(result, .replacementSentUnconfirmed,
                        "A delivered setter is never a copied correction or permission to retry")
-        XCTAssertEqual(TextSelectionService.directSelectedTextVerificationResult(.replacedConfirmed), .replacedConfirmed)
+        XCTAssertEqual(TextSelectionService.postDeliveryVerificationResult(.replacedConfirmed), .replacedConfirmed)
+    }
+
+    @MainActor
+    func testUnchangedPostedPasteCannotAuthorizeRetryBeforeItsLateDelivery() async {
+        var field = "teh"; var commandCount = 1
+        let polling = await TextSelectionService.verifyReplacement(valueBefore: field, expectedAfter: "the",
+            readValue: { field }, wait: { _ in })
+        let result = TextSelectionService.postDeliveryVerificationResult(polling)
+        XCTAssertEqual(result, .replacementSentUnconfirmed)
+        let recovery = PassiveSuggestionService.replacementRecoveryPolicy(for: result)
+        XCTAssertFalse(recovery.allowsRetry)
+        XCTAssertFalse(recovery.correctionIsOnClipboard)
+        // The command reaches the owned model after the polling deadline. No
+        // second delivered command is permitted while the first is uncertain.
+        if recovery.allowsRetry { commandCount += 1 }
+        field = "the"
+        XCTAssertEqual(field, "the")
+        XCTAssertEqual(commandCount, 1)
+        XCTAssertEqual(PassiveSuggestionService.replacementRecoveryPolicy(for: .copiedToClipboardFallback).allowsRetry, true,
+                       "An actual pre-delivery clipboard fallback retains its deliberate retry")
     }
 
     func testWhitespaceAndPunctuationDeletionRetainExactRangeProofForUndo() {

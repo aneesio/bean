@@ -59,15 +59,15 @@ assert.deepEqual({...mapping.selectionAfterEdits({start:6,end:6},[{start:6,end:6
 // and synchronous page event callbacks. The real DOM paths are also tested in
 // the owned nonpersistent WebKit editor fixture.
 class TextControl {
-  constructor(value) { this._value=value; this.selectionStart=this.selectionEnd=value.length; this.selectionDirection="none"; this.listeners={}; }
+  constructor(value) { this._value=value; this.valueWrites=0; this.selectionStart=this.selectionEnd=value.length; this.selectionDirection="none"; this.listeners={}; }
   get value() { return this._value; }
-  set value(value) { this._value=value; this.selectionStart=this.selectionEnd=value.length; }
+  set value(value) { this._value=value; this.valueWrites++; this.selectionStart=this.selectionEnd=value.length; }
   setSelectionRange(start,end,direction="none") { this.selectionStart=start;this.selectionEnd=end;this.selectionDirection=direction; }
   addEventListener(type,callback) { (this.listeners[type] ||= new Set()).add(callback); }
   removeEventListener(type,callback) { this.listeners[type]?.delete(callback); }
   dispatchEvent(event) { for(const callback of this.listeners[event.type] || []) callback(event); return true; }
 }
-context.Event = class {constructor(type) {this.type=type;}};
+context.Event = class {constructor(type,options={}) {this.type=type;this.defaultPrevented=false;Object.assign(this,options);} preventDefault(){this.defaultPrevented=true;}};
 context.document.execCommand = (_command,_ui,replacement) => {
   const el=context.document.activeElement, start=el.selectionStart, end=el.selectionEnd;
   el.value=el.value.slice(0,start)+replacement+el.value.slice(end);
@@ -122,20 +122,32 @@ function attachmentCaretFixture() {
     get collapsed(){return this.startContainer===this.endContainer && this.startOffset===this.endOffset;}
     cloneContents(){return {textContent:root.textContent.slice(position(this.startContainer,this.startOffset),position(this.endContainer,this.endOffset))};}
     toString(){return this.cloneContents().textContent;}
+    deleteContents(){
+      const node=this.startContainer;
+      node.nodeValue=node.nodeValue.slice(0,this.startOffset)+node.nodeValue.slice(this.endOffset);
+      this.setEnd(node,this.startOffset);
+    }
+    insertNode(node){
+      const source=this.startContainer,index=root.childNodes.indexOf(source);
+      const tail={nodeType:3,nodeValue:source.nodeValue.slice(this.startOffset),isConnected:true,parentElement:root};
+      source.nodeValue=source.nodeValue.slice(0,this.startOffset);
+      node.parentElement=root;node.isConnected=true;
+      root.childNodes.splice(index+1,0,node,tail);
+    }
   }
   const selection={rangeCount:0,getRangeAt(){return this.range;},removeAllRanges(){this.rangeCount=0;},
     addRange(range){this.range=range;this.rangeCount=1;this.anchorNode=range.startContainer;this.anchorOffset=range.startOffset;}};
   const setCaret=(node,offset)=>{const range=new Range();range.setStart(node,offset);range.collapse();selection.addRange(range);};
   const document={activeElement:root,createRange:()=>new Range(),createTreeWalker:()=>{
     const texts=root.childNodes.filter(node=>node.nodeType===3);let index=0;return {nextNode:()=>texts[index++] || null};
-  },execCommand(_command,_ui,replacement){
+  },createTextNode:(nodeValue)=>({nodeType:3,nodeValue,isConnected:false}),execCommand(_command,_ui,replacement){
     const range=selection.range,start=range.startOffset,end=range.endOffset;
     text.nodeValue=text.nodeValue.slice(0,start)+replacement+text.nodeValue.slice(end);
     setCaret(text,start+replacement.length);root.dispatchEvent(new context.Event("input"));return true;
   }};
   const isolated={window:{getSelection:()=>selection},document,NodeFilter:{SHOW_TEXT:4},Intl,Event:context.Event};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,"../src/issueMapping.js"),"utf8"),isolated);
-  return {root,text,image,selection,setCaret,mapping:isolated.window.BeanMapping};
+  return {root,text,image,selection,setCaret,document,mapping:isolated.window.BeanMapping};
 }
 for (const boundary of [1,2]) {
   const fixture=attachmentCaretFixture();fixture.setCaret(fixture.root,boundary);
@@ -158,5 +170,59 @@ for (const boundary of [1,2]) {
   const result=fixture.mapping.applyContentEditableRange(fixture.root,fixture.mapping.rangeFromOffsets(fixture.root,0,3),"the","the suffix");
   assert.equal(result.ok,true);assert.equal(result.selectionPreserved,false,
     "a removed boundary neighbour cannot be restored through a guessed flat offset");
+}
+
+// Exercise delivered commands which an editor rolls back while its one queued
+// range operation is still pending. Immediate fallback would change that base
+// and turn the eventual one edit into duplicated characters.
+for (const outcome of [true,false,"throw"]) {
+  const field=new TextControl("teh ending"),pending=[];context.document.activeElement=field;
+  field.addEventListener("input",()=>{
+    field.value="teh ending";field.setSelectionRange(0,3);
+    pending.push(()=>{field.value=field.value.slice(0,0)+"there"+field.value.slice(3);});
+  });
+  context.document.execCommand=()=>{
+    field.value="there ending";field.setSelectionRange(5,5);field.dispatchEvent(new context.Event("input"));
+    if(outcome==="throw")throw new Error("uncertain after delivery");return outcome;
+  };
+  const result=mapping.applyTextControlRange(field,0,3,"there");
+  assert.equal(result.ok,false);assert.equal(field.value,"teh ending");assert.equal(field.valueWrites,2);
+  assert.equal(pending.length,1);pending[0]();assert.equal(field.value,"there ending");
+
+  const fixture=attachmentCaretFixture(),before=fixture.root.textContent,queued=[];
+  const native=fixture.document.execCommand;
+  fixture.root.addEventListener("input",()=>{
+    fixture.text.nodeValue=before;fixture.selection.removeAllRanges();
+    fixture.selection.addRange(fixture.mapping.rangeFromOffsets(fixture.root,0,3));
+    queued.push(()=>{fixture.text.nodeValue="there"+fixture.text.nodeValue.slice(3);});
+  });
+  fixture.document.execCommand=(...args)=>{
+    native(...args);if(outcome==="throw")throw new Error("uncertain after delivery");return outcome;
+  };
+  const ce=fixture.mapping.applyContentEditableRange(fixture.root,fixture.mapping.rangeFromOffsets(fixture.root,0,3),"there","there suffix");
+  assert.equal(ce.ok,false);assert.equal(fixture.root.textContent,before);assert.equal(queued.length,1);
+  queued[0]();assert.equal(fixture.root.textContent,"there suffix");
+}
+for (const mode of ["accepted","beforeinput","cancelledBeforeinput","input","change","throw","unknown","noOp","missing"]) {
+  const field=new TextControl("teh ending");context.document.activeElement=field;
+  const command=(target)=>{
+    if(mode==="throw")throw new Error("no confirmed no-op");
+    if(mode==="beforeinput" || mode==="cancelledBeforeinput") {
+      const event=new context.Event("beforeinput");target.dispatchEvent(event);
+      if(mode==="cancelledBeforeinput")event.preventDefault();
+    }
+    if(mode==="input" || mode==="change")target.dispatchEvent(new context.Event(mode));
+    return mode==="accepted" ? true : mode==="unknown" ? undefined : false;
+  };
+  context.document.execCommand=mode==="missing" ? undefined : ()=>command(field);
+  const result=mapping.applyTextControlRange(field,0,3,"there");
+  const fallback=mode==="noOp" || mode==="missing";
+  assert.equal(result.ok,fallback,`textarea ${mode}`);assert.equal(field.value,fallback ? "there ending" : "teh ending");
+  assert.equal(field.valueWrites,fallback ? 1 : 0,`textarea ${mode} cannot deliver an extra mutation`);
+
+  const fixture=attachmentCaretFixture();fixture.document.execCommand=mode==="missing" ? undefined : ()=>command(fixture.root);
+  const ce=fixture.mapping.applyContentEditableRange(fixture.root,fixture.mapping.rangeFromOffsets(fixture.root,0,3),"there","there suffix");
+  assert.equal(ce.ok,fallback,`contenteditable ${mode}`);
+  assert.equal(fixture.root.textContent,fallback ? "there suffix" : "teh suffix");
 }
 console.log("Bounded browser span plans, Unicode, boundaries, repeated occurrences, inverse Undo and stale guards passed");

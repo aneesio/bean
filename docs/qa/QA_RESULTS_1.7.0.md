@@ -242,5 +242,41 @@ Final source review found additional failure-only P1 retry boundaries outside th
 successful journey: an unconfirmed Undo could re-register its old record, and
 unchanged text after a sent Paste could be classified as a retryable copied
 fallback. A setter error Boolean also does not distinguish a refusal from an AX
-messaging timeout. These are being repaired together before the final candidate;
-build 14 is retained as recorded evidence, not complete recovery certification.
+messaging timeout. These were repaired in build 15 source and covered by the focused and combined
+checks below. Build 14 remains the recorded live result for its successful path.
+
+
+## Build 15 delivery and Undo recovery follow-up
+
+Native post-delivery verification now treats every nonconfirmation as uncertain,
+including unchanged text and an Accessibility setter error. A sent edit cannot
+be reclassified as an undelivered copied fallback. Undo consumes its owned
+record before delivery, serializes concurrent requests, preserves newer records,
+and restores an old record only after a proven refusal before delivery.
+
+Browser regression replay reproduced a queued page handler turning `teh ending`
+into `therere ending` after an unsafe second edit. Accepted commands, exceptions,
+uncertain results, and observed editing events now prevent fallback. A cancelled
+`beforeinput` is respected. A genuine no-op fallback still requires exact source,
+focus, selection and connected original nodes. Failed batches stop immediately.
+These are editor-capability repairs rather than per-app exceptions.
+
+Independent native and browser source reviews found no remaining blocker in
+these contained changes. Native recovery/Undo: **95/95 passed, zero skips**.
+Owned WebKit editor models: **19/19 passed, zero skips**; with the three overlay
+fixtures, **22 owned WebKit editor/overlay tests passed**. All **13 browser suites
+passed**. Focused logs:
+`/private/tmp/bean-native-delivery-undo-recovery-tests.log` and
+`/private/tmp/bean-browser-delivery-regression-tests.log`.
+
+`scripts/run_all_tests.sh`: **PASS**, **593 Swift cases: 585 passed, eight skipped,
+zero failures**. Standalone logic, shell syntax, metadata (1.7.0 build 15,
+extension 0.8.1) and repository/credential audit pass. The skips remain five
+unavailable own-process AX web-area fixtures, one SwiftUI descendant fixture,
+and two opt-in evaluations; none is counted as a pass. Log:
+`/private/tmp/bean-build15-full-tests.log`.
+
+Packaging, installed-app observations and retained rollback are recorded after
+publication below. The new browser transport requires extension 0.8.1 to be
+reloaded, followed by a page refresh; owned WebKit tests do not certify the
+running Chrome extension. No paid request was made.

@@ -184,6 +184,137 @@ final class OwnedWebEditorModelTests: XCTestCase {
         XCTAssertEqual(result["identity"] as? Bool, true)
     }
 
+    func testDeliveredTextareaCommandDoesNotRetryWhileEditorQueuesItsOneChange() async throws {
+        let fixture = try OwnedWebEditorModelFixture(html: "<textarea id='editor'>teh ending</textarea>")
+        defer { fixture.close() }
+        try await fixture.load()
+        let immediate = try await fixture.object("""
+            const e=document.getElementById('editor');e.focus();const before=e.value;
+            window.deliveryReplay={commands:0,inputs:0,commits:0};
+            const native=document.execCommand.bind(document);
+            document.execCommand=(...args)=>{window.deliveryReplay.commands++;return native(...args);};
+            e.addEventListener('input',()=>{
+                window.deliveryReplay.inputs++;
+                e.value=before;e.setSelectionRange(0,3);
+                queueMicrotask(()=>{e.setRangeText('there',0,3,'end');window.deliveryReplay.commits++;});
+            },{once:true});
+            const result=BeanMapping.applyTextControlRange(e,0,3,'there');
+            return {ok:result.ok,unchanged:e.value===before,inputSeen:result.inputEventVerified,
+                commands:window.deliveryReplay.commands,inputs:window.deliveryReplay.inputs};
+            """)
+        XCTAssertEqual(immediate["ok"] as? Bool, false)
+        XCTAssertEqual(immediate["unchanged"] as? Bool, true)
+        XCTAssertEqual(immediate["inputSeen"] as? Bool, true)
+        XCTAssertEqual(immediate["commands"] as? Int, 1)
+        XCTAssertEqual(immediate["inputs"] as? Int, 1)
+        let after = try await fixture.object("return {text:document.getElementById('editor').value,commits:window.deliveryReplay.commits};")
+        XCTAssertEqual(after["text"] as? String, "there ending")
+        XCTAssertEqual(after["commits"] as? Int, 1)
+    }
+
+    func testDeliveredRichCommandDoesNotRetryAndKeepsUntouchedNodeIdentity() async throws {
+        let fixture = try OwnedWebEditorModelFixture(html: "<div id='editor' contenteditable='true'>teh ending<strong id='signature'> signature</strong></div>")
+        defer { fixture.close() }
+        try await fixture.load()
+        let immediate = try await fixture.object("""
+            const e=document.getElementById('editor');e.focus();const source=e.firstChild,before=source.nodeValue;
+            const signature=document.getElementById('signature');window.deliveryReplay={commands:0,inputs:0,commits:0,signature};
+            const native=document.execCommand.bind(document);
+            document.execCommand=(...args)=>{window.deliveryReplay.commands++;return native(...args);};
+            e.addEventListener('input',()=>{
+                window.deliveryReplay.inputs++;source.nodeValue=before;
+                const selection=window.getSelection();selection.removeAllRanges();selection.addRange(BeanMapping.rangeFromOffsets(e,0,3));
+                queueMicrotask(()=>{source.nodeValue='there'+source.nodeValue.slice(3);window.deliveryReplay.commits++;});
+            },{once:true});
+            const result=BeanMapping.applyContentEditableRange(e,BeanMapping.rangeFromOffsets(e,0,3),'there','there ending signature');
+            return {ok:result.ok,unchanged:e.textContent==='teh ending signature',inputSeen:result.inputEventVerified,
+                commands:window.deliveryReplay.commands,inputs:window.deliveryReplay.inputs,identity:e.firstChild===source && document.getElementById('signature')===signature};
+            """)
+        XCTAssertEqual(immediate["ok"] as? Bool, false)
+        XCTAssertEqual(immediate["unchanged"] as? Bool, true)
+        XCTAssertEqual(immediate["inputSeen"] as? Bool, true)
+        XCTAssertEqual(immediate["commands"] as? Int, 1)
+        XCTAssertEqual(immediate["inputs"] as? Int, 1)
+        XCTAssertEqual(immediate["identity"] as? Bool, true)
+        let after = try await fixture.object("return {text:document.getElementById('editor').textContent,commits:window.deliveryReplay.commits,identity:document.getElementById('signature')===window.deliveryReplay.signature};")
+        XCTAssertEqual(after["text"] as? String, "there ending signature")
+        XCTAssertEqual(after["commits"] as? Int, 1)
+        XCTAssertEqual(after["identity"] as? Bool, true)
+    }
+
+    func testRealDOMFallbackRequiresAnUndeliveredExactNoOp() async throws {
+        for contentEditable in [false,true] {
+            let fixture = try OwnedWebEditorModelFixture(html: contentEditable
+                ? "<div id='editor' contenteditable='true'>teh ending</div>" : "<textarea id='editor'>teh ending</textarea>")
+            defer { fixture.close() }
+            try await fixture.load()
+            let result = try await fixture.object("""
+                const e=document.getElementById('editor');e.focus();const ce=e.isContentEditable;
+                const cases=[];
+                for(const mode of ['accepted','beforeinput','cancelledBeforeinput','input','change','throw','unknown','noOp','missing','valueDrift','nodeDrift']) {
+                    if(!ce && mode==='nodeDrift')continue;
+                    if(ce)e.textContent='teh ending';else e.value='teh ending';
+                    let inputs=0,changes=0;const onInput=()=>inputs++,onChange=()=>changes++;
+                    e.addEventListener('input',onInput);e.addEventListener('change',onChange);
+                    const cancel=event=>event.preventDefault();if(mode==='cancelledBeforeinput')e.addEventListener('beforeinput',cancel);
+                    document.execCommand=mode==='missing' ? undefined : ()=>{
+                        if(mode==='throw')throw new Error('uncertain command');
+                        if(mode==='beforeinput' || mode==='cancelledBeforeinput')e.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:'there'}));
+                        if(mode==='input' || mode==='change')e.dispatchEvent(new Event(mode,{bubbles:true}));
+                        if(mode==='valueDrift'){if(ce)e.firstChild.nodeValue+=' newer writing';else e.value+=' newer writing';}
+                        if(mode==='nodeDrift'){const replacement=e.firstChild.cloneNode(true);e.replaceChild(replacement,e.firstChild);
+                            const s=window.getSelection();s.removeAllRanges();s.addRange(BeanMapping.rangeFromOffsets(e,0,3));}
+                        return mode==='accepted' ? true : mode==='unknown' ? undefined : false;
+                    };
+                    const applied=ce ? BeanMapping.applyContentEditableRange(e,BeanMapping.rangeFromOffsets(e,0,3),'there','there ending') : BeanMapping.applyTextControlRange(e,0,3,'there');
+                    const text=ce ? e.textContent : e.value;
+                    cases.push({mode,ok:applied.ok,text,inputs,changes});
+                    e.removeEventListener('input',onInput);e.removeEventListener('change',onChange);e.removeEventListener('beforeinput',cancel);
+                }
+                return {cases};
+                """)
+            let cases = try XCTUnwrap(result["cases"] as? [[String: Any]])
+            for item in cases {
+                let mode = try XCTUnwrap(item["mode"] as? String)
+                let fallback = mode == "noOp" || mode == "missing"
+                XCTAssertEqual(item["ok"] as? Bool, fallback, "contentEditable=\(contentEditable), mode=\(mode)")
+                XCTAssertEqual(item["text"] as? String, fallback ? "there ending" : mode == "valueDrift" ? "teh ending newer writing" : "teh ending", mode)
+                if fallback {
+                    XCTAssertEqual(item["inputs"] as? Int, 1)
+                    XCTAssertEqual(item["changes"] as? Int, 1)
+                }
+            }
+        }
+    }
+
+    func testDeliveredUncertainBatchStopsBeforeAnotherSpanOrUndoIsOffered() async throws {
+        let fixture = try OwnedWebEditorModelFixture(html: "<div id='editor' contenteditable='true'>teh and teh ending</div>")
+        defer { fixture.close() }
+        try await fixture.load()
+        let immediate = try await fixture.object("""
+            const e=document.getElementById('editor');e.focus();const source=e.firstChild,before=source.nodeValue;
+            window.deliveryReplay={commands:0,commits:0};let pending;
+            const native=document.execCommand.bind(document);
+            document.execCommand=(command,ui,text)=>{pending={...BeanMapping.rangeOffsets(e,window.getSelection().getRangeAt(0)),text};window.deliveryReplay.commands++;return native(command,ui,text);};
+            e.addEventListener('input',()=>{
+                const edit={...pending};source.nodeValue=before;
+                const s=window.getSelection();s.removeAllRanges();s.addRange(BeanMapping.rangeFromOffsets(e,edit.start,edit.end));
+                queueMicrotask(()=>{source.nodeValue=source.nodeValue.slice(0,edit.start)+edit.text+source.nodeValue.slice(edit.end);window.deliveryReplay.commits++;});
+            },{once:true});
+            const plan=BeanMapping.validateEditPlan(before,[{start:0,end:3,original:'teh',replacement:'the'},{start:8,end:11,original:'teh',replacement:'there'}]);
+            const applied=BeanMapping.applyContentEditableEdits(e,plan);
+            return {ok:applied.ok,count:applied.confirmedEdits.length,undo:applied.undoPlan!==null,commands:window.deliveryReplay.commands,unchanged:e.textContent===before};
+            """)
+        XCTAssertEqual(immediate["ok"] as? Bool, false)
+        XCTAssertEqual(immediate["count"] as? Int, 0)
+        XCTAssertEqual(immediate["undo"] as? Bool, false)
+        XCTAssertEqual(immediate["commands"] as? Int, 1)
+        XCTAssertEqual(immediate["unchanged"] as? Bool, true)
+        let after = try await fixture.object("return {text:document.getElementById('editor').textContent,commits:window.deliveryReplay.commits};")
+        XCTAssertEqual(after["text"] as? String, "teh and there ending")
+        XCTAssertEqual(after["commits"] as? Int, 1)
+    }
+
     func testRealTextControlKeepsUnrelatedBackwardSelectionAndNewerPageCaret() async throws {
         let fixture = try OwnedWebEditorModelFixture(html: "<textarea id='editor'>🙂 teh ending</textarea><input id='other'>")
         defer { fixture.close() }

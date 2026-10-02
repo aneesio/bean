@@ -1,7 +1,7 @@
 # Bean 1.7.0 Public Beta QA Test Plan
 
 This plan verifies the system-wide writing pass for Bean **1.7.0
-(build 14)** and Bean for the Web **0.8.0**. It complements the shorter recurring
+(build 15)** and Bean for the Web **0.8.1**. It complements the shorter recurring
 checklist in [TESTING.md](TESTING.md). Use this document for release-candidate
 sign-off and regression testing after a relevant change.
 
@@ -33,8 +33,8 @@ Record the following with each run:
 | Field | Value |
 | --- | --- |
 | Commit | |
-| App version/build | 1.7.0 (14) |
-| Extension version | 0.8.0 |
+| App version/build | 1.7.0 (15) |
+| Extension version | 0.8.1 |
 | macOS version / hardware | |
 | Browser and version | |
 | Field type / selection or whole field / native or extension path | |
@@ -90,16 +90,16 @@ Then verify the exact artifacts:
 
 ```bash
 codesign --verify --deep --strict --verbose=2 \
-  release/Bean-1.7.0-build14-unnotarized/Bean.app
-lipo -archs release/Bean-1.7.0-build14-unnotarized/Bean.app/Contents/MacOS/Bean
-(cd release && shasum -a 256 -c Bean-1.7.0-build14-unnotarized.sha256)
-hdiutil verify release/Bean-1.7.0-build14-unnotarized.dmg
+  release/Bean-1.7.0-build15-unnotarized/Bean.app
+lipo -archs release/Bean-1.7.0-build15-unnotarized/Bean.app/Contents/MacOS/Bean
+(cd release && shasum -a 256 -c Bean-1.7.0-build15-unnotarized.sha256)
+hdiutil verify release/Bean-1.7.0-build15-unnotarized.dmg
 ```
 
 Expected: XCTest, standalone logic, extension, shell, metadata, repository, and
 credential-history checks all pass; the binary contains `arm64` and `x86_64`;
 strict signature and checksums verify; the DMG verifies; release metadata says
-app 1.7.0 (14) and extension 0.8.0. Record skipped macOS service or editor
+app 1.7.0 (15) and extension 0.8.1. Record skipped macOS service or editor
 integration tests explicitly; a passing aggregate does not turn a skip into
 live compatibility evidence.
 
@@ -189,7 +189,7 @@ field must not be called clean.
 | SYS-03 | P0 | Put the same typo in two fields, then select the second `teh` in `teh draft and teh signature`. Change selection to the first occurrence during a delayed result. | The captured destination is revalidated. A changed marker/range is refused even when selected strings match; no first-occurrence guess, wrong-field replacement, or unsupported Undo is offered. |
 | SYS-04 | P0 | Use `👩🏽‍💻 Please fix teh draft.` and a later second typo; accept one issue, then the next. Repeat with composed/decomposed `café`, combining accents, and mixed line endings. | Exact UTF-16 spans identify the intended occurrence; emoji/accents and untouched code units are preserved. Normalization changes during a delayed request invalidate the old snapshot instead of passing as identical text. |
 | SYS-05 | P0 | Select a short passage in rich Mail/Notes content surrounded by bold/italic text, a link, list, signature, quoted reply, and a synthetic attachment. Apply a correction and rewrite separately. | Unselected formatting, links, attachments, and quoted content survive. Record formatting inside the edited passage separately; matching plain text alone does not establish rich-format preservation. |
-| SYS-06 | P1 | Attempt a whole-field action on the same rich fixture, including a document-style WebKit editor without a numeric selection API. | Current whole-field support is plain text; rich preservation remains an open compatibility item until demonstrated. Unsupported document-wide replacement declines safely, and an individual card must not flatten the rich document to change one word. |
+| SYS-06 | P1 | Attempt a whole-field action on the same rich fixture, including a document-style WebKit editor without a numeric selection API. | Readable rich drafts with exact writable spans use bounded, verified edits that preserve unchanged content. Unsupported structural changes or unprovable document-wide ranges decline safely; marker-only editors require an explicit selected passage. An individual card must not flatten a rich document to change one word. |
 | SYS-07 | P0 | Before an edit, copy synthetic styled text or an image. Repeat while copying a different item during activation, Copy validation, Paste, and the delayed clipboard restore. | Ordinary edits restore all prior clipboard types; a newer user Copy survives. Recovery states accurately distinguish a copied result from a preserved clipboard and never claim an unverified edit succeeded. |
 | SYS-08 | P1 | Place the caret before and after a typo; accept a length-changing correction. Move the caret or click elsewhere immediately after Paste. | A supported caret-restoration path maps the original position around the edit without overriding newer navigation. Otherwise record the editor's native caret behavior as an explicit limitation. |
 | SYS-09 | P0 | Apply a confirmed plain-text edit and use Bean Undo and the source app's native Undo on separate fixtures. Repeat after more typing, switching fields, app closure, expiry, and a marker-only edit. | Undo never overwrites newer writing or another field. Bean Undo appears only for a safe stored edit; marker-only selection must not trigger whole-document restoration or reuse an older undo record. Check native Undo and rich structure independently. |
@@ -204,6 +204,8 @@ field must not be called clean.
 | SYS-18 | P1 | Check fields just below/above native live-check and provider limits, plus long single lines and newline-rich browser drafts. | Native live work is bounded to 50,000 characters and manual provider input to 8,000 with byte limits. Oversized/partially checked input has a truthful state and a smaller-selection path; no hidden whole-document capture or silent clean verdict. |
 | SYS-19 | P1 | After relaunch, first-focus a prefilled draft with `teh` and an unlisted misspelling without typing. Immediately open native review/local checking before any issue cache exists. Repeat on another field with identical text. | The latest focused snapshot is actually analyzed, with a checking state while work is pending. A cache miss is not a clean result or a silent early return; another field's cached result and geometry are not reused. |
 | SYS-20 | P1 | First establish a clean cached result, then introduce a typo by paste/programmatic input. Immediately request review before the typing pause settles; repeat after an issue was previously cached and the draft becomes clean. | Each new text revision invalidates the prior result and checks the current snapshot. Clean caches do not hide new issues, and old issues do not survive a fresh clean check. Record cold-cache, clean-cache, and detected-cache results separately. |
+| SYS-21 | P0 | Delay native setter/Paste/Undo delivery beyond verification, including an AX setter error with an unchanged immediate read. Request Undo concurrently, and register a newer correction while the first Undo awaits activation or transport. | Attempted but unconfirmed delivery never becomes a copied fallback or enables retry. Undo cannot deliver twice, resurrect an old record, or erase a newer record. A proven refusal before delivery can remain retryable only with its exact source and record ownership. |
+| SYS-22 | P0 | In textarea and rich contenteditable fixtures, have an editing handler restore the source and queue the first range edit. Also cancel beforeinput and throw during a command. | Bean never follows an accepted/event-producing/uncertain command with a second setter or DOM mutation. Cancelled edits stay cancelled; genuine undelivered no-ops retain the safe fallback. Queue completion produces one correction, with surrounding rich content intact. |
 
 The following are **proposed development goals, separate from candidate
 sign-off**, not measured results or current product guarantees. Collect a
@@ -286,14 +288,14 @@ hardware, and spelling language before judging them:
 | --- | --- | --- | --- |
 | UPG-01 | P0 | Upgrade the prepared prior-release profile in place. | API key, shortcuts, personalization, and safe settings remain; no repeated Keychain prompts or onboarding loop. |
 | UPG-02 | P1 | Upgrade legacy all-site/approved-site extension storage. | Local checks default to all ordinary sites, valid blocked sites migrate, and removed redundant switches cannot silently disable everything. |
-| UPG-03 | P0 | Replace `/Applications/Bean.app` while preserving a backup, then launch. | One candidate instance runs, version is 1.7.0 (14), native host points to the installed executable, and rollback remains possible. |
+| UPG-03 | P0 | Replace `/Applications/Bean.app` while preserving a backup, then launch. | One candidate instance runs, version is 1.7.0 (15), native host points to the installed executable, and rollback remains possible. |
 | UPG-04 | P1 | Roll back using the preserved app backup without deleting user data. | Prior app launches; the rollback path and any expected settings-version limitation are recorded. |
 
 ## Artifact and GitHub prerelease QA
 
 | ID | Pri | Test | Expected result |
 | --- | --- | --- | --- |
-| REL-01 | P0 | Compare plist, command-line fallback, changelog, extension manifest, artifact name, and intended tag. | App 1.7.0 (14), extension 0.8.0, build14 artifact names, and the intended 1.7.0 prerelease metadata agree. |
+| REL-01 | P0 | Compare plist, command-line fallback, changelog, extension manifest, artifact name, and intended tag. | App 1.7.0 (15), extension 0.8.1, build15 artifact names, and the intended 1.7.0 prerelease metadata agree. |
 | REL-02 | P0 | Mount the DMG and drag Bean to `/Applications`. Launch through the documented unnotarized flow. | Volume layout is understandable; warnings match the GitHub-beta documentation; app launches after explicit user approval. |
 | REL-03 | P0 | Inspect staged resources. | Current README, TESTING, QA plan, SUPPORT, SUPPORTED_APPS, PRIVACY, LICENSE, CHANGELOG, extension, native-host scripts, icons, and Info.plist are present. |
 | REL-04 | P0 | Download the GitHub prerelease artifacts into a new directory and verify SHA-256. | Published bytes match checksums and local release candidate; release remains marked prerelease. |

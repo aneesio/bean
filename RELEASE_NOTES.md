@@ -1,6 +1,6 @@
 # Bean 1.7.0 — public beta candidate
 
-Build **14**, with Chromium extension **0.8.0**. This candidate focuses on writing
+Build **15**, with Chromium extension **0.8.1**. This candidate focuses on writing
 in other apps; ordinary launch and completed setup return to the menu-bar
 experience.
 
@@ -16,6 +16,10 @@ experience.
 - Native span corrections prefer the editor’s writable selected-text capability
   after verifying the settled range, selected text and source. Fallback commands
   target the captured app, and an uncertain edit cannot be blindly retried.
+- Unconfirmed native delivery cannot become a copied-result retry. Undo claims one
+  operation at a time, consumes an attempted inverse, and preserves newer history.
+- Browser range editing no longer repeats a mutation after the page receives or
+  cancels an editing event. A fallback requires a proven undelivered no-op.
 - Native field controls and review windows have descriptive accessibility names;
   decorative underlines are omitted from the navigation tree.
 - Exact source, focus, clipboard and UTF-16 checks protect newer writing.

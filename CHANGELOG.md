@@ -26,6 +26,10 @@ once public release tags begin.
 - Prefer a supported selected-text edit after proving the exact range and
   source. Fallback Paste/Delete targets the captured app with isolated key
   state; uncertain edits never authorize another replacement attempt.
+- Prevent retry after unconfirmed native delivery, serialize Undo and retain
+  newer history when an older operation finishes.
+- Prevent browser fallback from duplicating an accepted or event-producing edit;
+  respect cancelled beforeinput and uncertain command responses.
 - Give native writing controls and review panels descriptive accessibility
   names; decorative underlines stay out of the navigation tree.
 - Add offline grammar checks, safe repeated-word/pronoun corrections, and a

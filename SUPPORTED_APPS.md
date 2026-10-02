@@ -1,6 +1,6 @@
 # Supported Apps and Surfaces
 
-Policy revision: **1.7.0 candidate, build 14 / extension 0.8.0, October 2, 2026**. Capability
+Policy revision: **1.7.0 candidate, build 15 / extension 0.8.1, October 2, 2026**. Capability
 routing is covered by `FieldCapabilityPolicyTests`; implementation checks are
 covered by focused-field, native-editing, issue-mapping, and geometry tests.
 These do not substitute for live compatibility checks in each application.
@@ -17,7 +17,8 @@ setter is unavailable, normal Paste/Delete events target the captured app. Both
 paths require an exact output check; an uncertain delivered edit is not retried. Readable rich drafts use bounded, verified span edits for
 Proofread and whole-field Rewrite instead of replacing the entire document as
 plain text. Bean Undo is available only for an exact output in the same field
-and a safe restoration path.
+and a safe restoration path. An attempted but unconfirmed Undo is consumed;
+its completion cannot erase a newer correction’s history.
 
 ## Expected native paths
 
@@ -75,6 +76,8 @@ capabilities need an explicit selected passage; there is no silent rich-document
 plain-text fallback. Proven plain single-line inputs retain their guarded
 whole-value fallback.
 
+Browser fallback requires a proven undelivered no-op. Accepted commands, editing
+events, cancellation or uncertain responses never authorize a second mutation.
 Browser rich edits also require safe text-node boundaries. A paragraph-start or
 end insertion uses the actual paragraph node; an ambiguous boundary without
 that scope is refused. Page handlers that move focus, alter text or take over

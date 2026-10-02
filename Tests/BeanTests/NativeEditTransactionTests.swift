@@ -136,19 +136,21 @@ final class NativeEditTransactionTests: XCTestCase {
         XCTAssertEqual(model.text, plan.original)
     }
 
-    func testFailedSelectedTextSetterNeverFallsBackToQueuedPaste() async throws {
+    func testFalseSelectedTextSetterIsAttemptedDeliveryAndNeverFallsBackToQueuedPaste() async throws {
         let model = Model()
         let plan = try XCTUnwrap(NativeEditPlan.proofread(original: model.text, corrected: "the first and the second"))
         var setters = 0
         let effects = NativeEditTransaction.Effects(destinationIsValid: { true }, readValue: { model.text },
             selectedRange: { model.selection }, setSelectedRange: { model.selection = $0; return true },
             sendEdit: { _ in XCTFail("A supported setter failure must not become a queued Paste retry") },
-            verify: { _, _ in XCTFail("An unchanged rejected setter is a refusal"); return .replacementSentUnconfirmed },
+            verify: { _, _ in .copiedToClipboardFallback },
             readSelectedText: { (model.text as NSString).substring(with: model.selection) },
             replaceSelectedText: { _ in setters += 1; return false })
         let outcome = await NativeEditTransaction.run(plan: plan, capturedSelection: model.selection, effects: effects)
         XCTAssertEqual(setters, 1)
-        XCTAssertFalse(outcome.editWasSent)
+        XCTAssertTrue(outcome.editWasSent, "An AX timeout can return false after delivery")
+        XCTAssertEqual(outcome.result, .replacementSentUnconfirmed)
+        XCTAssertTrue(outcome.confirmedEdits.isEmpty)
         XCTAssertEqual(model.text, plan.original)
     }
 

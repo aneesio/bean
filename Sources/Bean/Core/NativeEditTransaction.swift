@@ -86,12 +86,9 @@ enum NativeEditTransaction {
             // Prefer a supported synchronous selected-text edit. Never queue
             // Paste as a retry after a setter that might already have edited.
             if let replace = effects.replaceSelectedText {
-                let accepted = replace(edit.replacement)
-                if !accepted, exact(effects.readValue(), value) {
-                    return outcome(.failed(reason: confirmed.isEmpty
-                        ? "This editor could not apply the correction safely."
-                        : "Bean stopped after applying \(confirmed.count) changes because the editor rejected the next correction."))
-                }
+                // A false AX result may mean timeout after delivery. Invocation
+                // is an attempt; only exact readback decides confirmation.
+                _ = replace(edit.replacement)
             } else {
                 effects.sendEdit(edit.replacement)
             }

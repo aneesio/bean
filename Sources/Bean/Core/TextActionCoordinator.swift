@@ -908,7 +908,7 @@ final class TextActionCoordinator {
         case .staleCopiedToClipboard:
             return "The field changed after Bean read it, so Bean did not overwrite your newer text."
         case .replacementSentUnconfirmed:
-            return "Bean sent the replacement but could not confirm what changed. Check the original field before continuing."
+            return "Bean attempted the edit but could not confirm the result. Check the original field before continuing."
         case .clipboardPreservedRecoveryRequired:
             return "Bean could not replace the text. Your newer clipboard was preserved, and the correction remains here."
         case .failed(let reason):

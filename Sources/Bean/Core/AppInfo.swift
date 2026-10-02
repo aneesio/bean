@@ -9,7 +9,7 @@ enum AppInfo {
     static let copyright = "© 2026 Anees Afzal and Bean contributors"
 
     static var version: String { string("CFBundleShortVersionString") ?? "1.7.0" }
-    static var build: String { string("CFBundleVersion") ?? "14" }
+    static var build: String { string("CFBundleVersion") ?? "15" }
 
     /// e.g. "Version 1.3.0 (4)"
     static var versionDisplay: String { "Version \(version) (\(build))" }

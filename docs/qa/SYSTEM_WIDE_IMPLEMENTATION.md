@@ -11,7 +11,7 @@ Authorized scope: the complete product/quality roadmap discussed October 2,
 | Precise proofreading and rich-document preservation | Bounded minimal span plan, guarded native edits, per-span and complete verification, batch/partial Undo; rich fixtures preserve formatting, attachments and exact caret affinity | Implemented; reference-app candidate journeys remain separate |
 | One native/browser assistant experience | Quiet badge, explicit checking/basic/issues/unavailable states, click review, consistent actions/scope, keyboard focus retention; actual light/dark/narrow/short-window renders | Implemented; external browser/VoiceOver transport not certified |
 | Writing judgment | Family-isolated 1,024-case synthetic benchmark, dialects, entity/negation/commitment safeguards; final precision 100%, recall 91.57%, preferred correction 98.52% | Implemented; strict heldout correction gate fails (92.5% vs 99%); human/provider review remains pending |
-| Editor-family compatibility | AppKit/WebKit/DOM journeys, interruption/clipboard/caret/Undo/composition cases; 18 owned web-editor/overlay tests pass without skips | Implemented; five own-process AX web-area tests unavailable in this host; reference apps remain separate |
+| Editor-family compatibility | AppKit/WebKit/DOM journeys, interruption/clipboard/caret/Undo/composition cases; 22 owned web-editor/overlay tests pass without skips | Implemented; five own-process AX web-area tests unavailable in this host; reference apps remain separate |
 | Speed and attention | Bounded native/browser timings, cancellation, content-free CPU/RSS profiler; scan p95 20.35ms; synthetic browser pipeline distinguishes debounce from scan time | Implemented instrumentation; actual feedback/acceptance p95 goals remain unmeasured |
 | Vocabulary and dismissal | GUI-owned persisted dictionary learning, acknowledged browser IPC, stable occurrence dismissal with Unicode word-boundary invalidation, shared dialect | Implemented and covered by fixture/IPC tests |
 | Pause/resume | One-hour or indefinite app pause; website controls/expiry; permanent blocked-site content-free focus guard; five-second app status refresh | Implemented; explicit manual actions retained |
@@ -38,12 +38,12 @@ No personal writing or paid provider requests are needed for the automated
 work. Developer signing and notarization are deferred, so local candidates must
 remain truthfully labelled ad hoc and unnotarized.
 
-Latest build 14 combined checks: `scripts/run_all_tests.sh` passed 579 Swift
-test cases (571 passed, eight skipped), all 13 browser suites, standalone logic,
+Latest build 15 combined checks: `scripts/run_all_tests.sh` passed 593 Swift
+test cases (585 passed, eight skipped), all 13 browser suites, standalone logic,
 shell syntax, release metadata and repository audit. The skips are five
 unavailable own-process AX web-area fixtures, one SwiftUI descendant fixture
 whose plain Button baseline also lacks AX descendants, and two opt-in
-evaluations. Native replacement repairs additionally pass 85 focused tests,
+evaluations. Native replacement and Undo recovery additionally pass 95 focused tests,
 including owned rich AppKit selected-text edits and native Undo. The actual
 macOS quality evaluation was run separately; the provider dry run generated
 36 review plans with zero requests. See [writing-quality evidence](WRITING_QUALITY_2026-10-02.md)
@@ -74,5 +74,8 @@ Actual build 14 hardware Quick Fix corrected both synthetic TextEdit typos;
 unchanged bold text, emoji/date/time/email, original caret, native Undo/Redo and
 Bean one-action Undo all pass by direct AX/pixel observation. The reported
 TextEdit corruption is resolved for that journey. A final recovery review found
-additional uncertain-delivery/Undo retry boundaries; those remain a P1 until the
-contained follow-up is complete and separately validated.
+additional uncertain-delivery/Undo retry boundaries. Build 15 fixes those
+boundaries, serializes Undo ownership and prevents a browser queued-handler
+duplicate fallback. Independent source reviews and the combined checks pass.
+Build 15 packaging and installed-path evidence are recorded separately; the
+strict writing-quality gate and broader real-app certification remain open.

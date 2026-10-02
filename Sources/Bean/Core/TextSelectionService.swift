@@ -26,6 +26,7 @@ import AppKit
 final class TextSelectionService {
 
     private let undoStore: ReplacementUndoStore
+    private(set) var lastReplacementAttemptedDelivery = false
 
     init(undoStore: ReplacementUndoStore) {
         self.undoStore = undoStore
@@ -495,6 +496,7 @@ final class TextSelectionService {
     func replaceEdits(app: NSRunningApplication, element: AXUIElement, valueBefore: String,
                       edits: [NativeTextEdit], selectionToRestore: NSRange? = nil,
                       capturedSelection: NSRange? = nil) async -> ReplacementResult {
+        lastReplacementAttemptedDelivery = false
         guard let plan = NativeEditPlan.validated(original: valueBefore, edits: edits) else {
             return .failed(reason: "The corrections no longer match this field or change document structure.")
         }
@@ -550,6 +552,7 @@ final class TextSelectionService {
                 replaceSelectedText: field.isSelectedTextSettable
                     ? { AccessibilityService.setSelectedText($0, on: element) } : nil,
                 settleSelection: { await Task.pause(.milliseconds(35)) }))
+        lastReplacementAttemptedDelivery = outcome.editWasSent
         if outcome.editWasSent { undoStore.discard() }
         if !outcome.confirmedEdits.isEmpty,
            Self.exactTextMatches(AccessibilityService.value(of: element), outcome.confirmedValue),
@@ -587,6 +590,7 @@ final class TextSelectionService {
     func replaceRange(app: NSRunningApplication, element: AXUIElement,
                       valueBefore: String, range: NSRange, replacement: String,
                       selectionToRestore: NSRange? = nil) async -> ReplacementResult {
+        lastReplacementAttemptedDelivery = false
         guard let original = Self.selectedText(value: valueBefore, range: range),
               !original.isEmpty else {
             return .failed(reason: "The suggestion no longer matches this field.")
@@ -656,6 +660,7 @@ final class TextSelectionService {
     func replaceWholeField(app: NSRunningApplication, element: AXUIElement,
                            valueBefore: String, replacement: String,
                            selectionToRestore: NSRange? = nil) async -> ReplacementResult {
+        lastReplacementAttemptedDelivery = false
         guard await reactivateAndConfirm(app),
               let field = AccessibilityService.focusedField(in: app),
               field.acceptsTextInput,
@@ -678,6 +683,7 @@ final class TextSelectionService {
 
     func replace(corrected: String, original: String, mode: TextInputMode,
                  strategy: ReplacementStrategy = .selectedSpan) async -> ReplacementResult {
+        lastReplacementAttemptedDelivery = false
         guard var pending else {
             return .failed(reason: "Internal error: nothing acquired")
         }
@@ -918,7 +924,6 @@ final class TextSelectionService {
 
         let expectedAfter: String?
         var beanClipboardChangeCount: Int?
-        var attemptedSelectedTextSetter = false
         switch validation {
         case .nativeRange:
             guard let target = pending.focusedElement else {
@@ -958,14 +963,12 @@ final class TextSelectionService {
                 return .failed(reason: "The selected text changed. Bean left the current text intact.")
             }
             if AccessibilityService.isSelectedTextSettable(target) {
-                attemptedSelectedTextSetter = true
-                let accepted = AccessibilityService.setSelectedText(corrected, on: target)
-                if !accepted, Self.exactTextMatches(AccessibilityService.value(of: target), pending.valueBefore) {
-                    return .failed(reason: "This editor could not apply the correction safely.")
-                }
+                lastReplacementAttemptedDelivery = true
+                _ = AccessibilityService.setSelectedText(corrected, on: target)
             } else {
                 ClipboardService.writeString(corrected)
                 beanClipboardChangeCount = ClipboardService.changeCount
+                lastReplacementAttemptedDelivery = true
                 if corrected.isEmpty { ClipboardService.simulateDelete(to: pending.targetApp?.processIdentifier) }
                 else { ClipboardService.simulatePaste(to: pending.targetApp?.processIdentifier) }
             }
@@ -1004,8 +1007,7 @@ final class TextSelectionService {
             return .copiedToClipboardFallback
         }
 
-        let verification = await verifyPaste(pending: pending, expectedAfter: expectedAfter)
-        let result = attemptedSelectedTextSetter ? Self.directSelectedTextVerificationResult(verification) : verification
+        let result = await verifyPaste(pending: pending, expectedAfter: expectedAfter)
         if result == .replacedConfirmed,
            let selection = pending.selectionToRestore,
            let element = pending.focusedElement,
@@ -1073,6 +1075,7 @@ final class TextSelectionService {
             // unchanged), but the exact readable empty value already does.
             ClipboardService.writeString(corrected)
             let ownedCount = ClipboardService.changeCount
+            lastReplacementAttemptedDelivery = true
             ClipboardService.simulatePaste(to: pending.targetApp?.processIdentifier)
             let result = await verifyPaste(pending: pending, expectedAfter: corrected)
             if result == .replacedConfirmed { restoreWholeFieldSelection(pending, replacement: corrected, on: target) }
@@ -1155,7 +1158,7 @@ final class TextSelectionService {
     /// value as a failed replacement. Never repeat Paste: that could duplicate
     /// text in an editor whose first paste is merely delayed.
     private func verifyPaste(pending: Pending, expectedAfter: String?) async -> ReplacementResult {
-        await Self.verifyReplacement(
+        let polled = await Self.verifyReplacement(
             valueBefore: pending.valueBefore, expectedAfter: expectedAfter,
             readValue: {
                 pending.focusedElement.map { AccessibilityService.value(of: $0) }
@@ -1163,6 +1166,7 @@ final class TextSelectionService {
             },
             wait: { await Task.pause($0) }
         )
+        return Self.postDeliveryVerificationResult(polled)
     }
 
     static func verifyReplacement(valueBefore: String?, expectedAfter: String?,
@@ -1178,10 +1182,9 @@ final class TextSelectionService {
         return result
     }
 
-    /// An accepted AX setter may finish asynchronously. Its unconfirmed result
-    /// cannot claim that a correction was copied or authorize a delivered edit
-    /// retry; this path intentionally never touches the clipboard.
-    nonisolated static func directSelectedTextVerificationResult(_ result: ReplacementResult) -> ReplacementResult {
+    /// After a command or setter was delivered, unchanged text can still mean
+    /// delayed delivery. Never turn that into a clipboard claim or retry.
+    nonisolated static func postDeliveryVerificationResult(_ result: ReplacementResult) -> ReplacementResult {
         result == .replacedConfirmed ? .replacedConfirmed : .replacementSentUnconfirmed
     }
 
@@ -1712,6 +1715,7 @@ final class TextSelectionService {
                 readString: { ClipboardService.readString() },
                 writeCorrection: { ClipboardService.writeString($0) },
                 simulatePaste: {
+                    self.lastReplacementAttemptedDelivery = true
                     if corrected.isEmpty { ClipboardService.simulateDelete(to: pending.targetApp?.processIdentifier) }
                     else { ClipboardService.simulatePaste(to: pending.targetApp?.processIdentifier) }
                 }

@@ -77,7 +77,7 @@ const editMapping = load("src/issueMapping.js", {
   Event: FakeEvent,
   InputEvent: undefined
 }).BeanMapping;
-const listeners = { input: [], change: [] };
+const listeners = { beforeinput: [], input: [], change: [] };
 let ownSetterCalls = 0, nativeSetterCalls = 0;
 const nativeControl = {};
 Object.defineProperty(nativeControl, "value", {
