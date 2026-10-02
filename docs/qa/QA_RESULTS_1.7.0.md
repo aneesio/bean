@@ -280,3 +280,45 @@ Packaging, installed-app observations and retained rollback are recorded after
 publication below. The new browser transport requires extension 0.8.1 to be
 reloaded, followed by a page refresh; owned WebKit tests do not certify the
 running Chrome extension. No paid request was made.
+
+
+Build 15 was packaged from **`dcb3b2f`**. Build, staged, ZIP and mounted DMG
+executables match byte for byte, with both `arm64` and `x86_64` architectures.
+Strict signatures, both checksums and `hdiutil verify` pass. The mounted DMG's
+eight public documents match source exactly and its Applications link is valid;
+the image was detached. All 30 bundled extension files match source 0.8.1.
+Completed build 13 and 14 packages remain intact. Logs:
+`/private/tmp/bean-package-build15.log` and
+`/private/tmp/bean-build15-artifact-verify.log`.
+
+```text
+26766b7a02a44a1e04bb36b7b47ca2689dce225eb2169ca19982b485c5e0a658  Bean executable
+3af01838bc24e41463228de154fbe4b42cf267254f723b5237788717c6d84ebe  Bean-1.7.0-build15-unnotarized.zip
+a091a27c6608e33d465d4b00962db6fc4d72ca0325d9d08ec536a031b763089b  Bean-1.7.0-build15-unnotarized.dmg
+```
+
+The verification ZIP extraction is retained as
+`bean-build15-artifact-verify-260smz_y` under this Mac's temporary directory.
+At package verification, actual installed/running Bean remained build 14;
+computer use reported that the Mac was locked. Build 15 installation and live
+retest await unlocking, so package checks are not labelled installed-app passes.
+
+
+All **three private build/install/package fault suites pass** against the exact
+build 15 staged candidate, each exit code zero. They cover refusal and recovery
+for build/signature/publication/DMG failures, interruption, concurrency, verified
+rollback and preservation of completed artifacts. Both architecture UUIDs and
+all file-backed sections match the current release product (37 arm64, 35 x86_64).
+The candidate's complete bundle tree identity and executable hash remained
+unchanged. Logs:
+`/private/tmp/bean-build15-{build,install,package}-fault-tests.log`.
+
+A second computer-use attempt still reported the Mac locked. No process was
+forcibly terminated and no live installation was attempted. The owned TextEdit
+fixture is saved with the original two typos. Temporary native testing settings
+remain Quick Fix and Deeper AI off; the user's original AI Proofread/Deeper AI on
+settings must be restored after the final live smoke test and closing only that
+owned fixture. The hardware shortcut remains unchanged. Installation, any
+required ad hoc Accessibility refresh, actual build 15 replacement/Bean Undo,
+settings restoration and Chrome 0.8.1 reload remain pending. No paid request or
+external message was sent.

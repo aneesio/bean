@@ -79,3 +79,15 @@ boundaries, serializes Undo ownership and prevents a browser queued-handler
 duplicate fallback. Independent source reviews and the combined checks pass.
 Build 15 packaging and installed-path evidence are recorded separately; the
 strict writing-quality gate and broader real-app certification remain open.
+
+
+Final build 15 source `dcb3b2f` was packaged. Universal payload, strict signatures,
+ZIP/DMG byte identity, checksums, all 30 extension files and eight mounted DMG
+support documents pass. Build 14 remains installed while computer use awaits
+unlocking the Mac. See the candidate record for exact hashes and live-test status.
+
+
+Build 15 also passed all three private fault suites without changing its
+candidate bundle. Installation and settings restoration are pending the Mac's
+unlock; no live build 15 or Chrome 0.8.1 result is claimed. Build 14's verified
+TextEdit replacement and one-action Bean Undo remain the latest actual result.
