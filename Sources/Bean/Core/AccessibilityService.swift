@@ -122,7 +122,8 @@ enum AccessibilityService {
     /// labels or value attributes are requested. Opaque or excessively large
     /// nearby branches fail closed rather than covering an unknown control.
     @MainActor
-    static func fieldOverlayGeometry(for element: AXUIElement) -> FieldOverlayGeometry? {
+    static func fieldOverlayGeometry(for element: AXUIElement,
+                                     onDiagnostics: ((FieldOverlayGeometryCapture.Diagnostics) -> Void)? = nil) -> FieldOverlayGeometry? {
         let started = ProcessInfo.processInfo.systemUptime
         let deadline = started + 0.030
         let names = [kAXRoleAttribute as String, kAXPositionAttribute as String, kAXSizeAttribute as String]
@@ -140,34 +141,42 @@ enum AccessibilityService {
             var value: AnyObject?
             guard AXUIElementCopyAttributeValue(node, name as CFString, &value) == .success,
                   withinBudget(), let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-            return value as! AXUIElement
+            return (value as! AXUIElement)
         }
         func geometry(_ node: AXUIElement) -> FieldOverlayGeometryCapture.NodeGeometry? {
             guard prepare(node) else { return nil }
             defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
             var copied: CFArray?
-            guard AXUIElementCopyMultipleAttributeValues(node, names as CFArray,
-                AXCopyMultipleAttributeOptions(rawValue: 0), &copied) == .success,
-                withinBudget(), let values = copied as? [Any], values.count == names.count,
-                let role = values[0] as? String,
-                CFGetTypeID(values[1] as CFTypeRef) == AXValueGetTypeID(),
-                CFGetTypeID(values[2] as CFTypeRef) == AXValueGetTypeID() else { return nil }
+            let result = AXUIElementCopyMultipleAttributeValues(node, names as CFArray,
+                AXCopyMultipleAttributeOptions(rawValue: 0), &copied)
+            guard withinBudget() else { return nil }
+            guard result == .success, let values = copied as? [Any], values.count == names.count,
+                  let role = values[0] as? String else {
+                // Some neutral wrappers expose a role but do not implement a
+                // geometry batch at all. Their complete child path can still
+                // prove the editor/control rectangles without inventing bounds.
+                guard prepare(node), let role = stringAttribute(node, kAXRoleAttribute as String), withinBudget() else { return nil }
+                return .init(role: role, rect: nil)
+            }
+            guard CFGetTypeID(values[1] as CFTypeRef) == AXValueGetTypeID(),
+                  CFGetTypeID(values[2] as CFTypeRef) == AXValueGetTypeID() else { return .init(role: role, rect: nil) }
             var point = CGPoint.zero
             var size = CGSize.zero
             guard AXValueGetValue(values[1] as! AXValue, .cgPoint, &point),
                   AXValueGetValue(values[2] as! AXValue, .cgSize, &size),
-                  let primary = NSScreen.screens.first else { return nil }
+                  let primary = NSScreen.screens.first else { return .init(role: role, rect: nil) }
             let rect = CGRect(x: point.x, y: primary.frame.height - point.y - size.height,
                               width: size.width, height: size.height)
-            guard OverlayGeometry.isFiniteRect(rect) else { return nil }
-            return .init(role: role, rect: rect)
+            return .init(role: role, rect: OverlayGeometry.isFiniteRect(rect) ? rect : nil)
         }
         func children(_ node: AXUIElement, limit: Int) -> [AXUIElement]? {
             guard prepare(node) else { return nil }
             defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
             var count: CFIndex = 0
             let error = AXUIElementGetAttributeValueCount(node, kAXChildrenAttribute as CFString, &count)
-            if error == .attributeUnsupported { return [] }
+            // Unsupported is not proof of an empty subtree. Known semantic
+            // leaves need no child read; unresolved containers fail closed.
+            if error == .attributeUnsupported { return nil }
             guard error == .success, count >= 0, count <= limit, withinBudget() else { return nil }
             if count == 0 { return [] }
             var copied: CFArray?
@@ -179,7 +188,8 @@ enum AccessibilityService {
         return FieldOverlayGeometryCapture.capture(element: element,
             window: { attribute($0, kAXWindowAttribute as String) }, geometry: geometry,
             parent: { attribute($0, kAXParentAttribute as String) }, children: children,
-            isSame: isSameElement, now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
+            isSame: isSameElement, now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline,
+            onDiagnostics: onDiagnostics)
     }
 
     // MARK: - Reading

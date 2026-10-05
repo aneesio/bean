@@ -27,8 +27,7 @@ struct NativeStatusDot: View {
                                           dark: BeanDesign.SRGB(251, 191, 36).nsColor)
     var body: some View {
         Circle()
-            .fill(hasSuggestions ? amber : Color.clear)
-            .overlay(Circle().strokeBorder(hasSuggestions ? amber : Color.secondary, lineWidth: 1.5))
+            .fill(hasSuggestions ? amber : BeanDesign.accent)
             .frame(width: OverlayGeometry.statusDotDiameter, height: OverlayGeometry.statusDotDiameter)
             .accessibilityHidden(true)
     }

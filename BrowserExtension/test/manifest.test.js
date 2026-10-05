@@ -5,7 +5,7 @@ const path = require("node:path");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
 
 assert.equal(manifest.manifest_version, 3);
-assert.equal(manifest.version, "0.8.2");
+assert.equal(manifest.version, "0.8.3");
 assert.equal(manifest.name, "Bean for the Web");
 assert.deepEqual(manifest.host_permissions, ["http://*/*", "https://*/*"], "all-site coverage is the product default");
 assert.equal(manifest.optional_host_permissions, undefined, "site-by-site permission prompts are intentionally removed");

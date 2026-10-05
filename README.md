@@ -8,13 +8,13 @@ service.
 > **Public beta.** Replacement and UI behavior depend on what each macOS app
 > exposes through Accessibility. Review important text before sending it.
 >
-> Current release contract: Bean **1.7.0 (build 16)** with Bean for the Web
-> **0.8.2**.
+> Current release contract: Bean **1.7.0 (build 17)** with Bean for the Web
+> **0.8.3**.
 
 ## What works today
 
 - Checks spelling, basic grammar, and spacing while you type in editable macOS fields.
-  Local live assistance and the Bean dot are on by default. The dot is neutral
+  Local live assistance and the Bean dot are on by default. The dot is brand brown
   when there are no current suggestions and amber when suggestions are found.
   Hover for status or click for details; it hides when no clear placement exists.
 - Draws underlines when an app supplies exact text positions, with a compact
@@ -88,12 +88,12 @@ builds.
 
 Checksum verification is an optional advanced safety check, not part of the
 normal Finder-only install. Download the release's `.sha256` file beside the DMG,
-then, for example, run the following for version 1.7.0, build 16 and compare the printed
+then, for example, run the following for version 1.7.0, build 17 and compare the printed
 value with the `.dmg` line in that file:
 
 ```bash
 cd ~/Downloads
-shasum -a 256 Bean-1.7.0-build16-unnotarized.dmg
+shasum -a 256 Bean-1.7.0-build17-unnotarized.dmg
 ```
 
 Developer ID-signed and notarized artifacts, if introduced later, will omit the

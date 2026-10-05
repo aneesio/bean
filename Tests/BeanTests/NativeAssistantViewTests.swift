@@ -59,11 +59,13 @@ final class NativeAssistantViewTests: XCTestCase {
             let state = NativeAssistantState(phase: .complete, issueCount: count)
             let root = NativeAssistantBadgeView(state: state, onOpen: {}, onKeyboardOpen: {})
                 .background(Color.white)
+                .environment(\.colorScheme, .light)
             let view = NSHostingView(rootView: root)
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 28, height: 28),
                 styleMask: [.borderless], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             defer { window.close() }
+            window.appearance = NSAppearance(named: .aqua)
             window.contentView = view
             XCTAssertEqual(view.fittingSize.width, 28, accuracy: 0.01)
             XCTAssertEqual(view.fittingSize.height, 28, accuracy: 0.01)
@@ -75,8 +77,12 @@ final class NativeAssistantViewTests: XCTestCase {
             if count > 0 {
                 XCTAssertGreaterThan(center.redComponent, center.blueComponent + 0.2, "Suggestions fill the dot amber")
             } else {
-                XCTAssertGreaterThan(center.redComponent, 0.9)
-                XCTAssertGreaterThan(center.greenComponent, 0.9, "No suggestions leaves the center hollow")
+                // cacheDisplay uses the current display's ColorSync profile.
+                // Assert visible brown paint, rather than monitor-specific RGB.
+                XCTAssertGreaterThan(center.redComponent, center.greenComponent + 0.15)
+                XCTAssertGreaterThan(center.greenComponent, center.blueComponent + 0.10)
+                XCTAssertLessThan(center.redComponent, 0.75,
+                    "The default dot is filled brown, distinct from amber and a gray/empty ring")
             }
         }
         let legacy = NSHostingView(rootView: BeanBubbleView(openOnHover: false, onOpen: { _ in }, onDismiss: {}))

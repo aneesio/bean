@@ -226,8 +226,9 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                     BeanOverlay.clear();const noFalseOwnership=!BeanOverlay.hasFieldPresentation();
                     e.style.cssText='position:fixed;left:48px;top:72px;width:180px;height:110px;resize:none';
                     const restored=BeanOverlay.refreshAssistantPlacement();
-                    const neutral=root.querySelector('.assistant').dataset.hasIssues==='false' &&
-                        getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor==='rgba(0, 0, 0, 0)';
+                    const brandBrown=root.querySelector('.assistant').dataset.hasIssues==='false' &&
+                        getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor===getComputedStyle(root.querySelector('.assistant')).color &&
+                        getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor!=='rgba(0, 0, 0, 0)';
                     e.style.left='1200px';BeanOverlay.refreshAssistantPlacement();
                     const offscreenHidden=!root.querySelector('.assistant');
                     e.style.left='48px';const recovered=BeanOverlay.refreshAssistantPlacement();
@@ -240,14 +241,185 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                     const s=shadowEditor.getBoundingClientRect();
                     const unknownShadowHidden=BeanOverlay.renderAssistant({x:s.x,y:s.y,w:s.width,h:s.height},1,'nativeLocal',{},
                         {source:shadowEditor})===false && !root.querySelector('.assistant');
-                    return {hidden,underlineOwned,noFalseOwnership,restored,neutral,offscreenHidden,recovered,unknownShadowHidden,
+                    return {hidden,underlineOwned,noFalseOwnership,restored,brandBrown,offscreenHidden,recovered,unknownShadowHidden,
                         sourceUntouched:e.value==='Synthetic draft with teh spelling issue.'};
                     """)
-                for key in ["hidden", "underlineOwned", "noFalseOwnership", "restored", "neutral",
+                for key in ["hidden", "underlineOwned", "noFalseOwnership", "restored", "brandBrown",
                             "offscreenHidden", "recovered", "unknownShadowHidden", "sourceUntouched"] {
                     XCTAssertEqual(unavailable[key] as? Bool, true, "\(name) \(dark): \(key) \(unavailable)")
                 }
             }
+        }
+    }
+
+    func testFullEditorEdgeAndBoundedWrapperTraversal() async throws {
+        for dark in [false, true] {
+            for (name, size) in [("desktop", NSSize(width: 800, height: 640)),
+                                  ("narrow", NSSize(width: 320, height: 640))] {
+                let fixture = try OwnedBrowserOverlayFixture(size: size, dark: dark)
+                defer { fixture.close() }
+                try await fixture.load()
+                let result = try await fixture.object("""
+                    const e=document.getElementById('editor');
+                    e.style.cssText=`position:fixed;left:48px;top:72px;width:${Math.min(280,innerWidth-96)}px;height:440px;resize:none`;
+                    e.focus();e.setSelectionRange(8,8);
+                    const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
+                    const obstacles=[{x:r.right+4,y:200,w:28,h:r.bottom-200},
+                        {x:r.left-32,y:r.top,w:28,h:r.height},{x:r.left,y:r.bottom+4,w:r.width,h:28},
+                        {x:r.left,y:r.top-32,w:r.width,h:28}].map((bounds,index)=>{
+                        const button=document.createElement('button');button.textContent=index===0?'Send':'Toolbar';
+                        button.style.cssText=`position:fixed;left:${bounds.x}px;top:${bounds.y}px;width:${bounds.w}px;height:${bounds.h}px;padding:0;overflow:hidden`;
+                        document.body.appendChild(button);return button;
+                    });
+                    const shown=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
+                    const root=window.__ownedBeanShadow,entry=root.querySelector('.assistant');
+                    const b=entry.getBoundingClientRect(),dot=root.querySelector('.assistant-dot');
+                    const overlap=(a,c)=>a.left<c.right && a.right>c.left && a.top<c.bottom && a.bottom>c.top;
+                    const clearBeyond96=r.bottom-28-b.y>96 && !overlap(b,r) &&
+                        obstacles.every(control=>!overlap(b,control.getBoundingClientRect()));
+                    const brandPaint=getComputedStyle(dot).backgroundColor===getComputedStyle(entry).color &&
+                        getComputedStyle(dot).backgroundColor!=='rgba(0, 0, 0, 0)' && dot.getBoundingClientRect().width===10;
+                    const backdrop=document.createElement('div');backdrop.style.cssText='position:fixed;inset:0;pointer-events:none';
+                    const hidden=document.createElement('div');hidden.style.display='none';
+                    hidden.innerHTML='<span></span>'.repeat(10000);backdrop.appendChild(hidden);document.body.appendChild(backdrop);
+                    const backdropAllowed=BeanOverlay.refreshAssistantPlacement();
+                    // pointer-events:none is not a child clipping guarantee.
+                    // The child's own fixed box, beyond its wrapper's tiny box,
+                    // remains an exclusion after pointer-events:auto overrides.
+                    backdrop.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;pointer-events:none';
+                    const escaped=document.createElement('button');escaped.textContent='Upload';
+                    escaped.style.cssText=`position:fixed;left:${b.x}px;top:${b.y}px;width:28px;height:28px;pointer-events:auto`;
+                    backdrop.appendChild(escaped);
+                    const escapedChecked=BeanOverlay.refreshAssistantPlacement();
+                    const after=root.querySelector('.assistant').getBoundingClientRect();
+                    const escapedExcluded=escapedChecked && !overlap(after,escaped.getBoundingClientRect());
+                    const boxless=document.createElement('div');boxless.style.display='contents';
+                    const boxlessControl=document.createElement('button');boxlessControl.textContent='Voice';
+                    boxlessControl.style.cssText=`position:fixed;left:${after.x}px;top:${after.y}px;width:28px;height:28px`;
+                    boxless.appendChild(boxlessControl);document.body.appendChild(boxless);
+                    const boxlessChecked=BeanOverlay.refreshAssistantPlacement();
+                    const afterBoxless=root.querySelector('.assistant').getBoundingClientRect();
+                    const boxlessExcluded=boxlessChecked && !overlap(afterBoxless,boxlessControl.getBoundingClientRect());
+                    const contained=document.createElement('div');
+                    contained.style.cssText='position:fixed;left:0;top:0;width:8px;height:640px;contain:paint';
+                    contained.innerHTML='<span></span>'.repeat(10000);
+                    const clippedChild=document.createElement('button');clippedChild.textContent='Clipped control';
+                    clippedChild.style.cssText=`position:fixed;left:${afterBoxless.x}px;top:${afterBoxless.y}px;width:28px;height:28px`;
+                    contained.appendChild(clippedChild);document.body.appendChild(contained);
+                    const containedOverBudgetHidden=!BeanOverlay.refreshAssistantPlacement() && !root.querySelector('.assistant');
+                    const c=clippedChild.getBoundingClientRect();
+                    const clippedCannotHit=document.elementFromPoint(c.x+c.width/2,c.y+c.height/2)!==clippedChild;
+                    contained.remove();
+                    const restoredAfterLimit=BeanOverlay.refreshAssistantPlacement();
+                    return {shown,clearBeyond96,brandPaint,backdropAllowed,escapedExcluded,boxlessExcluded,containedOverBudgetHidden,clippedCannotHit,restoredAfterLimit,
+                        sourceUntouched:e.value==='Synthetic draft with teh spelling issue.' && e.selectionStart===8};
+                    """)
+                for key in ["shown", "clearBeyond96", "brandPaint", "backdropAllowed", "escapedExcluded",
+                            "boxlessExcluded", "containedOverBudgetHidden", "clippedCannotHit", "restoredAfterLimit", "sourceUntouched"] {
+                    XCTAssertEqual(result[key] as? Bool, true, "\(name) \(dark): \(key) \(result)")
+                }
+                if let directory = ProcessInfo.processInfo.environment["BEAN_BROWSER_QA_OUTPUT_DIRECTORY"] {
+                    try await fixture.snapshot(to: URL(fileURLWithPath: directory, isDirectory: true)
+                        .appendingPathComponent("dot-full-edge-\(name)-\(dark ? "dark" : "light").png"))
+                }
+            }
+        }
+    }
+
+    func testClippingDeclarationsDoNotHideEscapedControlGeometry() async throws {
+        for dark in [false, true] {
+            let fixture = try OwnedBrowserOverlayFixture(size: NSSize(width: 800, height: 480), dark: dark)
+            defer { fixture.close() }
+            try await fixture.load()
+            let result = try await fixture.object("""
+                const e=document.getElementById('editor');
+                e.style.cssText='position:fixed;left:100px;top:100px;width:200px;height:160px;resize:none';
+                e.focus();e.setSelectionRange(8,8);
+                const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
+                BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
+                const root=window.__ownedBeanShadow;
+                const overlap=(a,c)=>a.left<c.right && a.right>c.left && a.top<c.bottom && a.bottom>c.top;
+                const fresh=()=>{
+                    const shown=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
+                    const target=root.querySelector('.assistant');
+                    if(!shown || !target)throw Error('Expected owned free-edge target');
+                    const bounds=target.getBoundingClientRect();BeanOverlay.clearAssistant();return bounds;
+                };
+                const safeAfter=(control)=>{
+                    const shown=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
+                    const target=root.querySelector('.assistant');
+                    return !!shown && !!target && !overlap(target.getBoundingClientRect(),control.getBoundingClientRect());
+                };
+                // Hidden contents do not hide a host's own border/background or
+                // hit box. Place it strictly between the nine point probes.
+                let b=fresh();const hiddenHost=document.createElement('div');
+                hiddenHost.style.cssText=`position:fixed;left:${b.x+6}px;top:${b.y+5}px;width:1px;height:1px;content-visibility:hidden;background:red`;
+                hiddenHost.innerHTML='<button>Hidden child</button>';document.body.appendChild(hiddenHost);
+                const h=hiddenHost.getBoundingClientRect();
+                const hiddenHostReallyHits=document.elementFromPoint(h.x+0.5,h.y+0.5)===hiddenHost;
+                const hiddenHostExcluded=safeAfter(hiddenHost);hiddenHost.remove();
+                // Paint containment does not apply to a non-atomic inline span.
+                b=fresh();const inlineParent=document.createElement('span');inlineParent.textContent='Inline box';
+                inlineParent.style.cssText='display:inline;contain:paint';document.body.appendChild(inlineParent);
+                const inlineControl=document.createElement('button');inlineControl.textContent='Send';
+                inlineControl.style.cssText=`position:fixed;left:${b.x}px;top:${b.y}px;width:28px;height:28px;padding:0`;
+                inlineParent.appendChild(inlineControl);
+                const i=inlineControl.getBoundingClientRect();
+                const inlineActuallyEscapes=getComputedStyle(inlineParent).display==='inline' &&
+                    !overlap(i,inlineParent.getBoundingClientRect()) &&
+                    document.elementFromPoint(i.x+i.width/2,i.y+i.height/2)===inlineControl;
+                const inlineExcluded=safeAfter(inlineControl);inlineParent.remove();
+                // A positive overflow clip margin can paint past the host box.
+                // The child rectangle is still collected on engines where the
+                // property has not shipped; that support is reported separately.
+                b=fresh();const marginParent=document.createElement('div');
+                marginParent.style.cssText=`position:fixed;left:${b.x-40}px;top:${b.y}px;width:8px;height:28px;contain:paint;overflow-clip-margin:100px`;
+                const marginControl=document.createElement('button');marginControl.textContent='Upload';
+                marginControl.style.cssText='position:absolute;left:40px;top:0;width:28px;height:28px;padding:0';
+                marginParent.appendChild(marginControl);document.body.appendChild(marginParent);
+                const m=marginControl.getBoundingClientRect();
+                const marginSupported=CSS.supports('overflow-clip-margin','100px');
+                const marginOutsideHost=!overlap(m,marginParent.getBoundingClientRect());
+                const marginActuallyEscapes=document.elementFromPoint(m.x+m.width/2,m.y+m.height/2)===marginControl;
+                const marginExcluded=safeAfter(marginControl);marginParent.remove();
+                // A top-layer popover ignores its paint-contained ancestor's
+                // clip. A light-DOM descendant must still get its own exclusion.
+                b=fresh();const contained=document.createElement('div');
+                contained.style.cssText='position:fixed;left:0;top:0;width:8px;height:8px;contain:paint';
+                const popover=document.createElement('button');popover.textContent='Voice';popover.setAttribute('popover','manual');
+                popover.style.cssText=`position:fixed;left:${b.x}px;top:${b.y}px;right:auto;bottom:auto;margin:0;width:28px;height:28px;padding:0`;
+                contained.appendChild(popover);document.body.appendChild(contained);
+                const popoverSupported=typeof popover.showPopover==='function';
+                if(popoverSupported)popover.showPopover();
+                const p=popover.getBoundingClientRect();
+                const popoverActuallyEscapes=popoverSupported && !overlap(p,contained.getBoundingClientRect()) &&
+                    document.elementFromPoint(p.x+p.width/2,p.y+p.height/2)===popover;
+                const popoverExcluded=popoverSupported && safeAfter(popover);
+                if(popoverSupported)popover.hidePopover();contained.remove();
+                // An open shadow/custom host cannot become certified geometry
+                // just by declaring containment on its small host rectangle.
+                const shadowHost=document.createElement('bean-owned-control');
+                shadowHost.style.cssText='position:fixed;left:0;top:0;width:8px;height:8px;contain:paint';
+                shadowHost.attachShadow({mode:'open'}).innerHTML='<button>Unlocated control</button>';
+                document.body.appendChild(shadowHost);
+                const shadowStillHidden=!BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e}) && !root.querySelector('.assistant');
+                shadowHost.remove();
+                const recovered=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
+                return {hiddenHostReallyHits,hiddenHostExcluded,inlineActuallyEscapes,inlineExcluded,
+                    marginSupported,marginOutsideHost,marginActuallyEscapes,marginExcluded,
+                    popoverSupported,popoverActuallyEscapes,popoverExcluded,shadowStillHidden,recovered,
+                    sourceUntouched:e.value==='Synthetic draft with teh spelling issue.' && e.selectionStart===8 && document.activeElement===e};
+                """)
+            for key in ["hiddenHostReallyHits", "hiddenHostExcluded", "inlineActuallyEscapes", "inlineExcluded",
+                        "marginOutsideHost", "marginExcluded", "shadowStillHidden", "recovered", "sourceUntouched"] {
+                XCTAssertEqual(result[key] as? Bool, true, "\(dark): \(key) \(result)")
+            }
+            if result["marginSupported"] as? Bool == true {
+                XCTAssertEqual(result["marginActuallyEscapes"] as? Bool, true, "\(dark): \(result)")
+            }
+            XCTAssertEqual(result["popoverSupported"] as? Bool, true, "Owned WebKit top-layer fixture requires native popover support")
+            XCTAssertEqual(result["popoverActuallyEscapes"] as? Bool, true, "\(dark): \(result)")
+            XCTAssertEqual(result["popoverExcluded"] as? Bool, true, "\(dark): \(result)")
         }
     }
 }
@@ -346,21 +518,44 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
     }
 
     func snapshot(to path: URL) async throws {
-        let image = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NSImage, Error>) in
-            webView.takeSnapshot(with: nil) { image, error in
-                if let error { continuation.resume(throwing: error) }
-                else if let image { continuation.resume(returning: image) }
-                else { continuation.resume(throwing: FixtureError.snapshotUnavailable) }
-            }
+        // Every snapshot entry point owns its output directory; alphabetical
+        // test order must not depend on the card fixture running first.
+        do {
+            try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        } catch {
+            XCTFail("Owned snapshot output directory: \(path.lastPathComponent): \(error)")
+            throw FixtureError.snapshotStage("output directory: \(path.lastPathComponent)", String(describing: error))
         }
-        let tiff = try XCTUnwrap(image.tiffRepresentation)
-        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: tiff))
-        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
+        // This fixture is intentionally offscreen, where native RAF callbacks
+        // may be suspended. WebKit's snapshot API incorporates pending updates.
+        let configuration = WKSnapshotConfiguration()
+        configuration.afterScreenUpdates = true
+        let image: NSImage
+        do {
+            image = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NSImage, Error>) in
+                webView.takeSnapshot(with: configuration) { image, error in
+                    if let error { continuation.resume(throwing: error) }
+                    else if let image { continuation.resume(returning: image) }
+                    else { continuation.resume(throwing: FixtureError.snapshotUnavailable) }
+                }
+            }
+        } catch {
+            XCTFail("Owned snapshot capture: \(path.lastPathComponent): \(error)")
+            throw FixtureError.snapshotStage("capture: \(path.lastPathComponent)", String(describing: error))
+        }
+        do {
+            let tiff = try XCTUnwrap(image.tiffRepresentation)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: tiff))
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
+        } catch {
+            XCTFail("Owned snapshot PNG export: \(path.lastPathComponent): \(error)")
+            throw FixtureError.snapshotStage("PNG export: \(path.lastPathComponent)", String(describing: error))
+        }
     }
 
     func close() { webView.stopLoading(); webView.navigationDelegate = nil; window.close() }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { navigationError = error }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { navigationError = error }
-    private enum FixtureError: Error { case loadTimeout, snapshotUnavailable, javaScript(String) }
+    private enum FixtureError: Error { case loadTimeout, snapshotUnavailable, javaScript(String), snapshotStage(String, String) }
 }

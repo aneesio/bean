@@ -134,8 +134,38 @@ final class OverlayGeometryTests: XCTestCase {
                           CGRect(x: 300, y: 544, width: 500, height: 32)]
         let geometry = FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: [send] + otherEdges)
         let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry: geometry, panelSize: CGSize(width: 28, height: 28), in: main.visibleFrame))
-        XCTAssertEqual(origin, CGPoint(x: field.maxX + 4, y: field.minY + 32))
+        XCTAssertEqual(origin.x, field.maxX + 4)
+        XCTAssertGreaterThanOrEqual(origin.y, send.maxY + 2)
+        XCTAssertLessThanOrEqual(origin.y, send.maxY + 3)
         XCTAssertFalse(send.intersects(CGRect(origin: origin, size: CGSize(width: 28, height: 28))))
+    }
+
+    func testFreeIntervalFindsNarrowClearSpaceBeyondOldNinetySixPointLimit() throws {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 500)
+        let lowerButton = CGRect(x: 804, y: 300, width: 28, height: 113)
+        let upperButton = CGRect(x: 804, y: 450, width: 28, height: 350)
+        let result = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry:
+            FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame,
+                exclusionRects: [lowerButton, upperButton]), panelSize: CGSize(width: 28, height: 28), in: main.visibleFrame))
+        XCTAssertEqual(result.x, 804)
+        XCTAssertGreaterThan(result.y - field.minY, 96)
+        XCTAssertGreaterThanOrEqual(result.y, lowerButton.maxY + 2)
+        XCTAssertLessThanOrEqual(result.y + 28, upperButton.minY - 2)
+    }
+
+    func testFullEdgeSearchKeepsWindowViewportAndNegativeOriginConstraints() throws {
+        let field = CGRect(x: -1700, y: 0, width: 400, height: 700)
+        let window = CGRect(x: -1800, y: -50, width: 800, height: 500)
+        let obstacle = CGRect(x: -1296, y: 0, width: 28, height: 200)
+        let geometry = FieldOverlayGeometry(fieldRect: field, windowRect: window, exclusionRects: [obstacle])
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry: geometry,
+            panelSize: CGSize(width: 28, height: 28), in: left.visibleFrame))
+        let frame = CGRect(origin: origin, size: CGSize(width: 28, height: 28))
+        XCTAssertGreaterThanOrEqual(origin.y, obstacle.maxY + 2)
+        XCTAssertTrue(window.contains(frame))
+        XCTAssertTrue(left.visibleFrame.contains(frame))
+        XCTAssertTrue(geometry.validatedNeighborhood.contains(frame))
+        XCTAssertFalse(obstacle.intersects(frame))
     }
 
     func testTransparentHitEdgesCannotCoverButtonEvenWhenVisibleDotDoesNot() {

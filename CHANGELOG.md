@@ -3,6 +3,16 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.7.0 build 17 — 2026-10-05 (local candidate)
+
+- Use Bean's brand brown for the default field dot, with amber for suggestions,
+  in the Mac app and extension 0.8.3.
+- Keep verified placement available through neutral AX wrappers without their
+  own bounds, and ignore browser backdrops that cannot intercept input. Find
+  clear slots along the complete field edges.
+- Preserve full-target control avoidance, bounded geometry reads and safe hiding
+  when placement cannot be established.
+
 ## 1.7.0 build 16 — 2026-10-05 (local candidate)
 
 - Replace native and browser field pills, Bean logos and visible counts with a

@@ -467,3 +467,63 @@ This verifies Chrome rendering/click flow against local API mocks, not the
 installed extension/native bridge or real model judgment. The disposable tab
 was closed and the loopback-only fixture server stopped. No personal draft,
 clipboard contents, provider key, paid request or external message was used.
+
+## Build 17 brown dot and placement recovery — October 5, 2026
+
+The default native and browser dot now uses Bean's solid brand brown, with amber
+for current suggestions. It remains ten points/CSS pixels with a complete
+28-point/pixel rectangular target; no visible count, logo or pill returns.
+Existing palette tokens adapt the brown to light/dark appearance.
+
+Placement searches free intervals along the complete verified field edges,
+removing the previous 96-point search cutoff. Neutral AX ancestors may lack
+their own bounds when exact field/window bounds and the complete bounded source
+path remain available. Browser pointer-events:none wrappers do not exclude
+their own rectangle, but their descendants are still checked; display:contents
+text/children remain exclusions. display:none subtrees can be omitted.
+
+Independent native/browser review caught unsafe assumptions about parent
+clipping. The final native scanner resolves unknown container descendants even
+when the parent frame is far away, and refuses incomplete/opaque branches.
+The browser scanner does not use paint containment or content-visibility:hidden
+as a subtree clipping proof. Exact whole-target/window/viewport constraints,
+48-node/eight-ancestor/depth-two/30ms native bounds and the browser traversal/
+8ms/96-candidate proof bounds remain. Opt-in native diagnostics contain only
+static reason/count/timing values, never writing, labels or application identity.
+
+The actual installed build 16 General reported Accessibility ready before this
+update; the dot and Live preferences were on. An owned unsent AppKit fixture
+exposed a zero-frame neutral editor wrapper and synthetic source only. It was
+closed normally; Deeper AI was restored on after provider-free testing. This
+does not establish third-party overlay visibility. The missing-dot app/field has
+not yet been identified by the user. Computer-use review rejected inspection of
+com.openai.codex for safety reasons; no alternative surface or bypass was used.
+Custom/misreported AX trees, unobservable closed-shadow content and bounded
+over-limit layouts remain explicit capability limits. No claim that the user's
+specific composer or universal-app placement has been certified is made.
+
+`scripts/run_all_tests.sh`: **PASS**, **622 Swift cases: 614 passed, eight skipped,
+zero failures**. All 13 browser suites, standalone logic, shell syntax, release
+metadata and repository/credential audit pass. The eight existing service/AX/
+opt-in skips remain explicit; none became live compatibility evidence.
+All six owned WebKit overlay tests pass, including desktop/narrow/light/dark
+full-edge brown paint, crowded hit routing, pointer-events override and boxless
+children, thin content-hidden hosts, ineffective inline containment, top-layer
+popover escape and bounded over-limit hiding/recovery. Clip-margin painting is
+reported according to actual WebKit support, while its child rectangle remains
+an exclusion on every engine. Source text, caret and focus guards pass.
+
+The final gate started with a nonexistent browser snapshot directory. The
+snapshot helper now creates its own output folder, removing alphabetical-test
+order dependence. It uses direct offscreen capture and reports/rethrows export
+errors; there are no retries or ignored assertions. Earlier failing runs
+`bean-build17-full-tests.log` and `bean-build17-browser-focused-tests.log` are
+superseded by `/private/tmp/bean-build17-full-tests-final.log`. The attempted
+native frame wait was unsuitable for hidden test views and was removed.
+
+Actual production native light/dark and browser crowded/full-edge renders were
+visually inspected at `/private/tmp/bean-build17-native-dot-visuals` and
+`/private/tmp/bean-build17-browser-dot-visuals-final`. These are owned fixture
+renders, not certification of installed native AX or physical Chrome delivery.
+No personal draft, provider key, clipboard contents, paid request or outgoing
+message was used for this update.

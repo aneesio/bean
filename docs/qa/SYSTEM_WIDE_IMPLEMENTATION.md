@@ -38,8 +38,8 @@ No personal writing or paid provider requests are needed for the automated
 work. Developer signing and notarization are deferred, so local candidates must
 remain truthfully labelled ad hoc and unnotarized.
 
-Latest build 16 combined checks: `scripts/run_all_tests.sh` passed 610 Swift
-test cases (602 passed, eight skipped), all 13 browser suites, standalone logic,
+Latest build 17 combined checks: `scripts/run_all_tests.sh` passed 622 Swift
+test cases (614 passed, eight skipped), all 13 browser suites, standalone logic,
 shell syntax, release metadata and repository audit. The skips are five
 unavailable own-process AX web-area fixtures, one SwiftUI descendant fixture
 whose plain Button baseline also lacks AX descendants, and two opt-in
@@ -122,3 +122,16 @@ renders/clicks the production dot and directly replaces synthetic text in the
 provider-free mock fixture; that is separate from installed-extension transport.
 The required ad hoc Accessibility refresh and manual extension reload were
 handed to the user and remain pending at this record.
+
+Build 17 uses solid brand brown by default and amber for suggestions in both
+implementations (extension 0.8.3). Complete-edge free intervals recover valid
+slots beyond the former 96-point cutoff. Neutral AX wrappers without bounds
+can be resolved through exact complete child paths; non-targetable browser
+backdrops do not block their entire rectangle. Independent review removed
+unsafe parent-clipping assumptions. The complete 28-point target remains clear
+of editors and known controls, with bounded hiding for unresolved geometry.
+All six owned WebKit cases and the full automated gate pass; native and browser
+light/dark snapshots were inspected. The actual build 16 Accessibility status
+was ready before this update. The user's specific missing-dot composer remains
+unidentified, and computer-use review rejected com.openai.codex inspection;
+there is no universal or third-party placement sign-off.

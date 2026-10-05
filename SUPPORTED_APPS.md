@@ -1,6 +1,6 @@
 # Supported Apps and Surfaces
 
-Policy revision: **1.7.0 candidate, build 16 / extension 0.8.2, October 5, 2026**. Capability
+Policy revision: **1.7.0 candidate, build 17 / extension 0.8.3, October 5, 2026**. Capability
 routing is covered by `FieldCapabilityPolicyTests`; implementation checks are
 covered by focused-field, native-editing, issue-mapping, and geometry tests.
 These do not substitute for live compatibility checks in each application.
@@ -39,7 +39,7 @@ unreadable controls or report those as clean.
 ## Field status dot
 
 Native and browser field controls use a 10-point status dot without a visible
-count. Gray hollow dots show no current suggestions; amber filled dots indicate
+count. Brand-brown dots show no current suggestions; amber filled dots indicate
 suggestions. Tooltip/accessibility status and the clicked panel retain details;
 a neutral dot is not an assurance that the draft is error-free.
 

@@ -155,23 +155,63 @@ enum OverlayGeometry {
         return true
     }
 
+    /// Search the verified free intervals along each editor edge. Obstacles
+    /// cannot force an inside-field fallback or a fixed-distance search cutoff.
     static func issueTrayOrigin(geometry: FieldOverlayGeometry?, panelSize: CGSize,
                                 in visibleFrame: CGRect, gap: CGFloat = 4) -> CGPoint? {
-        guard let geometry, panelSize.width >= minimumMotorTarget,
-              panelSize.height >= minimumMotorTarget else { return nil }
+        guard let geometry, panelSize.width.isFinite, panelSize.height.isFinite,
+              panelSize.width >= minimumMotorTarget, panelSize.height >= minimumMotorTarget,
+              isFiniteRect(geometry.fieldRect), isFiniteRect(geometry.windowRect), isFiniteRect(visibleFrame),
+              geometry.exclusionRects.allSatisfy(isFiniteRect) else { return nil }
         let field = geometry.fieldRect
-        let slides: [CGFloat] = [0, 32, 64, 96]
-        let candidates = slides.flatMap { slide -> [CGPoint] in
-            let verticalFits = slide == 0 || slide <= field.height - panelSize.height
-            let horizontalFits = slide == 0 || slide <= field.width - panelSize.width
-            return [
-                verticalFits ? CGPoint(x: field.maxX + gap, y: field.minY + slide) : nil,
-                horizontalFits ? CGPoint(x: field.maxX - panelSize.width - slide, y: field.minY - panelSize.height - gap) : nil,
-                verticalFits ? CGPoint(x: field.minX - panelSize.width - gap, y: field.minY + slide) : nil,
-                horizontalFits ? CGPoint(x: field.maxX - panelSize.width - slide, y: field.maxY + gap) : nil
-            ].compactMap { $0 }
+        let allowed = geometry.windowRect.intersection(visibleFrame).intersection(geometry.validatedNeighborhood)
+        guard isFiniteRect(allowed), allowed.width >= panelSize.width, allowed.height >= panelSize.height else { return nil }
+        let sides: [(vertical: Bool, normal: CGFloat, ideal: CGFloat)] = [
+            (true, field.maxX + gap, field.minY),
+            (false, field.minY - panelSize.height - gap, field.maxX - panelSize.width),
+            (true, field.minX - panelSize.width - gap, field.minY),
+            (false, field.maxY + gap, field.maxX - panelSize.width)
+        ]
+        for side in sides {
+            let normalSize = side.vertical ? panelSize.width : panelSize.height
+            let tangentSize = side.vertical ? panelSize.height : panelSize.width
+            let normalMin = side.vertical ? allowed.minX : allowed.minY
+            let normalMax = side.vertical ? allowed.maxX : allowed.maxY
+            guard side.normal >= normalMin, side.normal + normalSize <= normalMax else { continue }
+            let fieldMin = side.vertical ? field.minY : field.minX
+            let fieldMax = (side.vertical ? field.maxY : field.maxX) - tangentSize
+            let lower = max(min(fieldMin, fieldMax), side.vertical ? allowed.minY : allowed.minX)
+            let upper = min(max(fieldMin, fieldMax), (side.vertical ? allowed.maxY : allowed.maxX) - tangentSize)
+            guard lower <= upper else { continue }
+            var free: [ClosedRange<CGFloat>] = [lower...upper]
+            for obstacle in geometry.exclusionRects {
+                let expanded = obstacle.insetBy(dx: -2, dy: -2)
+                let obstacleNormalMin = side.vertical ? expanded.minX : expanded.minY
+                let obstacleNormalMax = side.vertical ? expanded.maxX : expanded.maxY
+                guard obstacleNormalMin < side.normal + normalSize, obstacleNormalMax > side.normal else { continue }
+                let blockedLower = (side.vertical ? expanded.minY : expanded.minX) - tangentSize
+                let blockedUpper = side.vertical ? expanded.maxY : expanded.maxX
+                free = free.flatMap { interval -> [ClosedRange<CGFloat>] in
+                    if blockedUpper <= interval.lowerBound || blockedLower >= interval.upperBound { return [interval] }
+                    var remaining: [ClosedRange<CGFloat>] = []
+                    if blockedLower >= interval.lowerBound { remaining.append(interval.lowerBound...blockedLower) }
+                    if blockedUpper <= interval.upperBound { remaining.append(blockedUpper...interval.upperBound) }
+                    return remaining
+                }
+            }
+            let candidates = free.flatMap { interval -> [CGFloat] in
+                let nearest = min(max(side.ideal, interval.lowerBound), interval.upperBound)
+                // Geometry APIs can treat touching bounds differently. Validate
+                // an interior point too, without crossing any blocked interval.
+                return [nearest, min(max(nearest + 0.5, interval.lowerBound), interval.upperBound),
+                        min(max(nearest - 0.5, interval.lowerBound), interval.upperBound)]
+            }.sorted { abs($0 - side.ideal) < abs($1 - side.ideal) }
+            for tangent in candidates {
+                let origin = side.vertical ? CGPoint(x: side.normal, y: tangent) : CGPoint(x: tangent, y: side.normal)
+                if isSafeFieldControlFrame(CGRect(origin: origin, size: panelSize), geometry: geometry, in: visibleFrame) { return origin }
+            }
         }
-        return candidates.first { isSafeFieldControlFrame(CGRect(origin: $0, size: panelSize), geometry: geometry, in: visibleFrame) }
+        return nil
     }
 
     static func isFiniteRect(_ rect: CGRect) -> Bool {

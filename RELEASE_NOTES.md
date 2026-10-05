@@ -1,14 +1,16 @@
 # Bean 1.7.0 — public beta candidate
 
-Build **16**, with Chromium extension **0.8.2**. This candidate focuses on writing
+Build **17**, with Chromium extension **0.8.3**. This candidate focuses on writing
 in other apps; ordinary launch and completed setup return to the menu-bar
 experience.
 
 ## What changed
 
 - Field controls are now tiny status dots without a pill, logo or visible count.
-  Neutral hollow dots indicate no current suggestions; amber filled dots indicate
+  Brand-brown dots indicate no current suggestions; amber filled dots indicate
   suggestions. Hover shows status and click opens the review/actions panel.
+- Placement searches the complete field edges and handles neutral layout
+  wrappers without bounds, so valid clear space is less likely to be missed.
 - The whole click target must fit in clear space outside the editor, away from
   neighboring controls. When safe placement is unavailable, the dot hides while
   underlines and menu-bar/shortcut assistance remain available.

@@ -94,10 +94,10 @@
               box-shadow:0 2px 8px rgba(0,0,0,.2); box-sizing:border-box; }
       .assistant { position:absolute; display:flex; align-items:center; justify-content:center;
                    width:28px; height:28px; padding:0; pointer-events:auto; cursor:pointer;
-                   appearance:none; border:0; border-radius:0; background:transparent; color:var(--bean-muted); }
+                   appearance:none; border:0; border-radius:0; background:transparent; color:var(--bean-accent); }
       .assistant::before { content:""; position:absolute; inset:0; border-radius:50%; pointer-events:none; }
       .assistant-dot { display:block; width:10px; height:10px; flex:none; border:1.5px solid currentColor;
-                       border-radius:50%; background:transparent; pointer-events:none; }
+                       border-radius:50%; background:currentColor; pointer-events:none; }
       .assistant[data-has-issues="true"] .assistant-dot { border-color:var(--bean-issue); background:var(--bean-issue); }
       .assistant:hover::before { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .source { font-size:10px; color:var(--bean-muted); margin:0 0 5px; }
@@ -713,25 +713,67 @@
     return validRect({x,y,w,h}) ? {x,y,w,h} : null;
   }
 
-  // Validate the entire invisible target. Never clamp a rejected outside
-  // position back over the editor. Slides remain on their original edge.
-  function assistantPosition(rect,viewport,exclusions = [],pointSafe = () => true) {
+  function freeEdgeIntervals(lower,upper,blocked) {
+    if (lower > upper) return [];
+    const merged = [];
+    for (const interval of blocked.filter(([a,b])=>b>lower && a<upper).sort((a,b)=>a[0]-b[0])) {
+      const previous = merged[merged.length-1];
+      // Touching open intervals retain their one exact safe origin.
+      if (previous && interval[0] < previous[1]) previous[1] = Math.max(previous[1],interval[1]);
+      else merged.push([...interval]);
+    }
+    const free = [];let cursor = lower;
+    for (const [start,end] of merged) {
+      if (start >= cursor) free.push([cursor,Math.min(start,upper)]);
+      cursor = Math.max(cursor,end);
+      if (cursor > upper) break;
+    }
+    if (cursor <= upper) free.push([cursor,upper]);
+    return free.sort((a,b)=>b[1]-a[1]);
+  }
+
+  // Subtract full obstacle projections from each outside edge. A free spot
+  // farther along a long editor needs no additional DOM traversal, and the
+  // normal coordinate never moves back into the writing area.
+  function assistantPosition(rect,viewport,exclusions = [],pointSafe = () => true,withinBudget = () => true) {
     if (!validRect(rect) || !validRect(viewport) || !intersects(rect,viewport) ||
         !Array.isArray(exclusions) || exclusions.some(r => !validRect(r))) return null;
     const size = ASSISTANT_TARGET_SIZE,gap = ASSISTANT_GAP,inset = 4;
-    const candidates = [];
-    for (const slide of [0,32,64,96]) {
-      candidates.push({x:rect.x + rect.w + gap,y:rect.y + rect.h - size - slide,w:size,h:size},
-        {x:rect.x + rect.w - size - slide,y:rect.y + rect.h + gap,w:size,h:size},
-        {x:rect.x - size - gap,y:rect.y + rect.h - size - slide,w:size,h:size},
-        {x:rect.x + rect.w - size - slide,y:rect.y - size - gap,w:size,h:size});
-    }
-    for (const candidate of candidates) {
-      if (candidate.x < viewport.x + inset || candidate.y < viewport.y + inset ||
-          candidate.x + size > viewport.x + viewport.w - inset ||
-          candidate.y + size > viewport.y + viewport.h - inset || intersects(candidate,rect) ||
-          exclusions.some(obstacle => intersects(candidate,obstacle,2))) continue;
-      if ([1,14,27].every(dx => [1,14,27].every(dy => pointSafe(candidate.x + dx,candidate.y + dy)))) return candidate;
+    const edges = [
+      {vertical:true,fixed:rect.x+rect.w+gap},
+      {vertical:false,fixed:rect.y+rect.h+gap},
+      {vertical:true,fixed:rect.x-size-gap},
+      {vertical:false,fixed:rect.y-size-gap}
+    ];
+    let attempts = 0;
+    for (const edge of edges) {
+      if (!withinBudget()) return null;
+      const normalViewportStart = edge.vertical ? viewport.x : viewport.y;
+      const normalViewportEnd = normalViewportStart + (edge.vertical ? viewport.w : viewport.h);
+      if (edge.fixed < normalViewportStart + inset || edge.fixed + size > normalViewportEnd - inset) continue;
+      const start = edge.vertical ? rect.y : rect.x,end = start + (edge.vertical ? rect.h : rect.w);
+      const viewportStart = edge.vertical ? viewport.y : viewport.x;
+      const viewportEnd = viewportStart + (edge.vertical ? viewport.h : viewport.w);
+      const lower = Math.max(viewportStart+inset,Math.min(start,end-size));
+      const upper = Math.min(viewportEnd-size-inset,Math.max(start,end-size));
+      const blocked = exclusions.filter(obstacle => {
+        const normal = edge.vertical ? obstacle.x : obstacle.y;
+        const length = edge.vertical ? obstacle.w : obstacle.h;
+        return edge.fixed < normal+length+2 && edge.fixed+size+2 > normal;
+      }).map(obstacle => {
+        const tangent = edge.vertical ? obstacle.y : obstacle.x;
+        return [tangent-size-2,tangent+(edge.vertical ? obstacle.h : obstacle.w)+2];
+      });
+      for (const [a,b] of freeEdgeIntervals(lower,upper,blocked)) {
+        // Endpoints carry the exact full-rectangle proof. The center also
+        // allows a neutral visible background when an endpoint is occluded.
+        for (const origin of [...new Set([b,(a+b)/2,a])]) {
+          if (++attempts > 96 || !withinBudget()) return null;
+          const candidate = edge.vertical ? {x:edge.fixed,y:origin,w:size,h:size} : {x:origin,y:edge.fixed,w:size,h:size};
+          if (intersects(candidate,rect) || exclusions.some(obstacle=>intersects(candidate,obstacle,2))) continue;
+          if ([1,14,27].every(dx => [1,14,27].every(dy => pointSafe(candidate.x + dx,candidate.y + dy)))) return candidate;
+        }
+      }
     }
     return null;
   }
@@ -776,28 +818,62 @@
     const overBudget = () => started !== null && performance.now() - started > 8;
     const viewport = assistantViewport();
     if (!validRect(rect) || !viewport || typeof document.elementsFromPoint !== "function" ||
-        typeof document.querySelectorAll !== "function" || source && (!document.contains(source) ||
+        source && (!document.contains(source) ||
           source.ownerDocument !== document || typeof source.getRootNode === "function" && source.getRootNode() !== document)) return null;
     if (!sourceVisible(rect,viewport,source)) return null;
-    const controls = document.querySelectorAll(ASSISTANT_OBSTACLES);
-    const nodes = document.querySelectorAll("*");
-    // Unbounded or unverifiable control geometry is not empty space.
-    if (controls.length > 2048 || nodes.length > 4096) return null;
     const backgrounds = sourceAncestors(source);
     const exclusions = [];
-    const measured = new Set();
-    for (const control of [...controls,...nodes]) {
-      if (beanOwned(control)) continue;
-      if (measured.has(control)) continue;
-      measured.add(control);
-      const semantic = typeof control.matches === "function" && control.matches(ASSISTANT_OBSTACLES);
-      if (!semantic && (backgrounds.has(control) || control === source)) continue;
-      if (overBudget()) return null;
-      if (typeof control.getBoundingClientRect !== "function") return null;
-      const r = control.getBoundingClientRect();
-      const obstacle = {x:r.left + window.scrollX,y:r.top + window.scrollY,w:r.width,h:r.height};
-      if (![obstacle.x,obstacle.y,obstacle.w,obstacle.h].every(Number.isFinite)) return null;
-      if (validRect(obstacle)) exclusions.push(obstacle);
+    const root = document.documentElement || document.body;
+    if (!root) return null;
+    const pending = [{node:root,depth:0}];
+    let visited = 0;
+    while (pending.length) {
+      const {node,depth} = pending.pop();
+      if (++visited > 8192 || depth > 256 || overBudget()) return null;
+      if (beanOwned(node)) continue;
+      const style = typeof window.getComputedStyle === "function" ? window.getComputedStyle(node) : null;
+      // display:none hides this host and all descendants, including top-layer
+      // descendants. content-visibility:hidden still paints/hits the host.
+      // pointer-events:none proves only the wrapper; children may override it.
+      if (style && style.display === "none") continue;
+      const semantic = typeof node.matches === "function" && node.matches(ASSISTANT_OBSTACLES);
+      const background = backgrounds.has(node) || node === source;
+      const untargetable = style && style.pointerEvents === "none";
+      const boxless = style && style.display === "contents";
+      if (boxless && !background && !untargetable) {
+        if (!node.childNodes) return null;
+        for (const child of node.childNodes) {
+          if (++visited > 8192 || overBudget()) return null;
+          if (child.nodeType !== 3) continue;
+          if (typeof document.createRange !== "function") return null;
+          const range = document.createRange();range.selectNode(child);
+          for (const r of range.getClientRects()) {
+            if (exclusions.length >= 8192 || overBudget()) return null;
+            const textRect = {x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height};
+            if (![textRect.x,textRect.y,textRect.w,textRect.h].every(Number.isFinite)) return null;
+            if (validRect(textRect)) exclusions.push(textRect);
+          }
+        }
+      }
+      let obstacle = null;
+      if ((!background || semantic) && !boxless && (!untargetable || semantic)) {
+        if (typeof node.getBoundingClientRect !== "function") return null;
+        const r = node.getBoundingClientRect();
+        obstacle = {x:r.left + window.scrollX,y:r.top + window.scrollY,w:r.width,h:r.height};
+        if (![obstacle.x,obstacle.y,obstacle.w,obstacle.h].every(Number.isFinite) || obstacle.w < 0 || obstacle.h < 0) return null;
+        if (validRect(obstacle) && (!untargetable || semantic)) exclusions.push(obstacle);
+      }
+      // A containment declaration cannot certify this subtree: it may be
+      // ineffective on inline boxes, expand via overflow-clip-margin, or have
+      // top-layer descendants outside its clip. Traverse within the same
+      // bounded budget instead of assuming the host covers its children.
+      // Shadow/custom branches cannot expose complete child geometry.
+      if (node.shadowRoot || String(node.tagName || "").includes("-")) return null;
+      if (!node.children || !Number.isFinite(node.children.length)) return null;
+      for (let index = node.children.length - 1; index >= 0; index--) {
+        if (pending.length + visited > 8192) return null;
+        pending.push({node:node.children[index],depth:depth+1});
+      }
     }
     return assistantPosition(rect,viewport,exclusions,(x,y) => {
       if (overBudget()) return false;
@@ -812,7 +888,7 @@
         if (typeof current.matches === "function" && current.matches(ASSISTANT_OBSTACLES)) return false;
       }
       return true;
-    });
+    },()=>!overBudget());
   }
 
   function makeAssistantButton() {
@@ -1255,6 +1331,6 @@
     _test: { cap, assistantDescription, visibleCorrectionText, paragraphDiff, officialMarkURL, wireActivationControl, wireButton,
              queueKeyboardActivationFocus, focusAfterKeyboardActivation, keyboardControls,
              isPlainTabEvent, keyboardExitDirection, keyboardFocusToken, restoreKeyboardFocus, anchor,
-             assistantPosition, assistantViewport }
+             assistantPosition, assistantViewport, freeEdgeIntervals }
   };
 })();

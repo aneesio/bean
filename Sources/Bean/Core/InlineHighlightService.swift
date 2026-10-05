@@ -102,7 +102,20 @@ final class InlineHighlightService {
         self.statusHUD = statusHUD
         self.runAction = runAction
         self.runParagraphAction = runParagraphAction
-        self.analysisDependencies = analysisDependencies ?? AnalysisDependencies()
+        if let analysisDependencies { self.analysisDependencies = analysisDependencies }
+        else {
+            var dependencies = AnalysisDependencies()
+            dependencies.placementGeometry = { element in
+                AccessibilityService.fieldOverlayGeometry(for: element, onDiagnostics: { result in
+                    guard settings.diagnosticsEnabled else { return }
+                    Log.diag(["nativePlacement": "capture", "reason": result.failureReason?.rawValue ?? "captured",
+                        "nodeCount": String(result.nodeCount), "ancestorCount": String(result.ancestorCount),
+                        "excludedBranchCount": String(result.excludedBranchCount),
+                        "elapsedMilliseconds": String(result.elapsedMilliseconds)])
+                })
+            }
+            self.analysisDependencies = dependencies
+        }
         overlay.onActivateIssue = { [weak self] id in self?.activate(id) }
         overlay.onApply = { [weak self] id in self?.apply(id) }
         overlay.onApplyAlternative = { [weak self] id, choice in self?.apply(id, choice: choice) }
