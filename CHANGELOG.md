@@ -3,6 +3,20 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.7.0 build 18 — 2026-10-05 (local candidate)
+
+- Move the brown/amber dot inside the editable text area, preferring its clear
+  top-right corner, in the Mac app and extension 0.8.4. Keep 10-point paint and
+  use a 28-point target in normal fields or 20 points in compact controls.
+- Stop requiring outside margins and complete surrounding app/page geometry.
+  Check the exact field and nearby controls, including visible text fragments,
+  caret, scrollbar and resize-grip geometry where available.
+- Retain another clear inside position when the preferred corner is occupied.
+  Fully occupied, obscured, very small or unsupported fields can still hide the
+  dot; no claim of universal custom-editor compatibility is made.
+- Match alignment, direction and scroll offsets when measuring browser input
+  text and placeholders; large unrelated page branches no longer hide every dot.
+
 ## 1.7.0 build 17 — 2026-10-05 (local candidate)
 
 - Use Bean's brand brown for the default field dot, with amber for suggestions,

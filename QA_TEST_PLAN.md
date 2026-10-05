@@ -1,7 +1,7 @@
 # Bean 1.7.0 Public Beta QA Test Plan
 
 This plan verifies the system-wide writing pass for Bean **1.7.0
-(build 17)** and Bean for the Web **0.8.3**. It complements the shorter recurring
+(build 18)** and Bean for the Web **0.8.4**. It complements the shorter recurring
 checklist in [TESTING.md](TESTING.md). Use this document for release-candidate
 sign-off and regression testing after a relevant change.
 
@@ -33,8 +33,8 @@ Record the following with each run:
 | Field | Value |
 | --- | --- |
 | Commit | |
-| App version/build | 1.7.0 (17) |
-| Extension version | 0.8.3 |
+| App version/build | 1.7.0 (18) |
+| Extension version | 0.8.4 |
 | macOS version / hardware | |
 | Browser and version | |
 | Field type / selection or whole field / native or extension path | |
@@ -90,16 +90,16 @@ Then verify the exact artifacts:
 
 ```bash
 codesign --verify --deep --strict --verbose=2 \
-  release/Bean-1.7.0-build17-unnotarized/Bean.app
-lipo -archs release/Bean-1.7.0-build17-unnotarized/Bean.app/Contents/MacOS/Bean
-(cd release && shasum -a 256 -c Bean-1.7.0-build17-unnotarized.sha256)
-hdiutil verify release/Bean-1.7.0-build17-unnotarized.dmg
+  release/Bean-1.7.0-build18-unnotarized/Bean.app
+lipo -archs release/Bean-1.7.0-build18-unnotarized/Bean.app/Contents/MacOS/Bean
+(cd release && shasum -a 256 -c Bean-1.7.0-build18-unnotarized.sha256)
+hdiutil verify release/Bean-1.7.0-build18-unnotarized.dmg
 ```
 
 Expected: XCTest, standalone logic, extension, shell, metadata, repository, and
 credential-history checks all pass; the binary contains `arm64` and `x86_64`;
 strict signature and checksums verify; the DMG verifies; release metadata says
-app 1.7.0 (17) and extension 0.8.3. Record skipped macOS service or editor
+app 1.7.0 (18) and extension 0.8.4. Record skipped macOS service or editor
 integration tests explicitly; a passing aggregate does not turn a skip into
 live compatibility evidence.
 
@@ -206,7 +206,7 @@ field must not be called clean.
 | SYS-20 | P1 | First establish a clean cached result, then introduce a typo by paste/programmatic input. Immediately request review before the typing pause settles; repeat after an issue was previously cached and the draft becomes clean. | Each new text revision invalidates the prior result and checks the current snapshot. Clean caches do not hide new issues, and old issues do not survive a fresh clean check. Record cold-cache, clean-cache, and detected-cache results separately. |
 | SYS-21 | P0 | Delay native setter/Paste/Undo delivery beyond verification, including an AX setter error with an unchanged immediate read. Request Undo concurrently, and register a newer correction while the first Undo awaits activation or transport. | Attempted but unconfirmed delivery never becomes a copied fallback or enables retry. Undo cannot deliver twice, resurrect an old record, or erase a newer record. A proven refusal before delivery can remain retryable only with its exact source and record ownership. |
 | SYS-22 | P0 | In textarea and rich contenteditable fixtures, have an editing handler restore the source and queue the first range edit. Also cancel beforeinput and throw during a command. | Bean never follows an accepted/event-producing/uncertain command with a second setter or DOM mutation. Cancelled edits stay cancelled; genuine undelivered no-ops retain the safe fallback. Queue completion produces one correction, with surrounding rich content intact. |
-| SYS-23 | P0 | Focus crowded native/browser composers with Send, attachment, microphone and scrollbar controls; move controls without changing editor text, scroll/resize/zoom, and place the field against each window/display edge. Repeat with missing bounds and fullscreen editors. | A 10-point dot has no logo, pill or visible count. Its full 28-point hit target stays outside the editor and clear of controls within the source window/viewport. No safe or verifiable position hides it rather than clamping it inside; the old native launcher does not reappear over controls. Underlines and menu/shortcut actions remain available; hover status and click/keyboard review preserve the source focus. |
+| SYS-23 | P0 | Focus crowded native/browser composers with Send, attachment, microphone and scrollbar controls; move controls without changing editor text, scroll/resize/zoom, and place the field against each window/display edge. Repeat with fullscreen, empty, aligned/RTL, placeholder, scrolled and compact fields, plus large unrelated app/page branches. | The 10-point brown/amber dot has no logo, pill or visible count. Its full 28-point target (20 points for compact fields) stays inside the exact editor and source window/viewport, preferring a clear top-right corner and avoiding available text/caret and exposed control bounds. A fully occupied, obscured, very small or unsupported field can hide it; no outside margin or globally complete app/page tree is required. The old native launcher does not return over controls. Underlines and menu/shortcut actions retain their capability paths; hover and click/keyboard review preserve source focus. |
 
 The following are **proposed development goals, separate from candidate
 sign-off**, not measured results or current product guarantees. Collect a
@@ -289,14 +289,14 @@ hardware, and spelling language before judging them:
 | --- | --- | --- | --- |
 | UPG-01 | P0 | Upgrade the prepared prior-release profile in place. | API key, shortcuts, personalization, and safe settings remain; no repeated Keychain prompts or onboarding loop. |
 | UPG-02 | P1 | Upgrade legacy all-site/approved-site extension storage. | Local checks default to all ordinary sites, valid blocked sites migrate, and removed redundant switches cannot silently disable everything. |
-| UPG-03 | P0 | Replace `/Applications/Bean.app` while preserving a backup, then launch. | One candidate instance runs, version is 1.7.0 (17), native host points to the installed executable, and rollback remains possible. |
+| UPG-03 | P0 | Replace `/Applications/Bean.app` while preserving a backup, then launch. | One candidate instance runs, version is 1.7.0 (18), native host points to the installed executable, and rollback remains possible. |
 | UPG-04 | P1 | Roll back using the preserved app backup without deleting user data. | Prior app launches; the rollback path and any expected settings-version limitation are recorded. |
 
 ## Artifact and GitHub prerelease QA
 
 | ID | Pri | Test | Expected result |
 | --- | --- | --- | --- |
-| REL-01 | P0 | Compare plist, command-line fallback, changelog, extension manifest, artifact name, and intended tag. | App 1.7.0 (17), extension 0.8.3, build17 artifact names, and the intended 1.7.0 prerelease metadata agree. |
+| REL-01 | P0 | Compare plist, command-line fallback, changelog, extension manifest, artifact name, and intended tag. | App 1.7.0 (18), extension 0.8.4, build18 artifact names, and the intended 1.7.0 prerelease metadata agree. |
 | REL-02 | P0 | Mount the DMG and drag Bean to `/Applications`. Launch through the documented unnotarized flow. | Volume layout is understandable; warnings match the GitHub-beta documentation; app launches after explicit user approval. |
 | REL-03 | P0 | Inspect staged resources. | Current README, TESTING, QA plan, SUPPORT, SUPPORTED_APPS, PRIVACY, LICENSE, CHANGELOG, extension, native-host scripts, icons, and Info.plist are present. |
 | REL-04 | P0 | Download the GitHub prerelease artifacts into a new directory and verify SHA-256. | Published bytes match checksums and local release candidate; release remains marked prerelease. |

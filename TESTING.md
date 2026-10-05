@@ -1,6 +1,6 @@
 # Bean Testing Guide
 
-Current candidate: **Bean 1.7.0 (17), Chromium extension 0.8.3**. A checklist
+Current candidate: **Bean 1.7.0 (18), Chromium extension 0.8.4**. A checklist
 below is a required test, not a recorded pass. Historical user reports and the
 current automated evidence must be recorded separately.
 
@@ -288,7 +288,7 @@ manual reset gate against personal API keys, personalization, or browser data.
   active style as a canonical built-in or `custom`, and omit custom profile
   names, personalization text, full app/native-host paths, hostnames, and field
   labels.
-- About shows Bean 1.7.0 (17), identifies the community-supported public beta,
+- About shows Bean 1.7.0 (18), identifies the community-supported public beta,
   and opens only the canonical `aneesio/bean` GitHub, Support, Privacy, License,
   Changelog, and manual update-check destinations. At the minimum width and
   larger Accessibility text sizes, links reflow and **Open Update Check…** lands
@@ -323,7 +323,7 @@ Verify:
 
 - the app is universal (`arm64` and `x86_64`);
 - the ZIP and DMG names include `-unnotarized`;
-- filenames also include build 17; packaging must refuse overwriting an already
+- filenames also include build 18; packaging must refuse overwriting an already
   committed build, while an interrupted/failed package can be retried safely;
 - the SHA-256 file matches both artifacts;
 - the app contains current README, TESTING, QA_TEST_PLAN, SUPPORT, PRIVACY, LICENSE, CHANGELOG,
@@ -369,15 +369,22 @@ accuracy are separate measures. Keep missing manual, provider and profiling
 evidence open in [SYSTEM_WIDE_IMPLEMENTATION.md](docs/qa/SYSTEM_WIDE_IMPLEMENTATION.md).
 
 
-### Compact status dot regression (build 17)
+### Inside status dot regression (build 18)
 
 Use crowded native and browser composer fixtures with Send, attachments,
-microphone and scrollbar controls. Verify the 10-point paint has no logo, pill or
-visible count, while its complete 28-point pointer target stays outside the
-editor and clear of controls. Move neighboring controls without editing text;
+microphone and scrollbar controls. Verify 10-point paint with no logo, pill or
+visible count. The complete target stays inside the exact editable area: 28
+points for normal fields, 20 points for compact fields, with a clear top-right
+corner preferred. Occupied text/caret and exposed control rectangles must not
+be covered; another inside edge can be used. Move controls without editing text;
 change focus between two fields with identical bounds; scroll, resize and zoom.
-Missing geometry and a full-window editor must hide the dot rather than move it
-over content. Check brown/amber status in light/dark appearance, hover details,
-click/keyboard review, and source focus. The older native launcher must obey the
-same rules, including dragging only into verified space. Browser ownership must
-remain with visible underlines/cards when the dot cannot fit.
+Full-window editors must be able to show the dot without an outside margin.
+Unknown exact source bounds, obscured editors, a fully occupied field or a field
+too small for the target can hide it. Large unrelated AX/DOM branches must not
+suppress an otherwise usable source field. Test left/right alignment, RTL text,
+placeholders, empty fields, inner scrolling and compact single-line controls.
+Check brown/amber in light/dark appearance, hover details, click/keyboard review
+and source focus. The older native launcher obeys the same inside placement
+rules. Browser ownership remains with visible underlines/cards when the dot
+cannot fit. Owned fixture results do not certify an uninspected third-party
+composer or arbitrary hidden custom controls.

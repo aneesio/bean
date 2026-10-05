@@ -45,6 +45,29 @@ assert.equal(detector.fixObvious("hello,next\n\nleave this alone"), "hello, next
 assert.equal(detector.detect(null).length, 0);
 assert.equal(detector.detect("i")[0].suggestion, "I", "one-character drafts are supported");
 
+// The real mirror receives directional layout styles and scroll offsets.
+// WebKit fixtures below validate their actual rendering; this harness checks
+// the mapping transport without mutating the source field.
+const capturedMirrors=[];
+const mirrorDocument={body:{appendChild:node=>capturedMirrors.push(node)},
+  createTextNode:text=>({textContent:text}),createElement:tag=>({tagName:tag.toUpperCase(),style:{},children:[],
+    setAttribute(){},appendChild(child){child.parent=this;this.children.push(child);},
+    getBoundingClientRect(){return {left:-9999,top:0};},
+    getClientRects(){return [{left:-9990,top:12,width:40,height:16}];}})};
+const sourceStyles={textAlign:"right",direction:"rtl",writingMode:"horizontal-tb",tabSize:"8",
+  paddingLeft:"9px",paddingRight:"9px",lineHeight:"20px",fontSize:"14px"};
+const mirrorMapping=load("src/issueMapping.js",{document:mirrorDocument,
+  window:{scrollX:20,scrollY:30,getComputedStyle:()=>sourceStyles}}).BeanMapping;
+const mirrorField={tagName:"TEXTAREA",value:"مرحبا",clientWidth:240,scrollLeft:3,scrollTop:4,
+  getBoundingClientRect:()=>({left:100,top:200,bottom:360})};
+const mirrorRects=mirrorMapping.rectsForRange(mirrorField,0,mirrorField.value.length);
+for(const key of ["textAlign","direction","writingMode","tabSize"]) {
+  assert.equal(capturedMirrors[0].style[key],sourceStyles[key],`${key} survives the source-to-mirror mapping`);
+}
+assert.deepEqual(JSON.parse(JSON.stringify(mirrorRects)),[{x:126,y:238,w:40,h:16}],
+  "occupied text retains both page and inner scrolling coordinates");
+assert.equal(mirrorField.value,"مرحبا","measuring occupancy never rewrites the field");
+
 const mapping = load("src/issueMapping.js").BeanMapping;
 assert.deepEqual(
   JSON.parse(JSON.stringify(mapping.uniqueOffset("hello world", "world"))),

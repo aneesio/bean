@@ -312,6 +312,25 @@ final class InlineHighlightServiceTests: XCTestCase {
         XCTAssertFalse(fixture.service.ownsFocusedFieldSession)
     }
 
+    func testCaretAndTextChangesInvalidatePlacementBeforeCadenceExpires() throws {
+        let fixture = try Fixture(text: "Synthetic clean draft.")
+        defer { fixture.close() }
+        fixture.editor.geometry = FieldOverlayGeometry(fieldRect: CGRect(x: 100, y: 100, width: 300, height: 100),
+            windowRect: CGRect(x: 0, y: 0, width: 800, height: 600), exclusionRects: [])
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        let initial = fixture.editor.placementCaptureCount
+        fixture.editor.selectedRange = NSRange(location: 1, length: 0)
+        fixture.editor.protectedTextRects = [CGRect(x: 365, y: 166, width: 10, height: 15)]
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        XCTAssertEqual(fixture.editor.placementCaptureCount, initial + 1)
+        XCTAssertEqual(fixture.editor.placements.last??.exclusionRects, fixture.editor.protectedTextRects)
+        fixture.editor.value += " More."
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        XCTAssertEqual(fixture.editor.placementCaptureCount, initial + 2)
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        XCTAssertEqual(fixture.editor.placementCaptureCount, initial + 2)
+    }
+
     private func assertRun(_ fixture: Fixture, shows expected: Bool, reason: inout String,
                            file: StaticString = #filePath, line: UInt = #line) async {
         let shown = await fixture.run(reason: &reason)
@@ -329,6 +348,7 @@ final class InlineHighlightServiceTests: XCTestCase {
         var geometry: FieldOverlayGeometry?
         var placementCaptureCount = 0
         var placements: [FieldOverlayGeometry?] = []
+        var protectedTextRects: [CGRect] = []
         var time: TimeInterval = 1
         var localCoverage: IssueDetector.LocalCoverage = .complete
 
@@ -383,7 +403,8 @@ final class InlineHighlightServiceTests: XCTestCase {
                 selectedRange: { _ in editor.selectedRange }, anchor: { _ in editor.geometry?.fieldRect },
                 presentState: { editor.states.append($0) }, canEditRanges: { _ in editor.canEditRanges },
                 placementGeometry: { _ in editor.placementCaptureCount += 1; return editor.geometry },
-                presentPlacement: { editor.placements.append($0) }, monotonicTime: { editor.time }
+                presentPlacement: { editor.placements.append($0) }, monotonicTime: { editor.time },
+                protectedTextRects: { _, _, _ in editor.protectedTextRects }, isFocusedField: { _, _ in true }, placementTargetAvailable: { _, _ in true }
             )
             service = InlineHighlightService(
                 settings: settings,

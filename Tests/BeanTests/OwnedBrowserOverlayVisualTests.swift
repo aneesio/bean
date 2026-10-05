@@ -143,285 +143,156 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
         }
     }
 
-    func testCompactDotKeepsCrowdedComposerControlsClickableAndHidesWithoutSafeSpace() async throws {
+    func testInsideDotKeepsComposerControlsClickableAndRecoversAcrossViewportChanges() async throws {
         for dark in [false, true] {
             for (name, size) in [("desktop", NSSize(width: 800, height: 640)),
                                   ("narrow", NSSize(width: 320, height: 480))] {
                 let fixture = try OwnedBrowserOverlayFixture(size: size, dark: dark)
                 defer { fixture.close() }
                 try await fixture.load()
-                let crowded = try await fixture.object("""
+                let result = try await fixture.object("""
                     const e=document.getElementById('editor');
-                    e.style.cssText=`position:fixed;left:48px;top:72px;width:${Math.min(280,innerWidth-96)}px;height:110px;resize:none`;
-                    e.focus();e.setSelectionRange(8,8);
+                    e.style.cssText=`position:fixed;left:32px;top:72px;width:${Math.min(280,innerWidth-64)}px;height:150px;resize:none`;
+                    e.value='Short draft';e.focus();e.setSelectionRange(4,4);
                     const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
-                    const placements=[{x:r.right+4,y:r.bottom-28},{x:r.right-28,y:r.bottom+4},
-                        {x:r.left-32,y:r.bottom-28}];
+                    const overlap=(a,c)=>a.left<c.right && a.right>c.left && a.top<c.bottom && a.bottom>c.top;
+                    const inside=(a,c)=>a.left>=c.left && a.right<=c.right && a.top>=c.top && a.bottom<=c.bottom;
                     window.__dotControlClicks={};
                     const controls=['Send','Attach','Microphone'].map((label,index)=>{
-                        const button=document.createElement('button');button.textContent=label;
-                        button.setAttribute('aria-label',label);button.id='owned-'+label;
-                        button.style.cssText=`position:fixed;left:${placements[index].x}px;top:${placements[index].y}px;width:28px;height:28px;padding:0;overflow:hidden`;
+                        const button=document.createElement('button');button.textContent=label;button.id='owned-'+label;
+                        button.style.cssText=`position:fixed;left:${r.right-32-index*36}px;top:${r.bottom-32}px;width:28px;height:28px;padding:0;overflow:hidden`;
                         button.addEventListener('click',()=>window.__dotControlClicks[label]=(window.__dotControlClicks[label]||0)+1);
                         document.body.appendChild(button);return button;
                     });
-                    const shown=BeanOverlay.renderAssistant(rect,3,'nativeLocal',{actionScope:'draft'},{source:e});
+                    const shown=BeanOverlay.renderAssistant(rect,3,'nativeLocal',{}, {source:e});
                     const root=window.__ownedBeanShadow,button=root.querySelector('.assistant'),dot=root.querySelector('.assistant-dot');
                     const b=button.getBoundingClientRect(),d=dot.getBoundingClientRect();
-                    const overlap=(a,c)=>a.left<c.right && a.right>c.left && a.top<c.bottom && a.bottom>c.top;
+                    const topRight=Math.abs(b.right-(r.right-4))<0.5 && Math.abs(b.top-(r.top+4))<0.5;
                     const controlsUntouched=controls.every(control=>{
                         const c=control.getBoundingClientRect(),hit=document.elementFromPoint(c.x+c.width/2,c.y+c.height/2);
                         if(hit!==control)return false;
                         hit.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));return window.__dotControlClicks[control.textContent]===1;
                     });
-                    // Hover gives details through the semantic title. It does
-                    // not expand a card or move the editor's selection.
-                    button.dispatchEvent(new MouseEvent('mouseenter',{bubbles:false}));
-                    const hoverQuiet=!root.querySelector('.card') && document.activeElement===e && e.selectionStart===8;
-                    const titleUseful=/Bean: 3 writing suggestions/.test(button.title);
-                    // document hit testing retargets a closed-shadow control
-                    // to its host. ShadowRoot.elementFromPoint is nonstandard
-                    // and is not needed to prove this target owns the pixels.
                     const host=document.getElementById('bean-inline-host');
-                    const hitSamples=[1,14,27].flatMap(dx=>[1,14,27].map(dy=>{
-                        const hit=document.elementFromPoint(b.x+dx,b.y+dy);
-                        return {dx,dy,owned:hit===host,tag:hit && hit.tagName,id:hit && hit.id};
-                    }));
-                    const dotHit=hitSamples.every(sample=>sample.owned);
+                    const dotOwnsPixels=[1,14,27].every(dx=>[1,14,27].every(dy=>document.elementFromPoint(b.x+dx,b.y+dy)===host));
+                    button.dispatchEvent(new MouseEvent('mouseenter',{bubbles:false}));
+                    const hoverQuiet=!root.querySelector('.card') && document.activeElement===e && e.selectionStart===4;
                     button.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
                     const clickOpens=!!root.querySelector('[aria-label="Bean writing assistant"]');
                     root.querySelector('[aria-label="Close writing assistant"]').dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
-                    // A one-pixel unknown sibling between the original hit
-                    // samples still occupies the full invisible target.
-                    const thin=document.createElement('div');thin.id='owned-thin-control';
-                    thin.style.cssText=`position:fixed;left:${b.x+6}px;top:${b.y+5}px;width:1px;height:1px;background:red`;
+                    const thin=document.createElement('button');thin.id='owned-thin-control';
+                    thin.style.cssText=`position:fixed;left:${b.x+6}px;top:${b.y+5}px;width:1px;height:1px;padding:0;border:0;background:red`;
                     document.body.appendChild(thin);
-                    const moved=BeanOverlay.refreshAssistantPlacement();
-                    const after=root.querySelector('.assistant').getBoundingClientRect();
-                    return {shown,paint10:d.width===10 && d.height===10,target28:b.width===28 && b.height===28,
-                        noLogoOrCount:button.children.length===1 && !button.querySelector('img'),amber:button.dataset.hasIssues==='true',
-                        outsideEditor:!overlap(b,r),outsideControls:controls.every(control=>!overlap(b,control.getBoundingClientRect())),
-                        controlsUntouched,hoverQuiet,titleUseful,dotHit,hitSamples,clickOpens,
-                        movedAwayFromThin:moved && !overlap(after,thin.getBoundingClientRect()),
-                        sourceUntouched:e.value==='Synthetic draft with teh spelling issue.' && e.selectionStart===8};
-                    """)
-                for key in ["shown", "paint10", "target28", "noLogoOrCount", "amber", "outsideEditor",
-                            "outsideControls", "controlsUntouched", "hoverQuiet", "titleUseful", "dotHit", "clickOpens",
-                            "movedAwayFromThin", "sourceUntouched"] {
-                    XCTAssertEqual(crowded[key] as? Bool, true, "\(name) \(dark): \(key) \(crowded)")
-                }
-                if let directory = ProcessInfo.processInfo.environment["BEAN_BROWSER_QA_OUTPUT_DIRECTORY"] {
-                    try await fixture.snapshot(to: URL(fileURLWithPath: directory, isDirectory: true)
-                        .appendingPathComponent("dot-crowded-\(name)-\(dark ? "dark" : "light").png"))
-                }
-                let unavailable = try await fixture.object("""
-                    const e=document.getElementById('editor'),root=window.__ownedBeanShadow;
+                    const moved=BeanOverlay.refreshAssistantPlacement(),after=root.querySelector('.assistant').getBoundingClientRect();
+                    const thinExcluded=moved && !overlap(after,thin.getBoundingClientRect()) && inside(after,r);
                     document.querySelectorAll('[id^="owned-"]').forEach(node=>node.remove());
                     e.style.cssText=`position:fixed;left:4px;top:4px;width:${innerWidth-8}px;height:${innerHeight-8}px;resize:none`;
-                    const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
-                    const hidden=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e})===false && !root.querySelector('.assistant');
-                    BeanOverlay.render([{id:'owned-issue',rects:[{x:16,y:30,w:35,h:18}],
-                        issue:{original:'teh',suggestion:'the',type:'spelling',source:'local'}}],null,null,{});
-                    const underlineOwned=BeanOverlay.hasFieldPresentation() && !!root.querySelector('.ul');
-                    BeanOverlay.clear();const noFalseOwnership=!BeanOverlay.hasFieldPresentation();
-                    e.style.cssText='position:fixed;left:48px;top:72px;width:180px;height:110px;resize:none';
-                    const restored=BeanOverlay.refreshAssistantPlacement();
-                    const brandBrown=root.querySelector('.assistant').dataset.hasIssues==='false' &&
-                        getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor===getComputedStyle(root.querySelector('.assistant')).color &&
-                        getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor!=='rgba(0, 0, 0, 0)';
-                    e.style.left='1200px';BeanOverlay.refreshAssistantPlacement();
-                    const offscreenHidden=!root.querySelector('.assistant');
-                    e.style.left='48px';const recovered=BeanOverlay.refreshAssistantPlacement();
-                    const host=document.createElement('div');document.body.appendChild(host);
-                    const shadow=host.attachShadow({mode:'open'}),shadowEditor=document.createElement('textarea');
-                    shadowEditor.style.cssText='position:fixed;left:48px;top:72px;width:180px;height:110px';
-                    shadow.appendChild(shadowEditor);
-                    const shadowSend=document.createElement('button');shadowSend.textContent='Send';
-                    shadowSend.style.cssText='position:fixed;left:232px;top:154px;width:28px;height:28px';shadow.appendChild(shadowSend);
-                    const s=shadowEditor.getBoundingClientRect();
-                    const unknownShadowHidden=BeanOverlay.renderAssistant({x:s.x,y:s.y,w:s.width,h:s.height},1,'nativeLocal',{},
-                        {source:shadowEditor})===false && !root.querySelector('.assistant');
-                    return {hidden,underlineOwned,noFalseOwnership,restored,brandBrown,offscreenHidden,recovered,unknownShadowHidden,
-                        sourceUntouched:e.value==='Synthetic draft with teh spelling issue.'};
+                    const fillsViewportShown=BeanOverlay.refreshAssistantPlacement();
+                    e.style.left='1200px';BeanOverlay.refreshAssistantPlacement();const offscreenHidden=!root.querySelector('.assistant');
+                    e.style.left='4px';const recovered=BeanOverlay.refreshAssistantPlacement();
+                    return {shown,topRight,insideEditor:inside(b,r),paint10:d.width===10 && d.height===10,target28:b.width===28 && b.height===28,
+                        noLogoOrCount:button.children.length===1 && !button.querySelector('img'),amber:button.dataset.hasIssues==='true',
+                        outsideControls:controls.every(control=>!overlap(b,control.getBoundingClientRect())),controlsUntouched,dotOwnsPixels,
+                        hoverQuiet,clickOpens,thinExcluded,fillsViewportShown,offscreenHidden,recovered,
+                        sourceUntouched:e.value==='Short draft' && e.selectionStart===4};
                     """)
-                for key in ["hidden", "underlineOwned", "noFalseOwnership", "restored", "brandBrown",
-                            "offscreenHidden", "recovered", "unknownShadowHidden", "sourceUntouched"] {
-                    XCTAssertEqual(unavailable[key] as? Bool, true, "\(name) \(dark): \(key) \(unavailable)")
-                }
-            }
-        }
-    }
-
-    func testFullEditorEdgeAndBoundedWrapperTraversal() async throws {
-        for dark in [false, true] {
-            for (name, size) in [("desktop", NSSize(width: 800, height: 640)),
-                                  ("narrow", NSSize(width: 320, height: 640))] {
-                let fixture = try OwnedBrowserOverlayFixture(size: size, dark: dark)
-                defer { fixture.close() }
-                try await fixture.load()
-                let result = try await fixture.object("""
-                    const e=document.getElementById('editor');
-                    e.style.cssText=`position:fixed;left:48px;top:72px;width:${Math.min(280,innerWidth-96)}px;height:440px;resize:none`;
-                    e.focus();e.setSelectionRange(8,8);
-                    const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
-                    const obstacles=[{x:r.right+4,y:200,w:28,h:r.bottom-200},
-                        {x:r.left-32,y:r.top,w:28,h:r.height},{x:r.left,y:r.bottom+4,w:r.width,h:28},
-                        {x:r.left,y:r.top-32,w:r.width,h:28}].map((bounds,index)=>{
-                        const button=document.createElement('button');button.textContent=index===0?'Send':'Toolbar';
-                        button.style.cssText=`position:fixed;left:${bounds.x}px;top:${bounds.y}px;width:${bounds.w}px;height:${bounds.h}px;padding:0;overflow:hidden`;
-                        document.body.appendChild(button);return button;
-                    });
-                    const shown=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
-                    const root=window.__ownedBeanShadow,entry=root.querySelector('.assistant');
-                    const b=entry.getBoundingClientRect(),dot=root.querySelector('.assistant-dot');
-                    const overlap=(a,c)=>a.left<c.right && a.right>c.left && a.top<c.bottom && a.bottom>c.top;
-                    const clearBeyond96=r.bottom-28-b.y>96 && !overlap(b,r) &&
-                        obstacles.every(control=>!overlap(b,control.getBoundingClientRect()));
-                    const brandPaint=getComputedStyle(dot).backgroundColor===getComputedStyle(entry).color &&
-                        getComputedStyle(dot).backgroundColor!=='rgba(0, 0, 0, 0)' && dot.getBoundingClientRect().width===10;
-                    const backdrop=document.createElement('div');backdrop.style.cssText='position:fixed;inset:0;pointer-events:none';
-                    const hidden=document.createElement('div');hidden.style.display='none';
-                    hidden.innerHTML='<span></span>'.repeat(10000);backdrop.appendChild(hidden);document.body.appendChild(backdrop);
-                    const backdropAllowed=BeanOverlay.refreshAssistantPlacement();
-                    // pointer-events:none is not a child clipping guarantee.
-                    // The child's own fixed box, beyond its wrapper's tiny box,
-                    // remains an exclusion after pointer-events:auto overrides.
-                    backdrop.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;pointer-events:none';
-                    const escaped=document.createElement('button');escaped.textContent='Upload';
-                    escaped.style.cssText=`position:fixed;left:${b.x}px;top:${b.y}px;width:28px;height:28px;pointer-events:auto`;
-                    backdrop.appendChild(escaped);
-                    const escapedChecked=BeanOverlay.refreshAssistantPlacement();
-                    const after=root.querySelector('.assistant').getBoundingClientRect();
-                    const escapedExcluded=escapedChecked && !overlap(after,escaped.getBoundingClientRect());
-                    const boxless=document.createElement('div');boxless.style.display='contents';
-                    const boxlessControl=document.createElement('button');boxlessControl.textContent='Voice';
-                    boxlessControl.style.cssText=`position:fixed;left:${after.x}px;top:${after.y}px;width:28px;height:28px`;
-                    boxless.appendChild(boxlessControl);document.body.appendChild(boxless);
-                    const boxlessChecked=BeanOverlay.refreshAssistantPlacement();
-                    const afterBoxless=root.querySelector('.assistant').getBoundingClientRect();
-                    const boxlessExcluded=boxlessChecked && !overlap(afterBoxless,boxlessControl.getBoundingClientRect());
-                    const contained=document.createElement('div');
-                    contained.style.cssText='position:fixed;left:0;top:0;width:8px;height:640px;contain:paint';
-                    contained.innerHTML='<span></span>'.repeat(10000);
-                    const clippedChild=document.createElement('button');clippedChild.textContent='Clipped control';
-                    clippedChild.style.cssText=`position:fixed;left:${afterBoxless.x}px;top:${afterBoxless.y}px;width:28px;height:28px`;
-                    contained.appendChild(clippedChild);document.body.appendChild(contained);
-                    const containedOverBudgetHidden=!BeanOverlay.refreshAssistantPlacement() && !root.querySelector('.assistant');
-                    const c=clippedChild.getBoundingClientRect();
-                    const clippedCannotHit=document.elementFromPoint(c.x+c.width/2,c.y+c.height/2)!==clippedChild;
-                    contained.remove();
-                    const restoredAfterLimit=BeanOverlay.refreshAssistantPlacement();
-                    return {shown,clearBeyond96,brandPaint,backdropAllowed,escapedExcluded,boxlessExcluded,containedOverBudgetHidden,clippedCannotHit,restoredAfterLimit,
-                        sourceUntouched:e.value==='Synthetic draft with teh spelling issue.' && e.selectionStart===8};
-                    """)
-                for key in ["shown", "clearBeyond96", "brandPaint", "backdropAllowed", "escapedExcluded",
-                            "boxlessExcluded", "containedOverBudgetHidden", "clippedCannotHit", "restoredAfterLimit", "sourceUntouched"] {
+                for key in ["shown", "topRight", "insideEditor", "paint10", "target28", "noLogoOrCount", "amber",
+                            "outsideControls", "controlsUntouched", "dotOwnsPixels", "hoverQuiet", "clickOpens", "thinExcluded",
+                            "fillsViewportShown", "offscreenHidden", "recovered", "sourceUntouched"] {
                     XCTAssertEqual(result[key] as? Bool, true, "\(name) \(dark): \(key) \(result)")
                 }
                 if let directory = ProcessInfo.processInfo.environment["BEAN_BROWSER_QA_OUTPUT_DIRECTORY"] {
                     try await fixture.snapshot(to: URL(fileURLWithPath: directory, isDirectory: true)
-                        .appendingPathComponent("dot-full-edge-\(name)-\(dark ? "dark" : "light").png"))
+                        .appendingPathComponent("dot-inside-\(name)-\(dark ? "dark" : "light").png"))
                 }
             }
         }
     }
 
-    func testClippingDeclarationsDoNotHideEscapedControlGeometry() async throws {
-        for dark in [false, true] {
-            let fixture = try OwnedBrowserOverlayFixture(size: NSSize(width: 800, height: 480), dark: dark)
-            defer { fixture.close() }
-            try await fixture.load()
-            let result = try await fixture.object("""
-                const e=document.getElementById('editor');
-                e.style.cssText='position:fixed;left:100px;top:100px;width:200px;height:160px;resize:none';
-                e.focus();e.setSelectionRange(8,8);
-                const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
-                BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
-                const root=window.__ownedBeanShadow;
-                const overlap=(a,c)=>a.left<c.right && a.right>c.left && a.top<c.bottom && a.bottom>c.top;
-                const fresh=()=>{
-                    const shown=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
-                    const target=root.querySelector('.assistant');
-                    if(!shown || !target)throw Error('Expected owned free-edge target');
-                    const bounds=target.getBoundingClientRect();BeanOverlay.clearAssistant();return bounds;
-                };
-                const safeAfter=(control)=>{
-                    const shown=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
-                    const target=root.querySelector('.assistant');
-                    return !!shown && !!target && !overlap(target.getBoundingClientRect(),control.getBoundingClientRect());
-                };
-                // Hidden contents do not hide a host's own border/background or
-                // hit box. Place it strictly between the nine point probes.
-                let b=fresh();const hiddenHost=document.createElement('div');
-                hiddenHost.style.cssText=`position:fixed;left:${b.x+6}px;top:${b.y+5}px;width:1px;height:1px;content-visibility:hidden;background:red`;
-                hiddenHost.innerHTML='<button>Hidden child</button>';document.body.appendChild(hiddenHost);
-                const h=hiddenHost.getBoundingClientRect();
-                const hiddenHostReallyHits=document.elementFromPoint(h.x+0.5,h.y+0.5)===hiddenHost;
-                const hiddenHostExcluded=safeAfter(hiddenHost);hiddenHost.remove();
-                // Paint containment does not apply to a non-atomic inline span.
-                b=fresh();const inlineParent=document.createElement('span');inlineParent.textContent='Inline box';
-                inlineParent.style.cssText='display:inline;contain:paint';document.body.appendChild(inlineParent);
-                const inlineControl=document.createElement('button');inlineControl.textContent='Send';
-                inlineControl.style.cssText=`position:fixed;left:${b.x}px;top:${b.y}px;width:28px;height:28px;padding:0`;
-                inlineParent.appendChild(inlineControl);
-                const i=inlineControl.getBoundingClientRect();
-                const inlineActuallyEscapes=getComputedStyle(inlineParent).display==='inline' &&
-                    !overlap(i,inlineParent.getBoundingClientRect()) &&
-                    document.elementFromPoint(i.x+i.width/2,i.y+i.height/2)===inlineControl;
-                const inlineExcluded=safeAfter(inlineControl);inlineParent.remove();
-                // A positive overflow clip margin can paint past the host box.
-                // The child rectangle is still collected on engines where the
-                // property has not shipped; that support is reported separately.
-                b=fresh();const marginParent=document.createElement('div');
-                marginParent.style.cssText=`position:fixed;left:${b.x-40}px;top:${b.y}px;width:8px;height:28px;contain:paint;overflow-clip-margin:100px`;
-                const marginControl=document.createElement('button');marginControl.textContent='Upload';
-                marginControl.style.cssText='position:absolute;left:40px;top:0;width:28px;height:28px;padding:0';
-                marginParent.appendChild(marginControl);document.body.appendChild(marginParent);
-                const m=marginControl.getBoundingClientRect();
-                const marginSupported=CSS.supports('overflow-clip-margin','100px');
-                const marginOutsideHost=!overlap(m,marginParent.getBoundingClientRect());
-                const marginActuallyEscapes=document.elementFromPoint(m.x+m.width/2,m.y+m.height/2)===marginControl;
-                const marginExcluded=safeAfter(marginControl);marginParent.remove();
-                // A top-layer popover ignores its paint-contained ancestor's
-                // clip. A light-DOM descendant must still get its own exclusion.
-                b=fresh();const contained=document.createElement('div');
-                contained.style.cssText='position:fixed;left:0;top:0;width:8px;height:8px;contain:paint';
-                const popover=document.createElement('button');popover.textContent='Voice';popover.setAttribute('popover','manual');
-                popover.style.cssText=`position:fixed;left:${b.x}px;top:${b.y}px;right:auto;bottom:auto;margin:0;width:28px;height:28px;padding:0`;
-                contained.appendChild(popover);document.body.appendChild(contained);
-                const popoverSupported=typeof popover.showPopover==='function';
-                if(popoverSupported)popover.showPopover();
-                const p=popover.getBoundingClientRect();
-                const popoverActuallyEscapes=popoverSupported && !overlap(p,contained.getBoundingClientRect()) &&
-                    document.elementFromPoint(p.x+p.width/2,p.y+p.height/2)===popover;
-                const popoverExcluded=popoverSupported && safeAfter(popover);
-                if(popoverSupported)popover.hidePopover();contained.remove();
-                // An open shadow/custom host cannot become certified geometry
-                // just by declaring containment on its small host rectangle.
-                const shadowHost=document.createElement('bean-owned-control');
-                shadowHost.style.cssText='position:fixed;left:0;top:0;width:8px;height:8px;contain:paint';
-                shadowHost.attachShadow({mode:'open'}).innerHTML='<button>Unlocated control</button>';
-                document.body.appendChild(shadowHost);
-                const shadowStillHidden=!BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e}) && !root.querySelector('.assistant');
-                shadowHost.remove();
-                const recovered=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e});
-                return {hiddenHostReallyHits,hiddenHostExcluded,inlineActuallyEscapes,inlineExcluded,
-                    marginSupported,marginOutsideHost,marginActuallyEscapes,marginExcluded,
-                    popoverSupported,popoverActuallyEscapes,popoverExcluded,shadowStillHidden,recovered,
-                    sourceUntouched:e.value==='Synthetic draft with teh spelling issue.' && e.selectionStart===8 && document.activeElement===e};
-                """)
-            for key in ["hiddenHostReallyHits", "hiddenHostExcluded", "inlineActuallyEscapes", "inlineExcluded",
-                        "marginOutsideHost", "marginExcluded", "shadowStillHidden", "recovered", "sourceUntouched"] {
-                XCTAssertEqual(result[key] as? Bool, true, "\(dark): \(key) \(result)")
-            }
-            if result["marginSupported"] as? Bool == true {
-                XCTAssertEqual(result["marginActuallyEscapes"] as? Bool, true, "\(dark): \(result)")
-            }
-            XCTAssertEqual(result["popoverSupported"] as? Bool, true, "Owned WebKit top-layer fixture requires native popover support")
-            XCTAssertEqual(result["popoverActuallyEscapes"] as? Bool, true, "\(dark): \(result)")
-            XCTAssertEqual(result["popoverExcluded"] as? Bool, true, "\(dark): \(result)")
+    func testInsideTextGeometryProtectsAlignedRTLPlaceholderScrolledAndCompactInputs() async throws {
+        let fixture = try OwnedBrowserOverlayFixture(size: NSSize(width: 800, height: 640), dark: false)
+        defer { fixture.close() }
+        try await fixture.load()
+        let result = try await fixture.object("""
+            const e=document.getElementById('editor');let root=null;
+            e.style.cssText='position:fixed;left:100px;top:100px;width:260px;height:160px;resize:none;text-align:right';
+            e.value='Right aligned';e.focus();e.setSelectionRange(e.value.length,e.value.length);
+            const overlap=(a,c)=>a.left<c.x+c.w && a.right>c.x && a.top<c.y+c.h && a.bottom>c.y;
+            const safe=()=>{
+                const r=e.getBoundingClientRect(),shown=BeanOverlay.renderAssistant({x:r.x,y:r.y,w:r.width,h:r.height},0,'nativeLocal',{}, {source:e});
+                root=window.__ownedBeanShadow;const button=root && root.querySelector('.assistant');if(!shown || !button)return false;
+                const text=BeanMapping.rectsForRange(e,0,e.value.length),b=button.getBoundingClientRect();
+                return b.left>=r.left && b.right<=r.right && b.top>=r.top && b.bottom<=r.bottom && text.every(box=>!overlap(b,box));
+            };
+            const aligned=safe();
+            e.style.direction='rtl';e.value='مرحبا بالعالم';e.setSelectionRange(e.value.length,e.value.length);const rtl=safe();
+            e.style.direction='ltr';e.style.textAlign='';
+            const externalStyle=document.createElement('style');externalStyle.textContent='#editor{text-align:right;direction:rtl;tab-size:8}';document.head.appendChild(externalStyle);
+            e.value='';e.placeholder='Right aligned placeholder';const placeholder=safe();
+            const textControl=e.cloneNode(false);textControl.style.visibility='hidden';textControl.value=e.placeholder;document.body.appendChild(textControl);
+            const placeholderRects=BeanMapping.rectsForRange(textControl,0,textControl.value.length),placeholderTarget=root.querySelector('.assistant').getBoundingClientRect();
+            const placeholderActuallyExcluded=placeholderRects.every(box=>!overlap(placeholderTarget,box));textControl.remove();externalStyle.remove();
+            e.placeholder='';e.style.textAlign='left';e.value=('A long line of text filling the first row. ').repeat(40)+'\\nshort\\nshort\\nshort';
+            e.scrollTop=e.scrollHeight;e.setSelectionRange(e.value.length,e.value.length);const scrolled=safe();
+            e.value='';e.scrollTop=0;const empty=safe();
+            const b=root.querySelector('.assistant').getBoundingClientRect(),r=e.getBoundingClientRect();
+            const emptyTopRight=Math.abs(b.top-r.top-4)<0.5 && Math.abs(r.right-b.right-4)<0.5;
+            const input=document.createElement('input');input.style.cssText='position:fixed;left:100px;top:320px;width:260px;height:24px;box-sizing:border-box;padding:2px;border:1px solid #999;font:12px -apple-system,sans-serif';
+            input.value='Short';document.body.appendChild(input);input.focus();input.setSelectionRange(5,5);
+            const i=input.getBoundingClientRect(),compactShown=BeanOverlay.renderAssistant({x:i.x,y:i.y,w:i.width,h:i.height},0,'nativeLocal',{}, {source:input});
+            const compact=root.querySelector('.assistant').getBoundingClientRect();
+            const compact20=compactShown && compact.width===20 && compact.height===20 && compact.top>=i.top && compact.bottom<=i.bottom;
+            const brown=getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor===getComputedStyle(root.querySelector('.assistant')).color;
+            const valuePreserved=input.value==='Short' && input.selectionStart===5 && e.value==='';
+            return {aligned,rtl,placeholder,placeholderActuallyExcluded,scrolled,empty,emptyTopRight,compact20,brown,valuePreserved};
+            """)
+        for key in ["aligned", "rtl", "placeholder", "placeholderActuallyExcluded", "scrolled", "empty", "emptyTopRight", "compact20", "brown", "valuePreserved"] {
+            XCTAssertEqual(result[key] as? Bool, true, "\(key): \(result)")
         }
     }
+
+    func testContentEditableTextRangesAndLocalControlsIgnoreUnrelatedDocumentComplexity() async throws {
+        let fixture = try OwnedBrowserOverlayFixture(size: NSSize(width: 800, height: 640), dark: false)
+        defer { fixture.close() }
+        try await fixture.load()
+        let result = try await fixture.object("""
+            document.getElementById('editor').remove();
+            const editor=document.createElement('div');editor.contentEditable='true';editor.id='editor';
+            editor.style.cssText='position:fixed;left:100px;top:100px;width:300px;height:200px;padding:8px;box-sizing:border-box;border:1px solid #aaa;background:white;font:14px -apple-system,sans-serif';
+            editor.innerHTML='<p style="margin:0">The first line contains many words and must wrap.</p><p style="margin:0">Second line.</p>';
+            document.body.appendChild(editor);editor.focus();
+            const selection=window.getSelection(),caret=document.createRange();caret.selectNodeContents(editor);caret.collapse(false);selection.removeAllRanges();selection.addRange(caret);
+            const overlap=(a,c)=>a.left<c.right && a.right>c.left && a.top<c.bottom && a.bottom>c.top;
+            const render=()=>{const r=editor.getBoundingClientRect();return BeanOverlay.renderAssistant({x:r.x,y:r.y,w:r.width,h:r.height},0,'nativeLocal',{}, {source:editor});};
+            const shown=render(),root=window.__ownedBeanShadow;
+            // A range containing paragraph elements includes each block's full
+            // layout box. Measure the actual owned text nodes independently so
+            // blank space on a short line stays usable without covering glyphs.
+            const glyphRects=[...editor.querySelectorAll('p')].flatMap(paragraph=>{
+                const range=document.createRange();range.selectNodeContents(paragraph.firstChild);return [...range.getClientRects()];
+            });
+            const textExcluded=shown && glyphRects.length>0 && glyphRects.every(r=>!overlap(root.querySelector('.assistant').getBoundingClientRect(),r));
+            const dot=root.querySelector('.assistant').getBoundingClientRect(),button=document.createElement('button');button.textContent='Send';
+            button.style.cssText=`position:fixed;left:${dot.x}px;top:${dot.y}px;width:28px;height:28px;padding:0`;
+            editor.appendChild(button);const moved=render();
+            const controlExcluded=moved && !overlap(root.querySelector('.assistant').getBoundingClientRect(),button.getBoundingClientRect());
+            const unrelated=document.createElement('bean-unrelated-feed');unrelated.style.cssText='position:fixed;left:0;top:0;width:8px;height:8px';
+            for(let n=0;n<32;n++){const branch=document.createElement('div');branch.style.cssText='position:fixed;left:0;top:0;width:8px;height:8px';branch.innerHTML='<span>Far feed</span>'.repeat(32);unrelated.appendChild(branch);}
+            unrelated.attachShadow({mode:'open'}).innerHTML='<button>Unrelated shadow control</button>';document.body.appendChild(unrelated);
+            const unrelatedAllowed=render();
+            const blanket=document.createElement('div');blanket.style.cssText='position:fixed;left:100px;top:100px;width:300px;height:200px;background:red;z-index:100';document.body.appendChild(blanket);
+            const coveredHidden=!render() && !root.querySelector('.assistant');blanket.remove();const recovered=render();
+            const host=document.createElement('div');document.body.appendChild(host);const shadow=host.attachShadow({mode:'open'});
+            const inner=document.createElement('textarea');inner.style.cssText='position:fixed;left:450px;top:100px;width:250px;height:100px';shadow.appendChild(inner);
+            const r=inner.getBoundingClientRect(),unknownSourceHidden=!BeanOverlay.renderAssistant({x:r.x,y:r.y,w:r.width,h:r.height},0,'nativeLocal',{}, {source:inner});
+            return {shown,textExcluded,controlExcluded,unrelatedAllowed,coveredHidden,recovered,unknownSourceHidden,
+                sourceUntouched:editor.querySelector('p').textContent==='The first line contains many words and must wrap.'};
+            """)
+        for key in ["shown", "textExcluded", "controlExcluded", "unrelatedAllowed", "coveredHidden", "recovered", "unknownSourceHidden", "sourceUntouched"] {
+            XCTAssertEqual(result[key] as? Bool, true, "\(key): \(result)")
+        }
+    }
+
 }
 
 @MainActor
@@ -429,6 +300,7 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
     private let webView: WKWebView
     private let window: NSWindow
     private let source: String
+    private let mappingSource: String
     private let iconDataURL: String
     private var loaded = false
     private var navigationError: Error?
@@ -448,6 +320,7 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         source = try String(contentsOf: root.appendingPathComponent("BrowserExtension/src/overlay.js"), encoding: .utf8)
+        mappingSource = try String(contentsOf: root.appendingPathComponent("BrowserExtension/src/issueMapping.js"), encoding: .utf8)
         iconDataURL = "data:image/png;base64," + (try Data(contentsOf: root.appendingPathComponent("BrowserExtension/icon128.png"))).base64EncodedString()
         super.init()
         webView.navigationDelegate = self
@@ -474,6 +347,7 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
                     Element.prototype.attachShadow=function(options){const root=originalAttachShadow.call(this,options);window.__ownedBeanShadow=root;return root;};
                     })();
                     """)
+                _ = try await webView.evaluateJavaScript(mappingSource)
                 _ = try await webView.evaluateJavaScript(source)
                 return
             }

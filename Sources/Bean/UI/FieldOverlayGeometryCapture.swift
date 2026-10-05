@@ -9,7 +9,7 @@ enum FieldOverlayGeometryCapture {
     }
 
     enum FailureReason: String {
-        case fieldBoundsUnavailable, windowUnavailable, windowBoundsUnavailable
+        case fieldBoundsUnavailable, fieldOutsideViewport, windowUnavailable, windowBoundsUnavailable
         case nodeUnavailable, nodeLimit, deadline, unlocatedControl, unresolvedContainer
         case sourcePathUnverified, ancestorDepthLimit, fieldChanged, windowChanged
     }
@@ -29,20 +29,22 @@ enum FieldOverlayGeometryCapture {
                               isSame: (Node, Node) -> Bool,
                               now: () -> TimeInterval,
                               deadline: TimeInterval,
+                              protectedRects: [CGRect] = [],
+                              protectedGeometry: ((Node) -> [CGRect])? = nil,
                               onDiagnostics: ((Diagnostics) -> Void)? = nil) -> FieldOverlayGeometry? {
         let started = now()
-        let containers: Set<String> = ["AXGroup", "AXScrollArea", "AXSplitGroup", "AXLayoutArea", "AXWebArea", "AXWindow"]
-        let leaves: Set<String> = ["AXButton", "AXCheckBox", "AXRadioButton", "AXSlider", "AXSwitch",
-            "AXLink", "AXMenuItem", "AXPopUpButton", "AXTextField", "AXTextArea", "AXComboBox",
-            "AXStaticText", "AXImage", "AXScrollBar", "AXIncrementor", "AXProgressIndicator"]
-        var remaining = 48
+        let controls: Set<String> = ["AXButton", "AXCheckBox", "AXRadioButton", "AXSlider", "AXSwitch",
+            "AXLink", "AXMenuItem", "AXPopUpButton", "AXComboBox", "AXImage", "AXScrollBar",
+            "AXIncrementor", "AXProgressIndicator", "AXTextField", "AXTextArea"]
+        let neutralContainers: Set<String> = ["AXGroup", "AXScrollArea", "AXLayoutArea"]
+        var remaining = 32
         var visited: [(Node, NodeGeometry)] = []
         var exclusions: [CGRect] = []
         var failure: FailureReason?
         var ancestorCount = 0
         var excludedBranches = 0
         defer {
-            onDiagnostics?(.init(failureReason: failure, nodeCount: 48 - remaining,
+            onDiagnostics?(.init(failureReason: failure, nodeCount: 32 - remaining,
                 ancestorCount: ancestorCount, excludedBranchCount: excludedBranches,
                 elapsedMilliseconds: Int(max(0, now() - started) * 1000)))
         }
@@ -53,21 +55,22 @@ enum FieldOverlayGeometryCapture {
         func bounds(_ snapshot: NodeGeometry) -> CGRect? {
             snapshot.rect.flatMap { OverlayGeometry.isFiniteRect($0) ? $0 : nil }
         }
-        func read(_ node: Node) -> NodeGeometry? {
+        func read(_ node: Node, required: Bool = true) -> NodeGeometry? {
             if let existing = visited.first(where: { isSame($0.0, node) }) { return existing.1 }
             guard inTime() else { return nil }
-            guard remaining > 0 else { failure = .nodeLimit; return nil }
+            guard remaining > 0 else { if required { failure = .nodeLimit }; return nil }
             remaining -= 1
             guard let snapshot = geometry(node), !snapshot.role.isEmpty else {
-                if inTime() { failure = .nodeUnavailable }; return nil
+                if required, inTime() { failure = .nodeUnavailable }; return nil
             }
             guard inTime() else { return nil }
             visited.append((node, snapshot))
             return snapshot
         }
-        guard let field = read(element), let fieldRect = bounds(field) else {
+        guard let field = read(element), let rawFieldRect = bounds(field) else {
             if failure == nil { failure = .fieldBoundsUnavailable }; return nil
         }
+        var fieldRect = rawFieldRect
         guard let sourceWindow = window(element), inTime() else {
             if failure == nil { failure = .windowUnavailable }; return nil
         }
@@ -75,58 +78,72 @@ enum FieldOverlayGeometryCapture {
               let windowRect = bounds(windowGeometry), windowRect.intersects(fieldRect) else {
             if failure == nil { failure = .windowBoundsUnavailable }; return nil
         }
-        let neighborhood = fieldRect.insetBy(dx: -36, dy: -36)
+        exclusions = protectedRects.filter { OverlayGeometry.isFiniteRect($0) && $0.intersects(fieldRect) }
+        // kAXWindow binds the exact editor to its window. We no longer require
+        // a complete path through every ancestor and unrelated window subtree
+        // merely to draw a 10-point dot inside this already-known editor.
+        // Reserve time for final source continuity reads. Optional local scans
+        // contribute known obstacles; unavailable unrelated geometry cannot
+        // invalidate all in-field candidates.
+        func canInspectLocal() -> Bool { remaining > 2 && now() < deadline - 0.015 }
+        var viewport: (Node, CGRect)?
         var inspected: [Node] = []
-        func inspect(_ node: Node, depth: Int) -> Bool {
-            if inspected.contains(where: { isSame($0, node) }) { return true }
+        func inspectLocal(_ node: Node, depth: Int) {
+            guard canInspectLocal(), !isSame(node, element),
+                  !inspected.contains(where: { isSame($0, node) }) else { return }
             inspected.append(node)
-            guard let snapshot = read(node) else { return false }
+            guard let snapshot = read(node, required: false) else { return }
             let rect = bounds(snapshot)
-            if leaves.contains(snapshot.role) {
-                guard let rect else { failure = .unlocatedControl; return false }
-                if rect.intersects(neighborhood) { exclusions.append(rect); excludedBranches += 1 }
-                return true
+            // Static text belongs to the editable content. The presentation
+            // layer protects glyph/caret geometry separately; a multiline AX
+            // text bounding box is not a control-shaped obstacle.
+            if snapshot.role == "AXStaticText" { return }
+            if ["AXTextField", "AXTextArea", "AXComboBox"].contains(snapshot.role), rect == fieldRect { return }
+            if controls.contains(snapshot.role) {
+                if let rect, rect.intersects(fieldRect), !exclusions.contains(rect) {
+                    exclusions.append(rect); excludedBranches += 1
+                }
+                return
             }
-            // AXFrame is not a clipping contract. A container's descendants
-            // can escape its rectangle, even when that frame is far away.
-            // Resolve them completely within the budget or omit the control.
-            let descendants = children(node, min(48, remaining + 1))
-            guard inTime() else { return false }
-            guard let descendants else { failure = .unresolvedContainer; return false }
-            if descendants.isEmpty {
-                guard let rect else { failure = .unlocatedControl; return false }
-                if rect.intersects(neighborhood) { exclusions.append(rect); excludedBranches += 1 }
-                return true
+            guard depth < 2, canInspectLocal() else { return }
+            if let descendants = children(node, min(16, remaining - 2)) {
+                for child in descendants { inspectLocal(child, depth: depth + 1) }
+            } else if let rect, rect.intersects(fieldRect), !neutralContainers.contains(snapshot.role),
+                      rect.width < fieldRect.width || rect.height < fieldRect.height {
+                // An opaque, bounded leaf local to the editor is an obstacle.
+                // Layout wrappers and missing bounds require candidate-local
+                // verification, not a whole-window disappearance.
+                if !exclusions.contains(rect) { exclusions.append(rect); excludedBranches += 1 }
             }
-            guard depth < 2 else { failure = .unresolvedContainer; return false }
-            return descendants.allSatisfy { inspect($0, depth: depth + 1) }
         }
-        var branch = element
-        var reachedWindow = false
-        var ancestry: [Node] = [element]
-        for _ in 0..<8 {
-            guard inTime() else { return nil }
-            guard let enclosing = parent(branch),
-                  !ancestry.contains(where: { isSame($0, enclosing) }),
-                  let enclosingGeometry = read(enclosing), containers.contains(enclosingGeometry.role),
-                  let siblings = children(enclosing, min(48, remaining + 1)),
-                  siblings.contains(where: { isSame($0, branch) }) else {
-                if failure == nil { failure = .sourcePathUnverified }; return nil
-            }
-            guard inTime() else { return nil }
-            ancestorCount += 1
-            ancestry.append(enclosing)
-            for sibling in siblings where !isSame(sibling, branch) {
-                guard inspect(sibling, depth: 0) else { return nil }
-            }
-            if isSame(enclosing, sourceWindow) { reachedWindow = true; break }
-            branch = enclosing
+        if canInspectLocal(), let localChildren = children(element, min(16, remaining - 2)) {
+            for child in localChildren { inspectLocal(child, depth: 0) }
         }
-        guard reachedWindow else { failure = .ancestorDepthLimit; return nil }
+        if canInspectLocal(), let enclosing = parent(element), !isSame(enclosing, sourceWindow),
+           !isSame(enclosing, element), let enclosingGeometry = read(enclosing, required: false),
+           neutralContainers.contains(enclosingGeometry.role) {
+            ancestorCount = 1
+            // A positively bounded scroll area is the visible editor viewport.
+            // Ordinary layout-group frames are not a clipping contract.
+            if enclosingGeometry.role == "AXScrollArea", let visibleEditor = bounds(enclosingGeometry) {
+                let clipped = fieldRect.intersection(visibleEditor)
+                guard OverlayGeometry.isFiniteRect(clipped) else { failure = .fieldOutsideViewport; return nil }
+                fieldRect = clipped; viewport = (enclosing, visibleEditor)
+            }
+            if canInspectLocal(), let neighbors = children(enclosing, min(16, remaining - 2)),
+               neighbors.contains(where: { isSame($0, element) }) {
+                for neighbor in neighbors where !isSame(neighbor, element) { inspectLocal(neighbor, depth: 0) }
+            }
+        }
+        if canInspectLocal(), let protectedGeometry {
+            for rect in protectedGeometry(element) where OverlayGeometry.isFiniteRect(rect) && rect.intersects(fieldRect) {
+                if !exclusions.contains(rect) { exclusions.append(rect) }
+            }
+        }
         guard inTime() else { return nil }
         let finalField = geometry(element)
         guard inTime() else { return nil }
-        guard let finalField, bounds(finalField) == fieldRect, finalField.role == field.role else {
+        guard let finalField, bounds(finalField) == rawFieldRect, finalField.role == field.role else {
             failure = .fieldChanged; return nil
         }
         let finalWindow = window(element)
@@ -140,6 +157,67 @@ enum FieldOverlayGeometryCapture {
               finalWindowGeometry.role == windowGeometry.role else {
             failure = .windowChanged; return nil
         }
+        if let viewport {
+            let finalViewport = geometry(viewport.0)
+            guard inTime() else { return nil }
+            guard let finalViewport, finalViewport.role == "AXScrollArea", bounds(finalViewport) == viewport.1 else {
+                failure = .fieldChanged; return nil
+            }
+        }
         return FieldOverlayGeometry(fieldRect: fieldRect, windowRect: windowRect, exclusionRects: exclusions)
     }
+
+    enum TargetHitTest: Equatable { case field, blocked, unavailable }
+
+    /// Probe only this candidate, through the source application's hit API.
+    /// Unknown/coarse APIs remain distinguishable from a positively located
+    /// control. No window tree or text/label reads are needed for this proof.
+    static func targetHitTest<Node>(frame: CGRect, source: Node, sourceWindow: Node?,
+                                    hit: (CGPoint) -> Node?, role: (Node) -> String?,
+                                    parent: (Node) -> Node?, isSame: (Node, Node) -> Bool,
+                                    belongsToSourceApplication: (Node) -> Bool?,
+                                    now: () -> TimeInterval, deadline: TimeInterval) -> TargetHitTest {
+        guard OverlayGeometry.isFiniteRect(frame) else { return .unavailable }
+        func inTime() -> Bool { now() < deadline }
+        func belongsToField(_ node: Node) -> Bool? {
+            if isSame(node, source) { return true }
+            var branch = node
+            var visited = [node]
+            for _ in 0..<4 {
+                guard inTime(), let enclosing = parent(branch), inTime() else { return nil }
+                if isSame(enclosing, source) { return true }
+                if let sourceWindow, isSame(enclosing, sourceWindow) { return false }
+                if visited.contains(where: { isSame($0, enclosing) }) { return nil }
+                visited.append(enclosing); branch = enclosing
+            }
+            return nil
+        }
+        let inset = min(1, min(frame.width, frame.height) / 4)
+        let points = [CGPoint(x: frame.midX, y: frame.midY),
+            CGPoint(x: frame.minX + inset, y: frame.minY + inset),
+            CGPoint(x: frame.maxX - inset, y: frame.minY + inset),
+            CGPoint(x: frame.minX + inset, y: frame.maxY - inset),
+            CGPoint(x: frame.maxX - inset, y: frame.maxY - inset)]
+        let controlRoles: Set<String> = ["AXButton", "AXCheckBox", "AXRadioButton", "AXSlider", "AXSwitch",
+            "AXLink", "AXMenuItem", "AXPopUpButton", "AXTabGroup", "AXScrollBar", "AXIncrementor"]
+        var unavailable = false
+        for point in points {
+            guard inTime(), let target = hit(point), inTime() else { return .unavailable }
+            if isSame(target, source) { continue }
+            let applicationOwnership = belongsToSourceApplication(target)
+            guard inTime() else { return .unavailable }
+            if applicationOwnership == false { return .blocked }
+            guard inTime(), let targetRole = role(target), inTime() else { return .unavailable }
+            if controlRoles.contains(targetRole) { return .blocked }
+            if ["AXTextField", "AXTextArea", "AXComboBox", "AXStaticText"].contains(targetRole) {
+                let ownership = belongsToField(target)
+                guard inTime() else { return .unavailable }
+                if ownership == true { continue }
+                if ownership == false, targetRole != "AXStaticText" { return .blocked }
+            }
+            unavailable = true
+        }
+        return unavailable ? .unavailable : .field
+    }
+
 }

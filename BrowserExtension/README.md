@@ -8,9 +8,12 @@ release.
 
 - Local writing help is enabled on ordinary websites after install.
 - Add websites to the blocked list when you do not want Bean there.
-- A single Bean badge beside the active writing field shows the suggestion
-  count and opens suggestions, **Proofread**, and **Rewrite**. Underlines stay
-  quiet until you hover or click. The native Mac badge yields while the extension
+- A single 10-pixel brown dot sits inside the active text area, preferring a
+  clear top-right corner; it turns amber when suggestions exist. Hover shows
+  status and click opens suggestions, **Proofread**, and **Rewrite**. Its target
+  is 28 pixels in normal fields or 20 pixels in compact fields. Exposed text,
+  caret and controls guide alternate inside placement; an unusable field can
+  hide the dot. Underlines stay quiet until you hover or click. The native Mac dot yields while the extension
   owns a supported, focused page field; Mac keyboard shortcuts remain available.
 - Correction cards offer **Disable on this field** and **Disable on this
   website**. Field blocking lasts for the current page session; website

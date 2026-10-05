@@ -284,7 +284,7 @@
     "boxSizing", "width", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
     "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
     "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing",
-    "textTransform", "lineHeight", "textIndent"
+    "textTransform", "lineHeight", "textIndent", "textAlign", "direction", "writingMode", "tabSize"
   ];
   function textareaRects(el, start, end) {
     const cs = window.getComputedStyle(el);

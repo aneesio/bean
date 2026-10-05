@@ -1,6 +1,6 @@
 # Bean 1.7.0 — public beta candidate
 
-Build **17**, with Chromium extension **0.8.3**. This candidate focuses on writing
+Build **18**, with Chromium extension **0.8.4**. This candidate focuses on writing
 in other apps; ordinary launch and completed setup return to the menu-bar
 experience.
 
@@ -9,11 +9,14 @@ experience.
 - Field controls are now tiny status dots without a pill, logo or visible count.
   Brand-brown dots indicate no current suggestions; amber filled dots indicate
   suggestions. Hover shows status and click opens the review/actions panel.
-- Placement searches the complete field edges and handles neutral layout
-  wrappers without bounds, so valid clear space is less likely to be missed.
-- The whole click target must fit in clear space outside the editor, away from
-  neighboring controls. When safe placement is unavailable, the dot hides while
-  underlines and menu-bar/shortcut assistance remain available.
+- Place the dot inside the exact text area, preferring a clear top-right corner.
+  Normal fields keep a 28-point pointer target; compact fields use 20 points,
+  with the same 10-point dot. Text, caret and exposed control geometry guide
+  alternate inside positions; no candidate is clamped over a Send button.
+- Visibility no longer depends on an empty outside margin or verifying every
+  unrelated app/page branch. Full-window editors can show an inside dot. Missing
+  exact source geometry, obscured fields or no usable clear space still hide it;
+  underlines and menu-bar/shortcut assistance keep their own capability paths.
 
 - One field-side assistant provides quiet checking status, issue review,
   Proofread and Rewrite. Supported browser fields use the extension assistant

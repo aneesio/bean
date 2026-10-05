@@ -242,7 +242,7 @@ struct OnboardingView: View {
                 Toggle("Underline issues while I type", isOn: $settings.inlineHighlightsEnabled)
                     .disabled(!permission.granted)
                 Text(permission.granted
-                     ? "Local checks are on by default. Click the Bean control beside your field to review issues, Proofread, or Rewrite. Underlines appear when precise text placement is available."
+                     ? "Local checks are on by default. Click the Bean control inside your field to review issues, Proofread, or Rewrite. Underlines appear when precise text placement is available."
                      : "Allow Accessibility to activate live checking and direct replacement in your apps.")
                     .font(BeanDesign.Typography.caption())
                     .foregroundColor(.secondary)

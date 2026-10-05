@@ -22,22 +22,33 @@ struct OverlayScreenArea: Equatable {
     }
 }
 
-/// A fresh, content-free view of the exact editor and its surrounding controls.
-/// A missing/incomplete snapshot cannot establish a safe pointer target.
+/// A fresh, content-free view of the exact editor and known editor-local controls.
+/// A missing field/window snapshot cannot establish an in-field pointer target.
 struct FieldOverlayGeometry: Equatable {
     let fieldRect: CGRect
     let windowRect: CGRect
     let exclusionRects: [CGRect]
-    var validatedNeighborhood: CGRect { fieldRect.insetBy(dx: -36, dy: -36) }
+    var validatedNeighborhood: CGRect { fieldRect }
 }
 
 enum OverlayGeometry {
-    /// Bean's smallest pointer/keyboard target. The visible launcher and all
-    /// compact overlay controls use this same value so their hit geometry never
-    /// silently shrinks below the product's desktop accessibility floor.
+    /// Standard desktop pointer/keyboard target. Very short editors use the
+    /// explicit compactFieldControlSize exception so their launcher can remain
+    /// inside the field; other overlay controls retain this normal target.
     static let minimumMotorTarget: CGFloat = 28
     static let beanLauncherSize: CGFloat = minimumMotorTarget
     static let statusDotDiameter: CGFloat = 10
+    static let compactFieldControlSize: CGFloat = 20
+
+    /// Compact single-line fields retain a useful in-field target instead of
+    /// forcing the normal target outside their bounds.
+    static func fieldControlSize(for fieldRect: CGRect) -> CGSize? {
+        guard isFiniteRect(fieldRect) else { return nil }
+        let shortest = min(fieldRect.width, fieldRect.height)
+        guard shortest >= compactFieldControlSize else { return nil }
+        let side = shortest < minimumMotorTarget + 4 ? compactFieldControlSize : minimumMotorTarget
+        return CGSize(width: side, height: side)
+    }
     static let highlightInteractionHeight: CGFloat = 6
 
     /// Chooses the display containing the anchor. If the point lies in a gap or
@@ -142,46 +153,58 @@ enum OverlayGeometry {
         )
     }
 
-    /// Validate the entire intercepting panel, including its transparent edges.
-    /// Never move an automatic control into an editor to keep it visible.
+    /// Validate the complete intercepting target, including transparent edges.
+    /// The automatic launcher belongs to the editor; it never floats over an
+    /// outside send button, toolbar or adjacent application's window.
     static func isSafeFieldControlFrame(_ frame: CGRect, geometry: FieldOverlayGeometry,
                                         in visibleFrame: CGRect, clearance: CGFloat = 2) -> Bool {
         guard isFiniteRect(frame), isFiniteRect(geometry.fieldRect),
               isFiniteRect(geometry.windowRect), isFiniteRect(visibleFrame),
-              geometry.windowRect.contains(frame), visibleFrame.contains(frame),
-              geometry.validatedNeighborhood.contains(frame),
-              !geometry.fieldRect.insetBy(dx: -clearance, dy: -clearance).intersects(frame),
+              geometry.fieldRect.contains(frame), geometry.windowRect.contains(frame),
+              visibleFrame.contains(frame),
               geometry.exclusionRects.allSatisfy({ isFiniteRect($0) && !$0.insetBy(dx: -clearance, dy: -clearance).intersects(frame) }) else { return false }
         return true
     }
 
-    /// Search the verified free intervals along each editor edge. Obstacles
-    /// cannot force an inside-field fallback or a fixed-distance search cutoff.
+    /// Prefer the visible editor's top-right corner, then slide along its
+    /// inside edges to avoid local controls and protected text/caret rectangles.
+    /// Fullscreen editors and fields touching a window edge use this same path.
     static func issueTrayOrigin(geometry: FieldOverlayGeometry?, panelSize: CGSize,
                                 in visibleFrame: CGRect, gap: CGFloat = 4) -> CGPoint? {
+        issueTrayCandidateFrames(geometry: geometry, panelSize: panelSize,
+                                 in: visibleFrame, gap: gap).first?.origin
+    }
+
+    /// Ordered, finite candidates allow the presentation layer to perform an
+    /// optional point hit-test of the actual target before showing a window.
+    static func issueTrayCandidateFrames(geometry: FieldOverlayGeometry?, panelSize: CGSize,
+                                        in visibleFrame: CGRect, gap: CGFloat = 4) -> [CGRect] {
         guard let geometry, panelSize.width.isFinite, panelSize.height.isFinite,
-              panelSize.width >= minimumMotorTarget, panelSize.height >= minimumMotorTarget,
+              panelSize.width >= compactFieldControlSize, panelSize.height >= compactFieldControlSize,
+              gap.isFinite, gap >= 0,
               isFiniteRect(geometry.fieldRect), isFiniteRect(geometry.windowRect), isFiniteRect(visibleFrame),
-              geometry.exclusionRects.allSatisfy(isFiniteRect) else { return nil }
-        let field = geometry.fieldRect
-        let allowed = geometry.windowRect.intersection(visibleFrame).intersection(geometry.validatedNeighborhood)
-        guard isFiniteRect(allowed), allowed.width >= panelSize.width, allowed.height >= panelSize.height else { return nil }
+              geometry.exclusionRects.allSatisfy(isFiniteRect) else { return [] }
+        let allowed = geometry.fieldRect.intersection(geometry.windowRect).intersection(visibleFrame)
+        guard isFiniteRect(allowed), allowed.width >= panelSize.width, allowed.height >= panelSize.height else { return [] }
+        // A single-line editor can have exactly one target-height of space.
+        // Reduce cosmetic padding, never shrink or move the target outside it.
+        let padding = min(panelSize.width, panelSize.height) < minimumMotorTarget ? min(gap, 2) : gap
+        let insetX = min(padding, max(0, (allowed.width - panelSize.width) / 2))
+        let insetY = min(padding, max(0, (allowed.height - panelSize.height) / 2))
+        let minX = allowed.minX + insetX, maxX = allowed.maxX - panelSize.width - insetX
+        let minY = allowed.minY + insetY, maxY = allowed.maxY - panelSize.height - insetY
         let sides: [(vertical: Bool, normal: CGFloat, ideal: CGFloat)] = [
-            (true, field.maxX + gap, field.minY),
-            (false, field.minY - panelSize.height - gap, field.maxX - panelSize.width),
-            (true, field.minX - panelSize.width - gap, field.minY),
-            (false, field.maxY + gap, field.maxX - panelSize.width)
+            (false, maxY, maxX), // top, starting at the right
+            (true, maxX, maxY),  // right, starting at the top
+            (false, minY, maxX),
+            (true, minX, maxY)
         ]
+        var result: [CGRect] = []
         for side in sides {
             let normalSize = side.vertical ? panelSize.width : panelSize.height
             let tangentSize = side.vertical ? panelSize.height : panelSize.width
-            let normalMin = side.vertical ? allowed.minX : allowed.minY
-            let normalMax = side.vertical ? allowed.maxX : allowed.maxY
-            guard side.normal >= normalMin, side.normal + normalSize <= normalMax else { continue }
-            let fieldMin = side.vertical ? field.minY : field.minX
-            let fieldMax = (side.vertical ? field.maxY : field.maxX) - tangentSize
-            let lower = max(min(fieldMin, fieldMax), side.vertical ? allowed.minY : allowed.minX)
-            let upper = min(max(fieldMin, fieldMax), (side.vertical ? allowed.maxY : allowed.maxX) - tangentSize)
+            let lower = side.vertical ? minY : minX
+            let upper = side.vertical ? maxY : maxX
             guard lower <= upper else { continue }
             var free: [ClosedRange<CGFloat>] = [lower...upper]
             for obstacle in geometry.exclusionRects {
@@ -199,19 +222,21 @@ enum OverlayGeometry {
                     return remaining
                 }
             }
-            let candidates = free.flatMap { interval -> [CGFloat] in
+            let tangents = free.flatMap { interval -> [CGFloat] in
                 let nearest = min(max(side.ideal, interval.lowerBound), interval.upperBound)
-                // Geometry APIs can treat touching bounds differently. Validate
-                // an interior point too, without crossing any blocked interval.
                 return [nearest, min(max(nearest + 0.5, interval.lowerBound), interval.upperBound),
-                        min(max(nearest - 0.5, interval.lowerBound), interval.upperBound)]
+                        min(max(nearest - 0.5, interval.lowerBound), interval.upperBound), interval.lowerBound]
             }.sorted { abs($0 - side.ideal) < abs($1 - side.ideal) }
-            for tangent in candidates {
+            for tangent in tangents {
                 let origin = side.vertical ? CGPoint(x: side.normal, y: tangent) : CGPoint(x: tangent, y: side.normal)
-                if isSafeFieldControlFrame(CGRect(origin: origin, size: panelSize), geometry: geometry, in: visibleFrame) { return origin }
+                let frame = CGRect(origin: origin, size: panelSize)
+                if !result.contains(frame), isSafeFieldControlFrame(frame, geometry: geometry, in: visibleFrame) {
+                    result.append(frame)
+                    if result.count == 96 { return result }
+                }
             }
         }
-        return nil
+        return result
     }
 
     static func isFiniteRect(_ rect: CGRect) -> Bool {

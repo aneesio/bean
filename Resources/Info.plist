@@ -15,7 +15,7 @@
     <key>CFBundleShortVersionString</key>
     <string>1.7.0</string>
     <key>CFBundleVersion</key>
-    <string>17</string>
+    <string>18</string>
     <!-- App icon. The build script copies Resources/Icons/AppIcon.icns into the
          bundle when present; until a real icon is added this key simply points
          at a file that may not exist yet (harmless for a menu-bar app). -->

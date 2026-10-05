@@ -1,6 +1,6 @@
 # Supported Apps and Surfaces
 
-Policy revision: **1.7.0 candidate, build 17 / extension 0.8.3, October 5, 2026**. Capability
+Policy revision: **1.7.0 candidate, build 18 / extension 0.8.4, October 5, 2026**. Capability
 routing is covered by `FieldCapabilityPolicyTests`; implementation checks are
 covered by focused-field, native-editing, issue-mapping, and geometry tests.
 These do not substitute for live compatibility checks in each application.
@@ -43,14 +43,23 @@ count. Brand-brown dots show no current suggestions; amber filled dots indicate
 suggestions. Tooltip/accessibility status and the clicked panel retain details;
 a neutral dot is not an assurance that the draft is error-free.
 
-The full 28-point pointer target must fit in verified clear space outside the
-editable area and within the source window/viewport. Neighboring controls and
-unknown occupied regions exclude positions. Missing full field/window geometry,
-unverifiable surrounding layout, or no safe candidate hides the dot; there is
-no inside-field, caret-only or guessed Slack click-position fallback. Local
-checks and underlines continue where supported, and explicit menu-bar/shortcut
-writing actions remain available. Hiding the dot must not revive a larger native
-launcher or produce duplicate native/browser assistance.
+The dot sits inside the exact editable area, preferring a clear top-right corner.
+The pointer target is 28 points in normal fields and 20 points in compact fields;
+the visible dot remains 10 points. Placement avoids available text and caret
+bounds, scrollbars, resize grips and nearby exposed controls, and must stay within
+the source window/viewport. Another clear inside edge is used when the preferred
+corner is occupied. A full-window editor no longer needs outside space.
+
+Native Accessibility text positions are not available in every app. The native
+path uses exposed source-local geometry and bounded nearby-control checks,
+without requiring the full surrounding app tree to be verifiable. Browser fields
+use rendered text fragments or a directional, scroll-aware text-control mirror.
+These checks improve ordinary-field visibility; they do not certify arbitrary
+hidden controls or application-specific custom rendering. Exact field/window
+bounds remain required. Very small, fully occupied, obscured or unsupported
+fields may hide the dot. Underlines and explicit menu-bar/shortcut actions remain
+available where their own capabilities permit. Hiding the dot must not revive a
+larger native launcher or produce duplicate native/browser assistance.
 
 ## Control exclusions
 

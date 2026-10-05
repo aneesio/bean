@@ -215,7 +215,7 @@ struct SettingsView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Write in your apps").font(.headline)
-                    Text("Live suggestions appear beside your active field. Proofread and rewrite replace text directly. Bean offers Undo when it can safely restore the original.")
+                    Text("Live suggestions appear inside your active field. Proofread and rewrite replace text directly. Bean offers Undo when it can safely restore the original.")
                         .font(.caption).foregroundColor(BeanDesign.secondaryText)
                 }
                 Spacer()
@@ -267,7 +267,7 @@ struct SettingsView: View {
         Group {
             Toggle("Live suggestions", isOn: liveSuggestionsBinding)
                 .accessibilityHint("Runs local checks and underlines issues in supported fields")
-            Text("Checks spelling, grammar, and spacing while you type. Shows underlines where the app exposes text positions, and an issue button beside the field otherwise. Local checks have no token cost.")
+            Text("Checks spelling, grammar, and spacing while you type. Shows underlines where the app exposes text positions, and a status dot inside the field otherwise. Local checks have no token cost.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
 
             Divider()
@@ -290,8 +290,8 @@ struct SettingsView: View {
             Divider()
 
             Toggle("Bean dot", isOn: $settings.bubbleEnabled)
-                .accessibilityHint("Shows a status dot beside supported fields when there is clear space")
-            Text("A small dot shows writing status. Hover for status or click for suggestions and writing actions. It stays hidden when there is no clear space beside the field.")
+                .accessibilityHint("Shows a status dot inside supported fields when there is clear space")
+            Text("A small dot shows writing status. Hover for status or click for suggestions and writing actions. It stays hidden when there is no clear space inside the field.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
 
             DisclosureGroup("Advanced") { writingAdvancedOptions }

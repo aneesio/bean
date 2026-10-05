@@ -20,6 +20,7 @@ final class BeanBubbleService {
     // focused element. Switching to a different field/app resets it. Keyed by AX
     // element identity (no text, no window title) — privacy-safe.
     private var bubbleOffset: CGSize = .zero
+    private var bubbleTargetSize = CGSize(width: 28, height: 28)
     private var offsetElement: AXUIElement?
     private var sourcePID: pid_t?
     private var dismissedElement: AXUIElement?
@@ -57,7 +58,7 @@ final class BeanBubbleService {
               AccessibilityService.isSameElement(field.element, offsetElement),
               !field.isSecure,
               let origin = bubbleOrigin(for: field) else { hide("fieldChanged"); return }
-        controller.moveBubble(to: origin)
+        controller.moveBubble(to: origin, targetSize: bubbleTargetSize.width)
     }
 
     private func dismissForCurrentField() {
@@ -107,7 +108,7 @@ final class BeanBubbleService {
         controller.showBubble(
             at: origin,
             savedOffset: bubbleOffset,
-            openOnHover: settings.bubbleOpenOnHover,
+            openOnHover: settings.bubbleOpenOnHover, targetSize: bubbleTargetSize.width,
             isSafeOrigin: { [weak self] point in self?.isSafeBubbleOrigin(point) == true },
             onOpen: { [weak self] intent in self?.openMenu(intent: intent) },
             onDismiss: { [weak self] in self?.dismissForCurrentField() },
@@ -190,10 +191,17 @@ final class BeanBubbleService {
     private func bubbleOrigin(for field: AccessibilityService.FocusedField) -> CGPoint? {
         guard settings.bubbleOnFocus || (settings.bubbleOnSelection && (AccessibilityService.selectedRange(of: field.element)?.length ?? 0) > 0),
               let geometry = AccessibilityService.fieldOverlayGeometry(for: field.element),
+              let size = OverlayGeometry.fieldControlSize(for: geometry.fieldRect),
               let screen = OverlayGeometry.screen(containing: geometry.fieldRect, from: OverlayScreenArea.current) else { return nil }
-        return OverlayGeometry.issueTrayOrigin(geometry: geometry,
-            panelSize: CGSize(width: OverlayGeometry.beanLauncherSize, height: OverlayGeometry.beanLauncherSize),
-            in: screen.visibleFrame)
+        bubbleTargetSize = size
+        var checked: [CGRect] = []
+        for frame in OverlayGeometry.issueTrayCandidateFrames(geometry: geometry, panelSize: size, in: screen.visibleFrame) {
+            if checked.contains(where: { abs($0.minX - frame.minX) < size.width && abs($0.minY - frame.minY) < size.height }) { continue }
+            checked.append(frame)
+            if AccessibilityService.fieldOverlayTargetHitTest(frame, for: field.element) != .blocked { return frame.origin }
+            if checked.count == 3 { break }
+        }
+        return nil
     }
 
     /// Called on every legacy drag move/commit, not just at initial display.
@@ -206,8 +214,9 @@ final class BeanBubbleService {
               let geometry = AccessibilityService.fieldOverlayGeometry(for: element),
               let screen = OverlayGeometry.screen(containing: geometry.fieldRect, from: OverlayScreenArea.current) else { return false }
         return OverlayGeometry.isSafeFieldControlFrame(
-            CGRect(origin: point, size: CGSize(width: OverlayGeometry.beanLauncherSize, height: OverlayGeometry.beanLauncherSize)),
+            CGRect(origin: point, size: bubbleTargetSize),
             geometry: geometry, in: screen.visibleFrame)
+            && AccessibilityService.fieldOverlayTargetHitTest(CGRect(origin: point, size: bubbleTargetSize), for: element) != .blocked
     }
 
     private func diag(_ extra: [String: String]) {

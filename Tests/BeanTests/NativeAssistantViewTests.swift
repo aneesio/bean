@@ -140,6 +140,160 @@ final class NativeAssistantViewTests: XCTestCase {
         XCTAssertFalse(controller.isShowing, "An old position cannot survive a newly occupied target")
     }
 
+    func testCompactBadgeAndLegacyPanelResizeKeepTheVisibleDotSmall() throws {
+        _ = NSApplication.shared
+        let state = NativeAssistantState(phase: .complete, issueCount: 99)
+        let badge = NSHostingView(rootView: NativeAssistantBadgeView(state: state,
+            onOpen: {}, onKeyboardOpen: {}, targetSize: 20))
+        XCTAssertEqual(badge.fittingSize, CGSize(width: 20, height: 20))
+        let legacy = NSHostingView(rootView: BeanBubbleView(openOnHover: false,
+            onOpen: { _ in }, onDismiss: {}, targetSize: 20))
+        XCTAssertEqual(legacy.fittingSize, CGSize(width: 20, height: 20))
+        XCTAssertEqual(NSHostingView(rootView: NativeStatusDot(hasSuggestions: true)).fittingSize,
+            CGSize(width: 10, height: 10))
+
+        let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let controller = BeanBubbleController()
+        defer {
+            let windows = NSApp.windows.filter { !previousWindows.contains(ObjectIdentifier($0)) }
+            controller.hide()
+            for window in windows { window.isReleasedWhenClosed = false; window.close() }
+        }
+        let placement = fixturePlacement
+        let visible = try XCTUnwrap(NSScreen.screens.first?.visibleFrame)
+        var targetSize: CGFloat = 28
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry: placement,
+            panelSize: CGSize(width: targetSize, height: targetSize), in: visible))
+        controller.showBubble(at: origin, savedOffset: .zero, openOnHover: false,
+            isSafeOrigin: { point in OverlayGeometry.isSafeFieldControlFrame(
+                CGRect(origin: point, size: CGSize(width: targetSize, height: targetSize)),
+                geometry: placement, in: visible) }, onOpen: { _ in }, onDismiss: {},
+            onCommitOffset: { _ in }, onReset: {})
+        XCTAssertEqual(controller.bubbleFrame?.size, CGSize(width: 28, height: 28))
+        targetSize = 20
+        let compactOrigin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry: placement,
+            panelSize: CGSize(width: 20, height: 20), in: visible))
+        controller.moveBubble(to: compactOrigin, targetSize: 20)
+        let compactFrame = try XCTUnwrap(controller.bubbleFrame)
+        XCTAssertEqual(compactFrame.size, CGSize(width: 20, height: 20))
+        XCTAssertTrue(placement.fieldRect.contains(compactFrame))
+        let panel = try XCTUnwrap(NSApp.windows.first {
+            !previousWindows.contains(ObjectIdentifier($0)) && $0.accessibilityIdentifier() == "com.bean.overlay.legacy-control"
+        })
+        let host = try XCTUnwrap(panel.contentViewController as? NSHostingController<BeanBubbleView>)
+        XCTAssertEqual(host.rootView.targetSize, 20, "Resizing the panel must also resize its semantic control")
+    }
+
+    func testAssistantPrefersTopRightWithItsWholeTargetInsideTheEditor() throws {
+        _ = NSApplication.shared
+        let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let controller = HighlightOverlayController()
+        defer { closeOwnedOverlay(controller, excluding: previousWindows) }
+        let placement = fixturePlacement
+        controller.render(entries: [], selectedID: nil, position: nil,
+            sourceAnchor: placement.fieldRect, placementGeometry: placement)
+        let panel = try XCTUnwrap(ownedPanels(excluding: previousWindows).first {
+            $0.accessibilityIdentifier() == "com.bean.overlay.field-control"
+        })
+        XCTAssertEqual(panel.frame.size, CGSize(width: 28, height: 28))
+        XCTAssertTrue(placement.fieldRect.contains(panel.frame), "The transparent target must be inside too")
+        XCTAssertEqual(panel.frame.maxX, placement.fieldRect.maxX - 4, accuracy: 0.01)
+        XCTAssertEqual(panel.frame.maxY, placement.fieldRect.maxY - 4, accuracy: 0.01)
+
+        let compactField = CGRect(x: placement.fieldRect.minX, y: placement.fieldRect.minY, width: 240, height: 24)
+        let compact = FieldOverlayGeometry(fieldRect: compactField, windowRect: placement.windowRect, exclusionRects: [])
+        controller.render(entries: [], selectedID: nil, position: nil,
+            sourceAnchor: compactField, placementGeometry: compact)
+        XCTAssertEqual(panel.frame.size, CGSize(width: 20, height: 20))
+        XCTAssertTrue(compactField.contains(panel.frame))
+        let host = try XCTUnwrap(panel.contentViewController as? NSHostingController<NativeAssistantBadgeView>)
+        XCTAssertEqual(host.rootView.targetSize, 20)
+    }
+
+    func testAssistantMovesAwayFromKnownTextInThePreferredCorner() throws {
+        _ = NSApplication.shared
+        let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let controller = HighlightOverlayController()
+        defer { closeOwnedOverlay(controller, excluding: previousWindows) }
+        let placement = fixturePlacement
+        let text = CGRect(x: placement.fieldRect.maxX - 64, y: placement.fieldRect.maxY - 26,
+            width: 60, height: 20)
+        let protected = FieldOverlayGeometry(fieldRect: placement.fieldRect, windowRect: placement.windowRect,
+            exclusionRects: [text])
+        controller.render(entries: [], selectedID: nil, position: nil,
+            sourceAnchor: protected.fieldRect, placementGeometry: protected)
+        let frame = try XCTUnwrap(ownedPanels(excluding: previousWindows).first {
+            $0.accessibilityIdentifier() == "com.bean.overlay.field-control"
+        }).frame
+        XCTAssertTrue(protected.fieldRect.contains(frame))
+        XCTAssertFalse(frame.intersects(text.insetBy(dx: -2, dy: -2)),
+            "A ten-point painted dot must not disguise a target covering known text")
+    }
+
+    func testAssistantUsesAnotherInsideCornerWhenThePointProbeRejectsThePreferredTarget() throws {
+        _ = NSApplication.shared
+        let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let controller = HighlightOverlayController()
+        defer { closeOwnedOverlay(controller, excluding: previousWindows) }
+        let placement = fixturePlacement
+        let blocked = CGRect(x: placement.fieldRect.maxX - 32, y: placement.fieldRect.maxY - 32,
+            width: 28, height: 28)
+        var checked: [CGRect] = []
+        controller.validateFieldControl = { frame in
+            checked.append(frame)
+            return !frame.intersects(blocked)
+        }
+        controller.render(entries: [], selectedID: nil, position: nil,
+            sourceAnchor: placement.fieldRect, placementGeometry: placement)
+        let frame = try XCTUnwrap(ownedPanels(excluding: previousWindows).first {
+            $0.accessibilityIdentifier() == "com.bean.overlay.field-control"
+        }).frame
+        XCTAssertEqual(checked.first, blocked)
+        XCTAssertGreaterThan(checked.count, 1)
+        XCTAssertLessThanOrEqual(checked.count, 3, "Candidate probes remain bounded")
+        XCTAssertTrue(placement.fieldRect.contains(frame))
+        XCTAssertFalse(frame.intersects(blocked))
+    }
+
+    func testFreshPreparationRelocatesTheControlAndDoesNotOpenFromItsStalePointerTarget() throws {
+        _ = NSApplication.shared
+        let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let controller = HighlightOverlayController()
+        defer {
+            controller.onPrepareAssistant = nil
+            closeOwnedOverlay(controller, excluding: previousWindows)
+        }
+        let placement = fixturePlacement
+        controller.render(entries: [], selectedID: nil, position: nil,
+            sourceAnchor: placement.fieldRect, placementGeometry: placement)
+        let control = try XCTUnwrap(ownedPanels(excluding: previousWindows).first {
+            $0.accessibilityIdentifier() == "com.bean.overlay.field-control"
+        })
+        let host = try XCTUnwrap(control.contentViewController as? NSHostingController<NativeAssistantBadgeView>)
+        let originalFrame = control.frame
+        let newGeometry = FieldOverlayGeometry(fieldRect: placement.fieldRect, windowRect: placement.windowRect,
+            exclusionRects: [originalFrame])
+        var preparations = 0
+        controller.onPrepareAssistant = {
+            preparations += 1
+            controller.render(entries: [], selectedID: nil, position: nil,
+                sourceAnchor: newGeometry.fieldRect, placementGeometry: newGeometry)
+        }
+        host.rootView.onOpen()
+        XCTAssertEqual(preparations, 1)
+        XCTAssertNotEqual(control.frame, originalFrame)
+        XCTAssertTrue(placement.fieldRect.contains(control.frame))
+        XCTAssertFalse(ownedPanels(excluding: previousWindows).contains {
+            $0.isVisible && $0.accessibilityIdentifier() == "com.bean.overlay.assistant"
+        }, "A relocated control cannot open an assistant from the old click location")
+        host.rootView.onOpen()
+        XCTAssertEqual(preparations, 2)
+        XCTAssertTrue(ownedPanels(excluding: previousWindows).contains {
+            $0.isVisible && $0.accessibilityIdentifier() == "com.bean.overlay.assistant"
+        }, "A fresh click at the stable target can still open the assistant")
+        XCTAssertFalse(controller.ownsKeyboardInteraction)
+    }
+
     private var fixturePlacement: FieldOverlayGeometry {
         let visible = NSScreen.screens.first?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         return FieldOverlayGeometry(fieldRect: CGRect(x: visible.midX - 150, y: visible.midY - 50, width: 300, height: 100),

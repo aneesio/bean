@@ -38,8 +38,8 @@ No personal writing or paid provider requests are needed for the automated
 work. Developer signing and notarization are deferred, so local candidates must
 remain truthfully labelled ad hoc and unnotarized.
 
-Latest build 17 combined checks: `scripts/run_all_tests.sh` passed 622 Swift
-test cases (614 passed, eight skipped), all 13 browser suites, standalone logic,
+Latest build 18 combined checks: `scripts/run_all_tests.sh` passed 639 Swift
+test cases (631 passed, eight skipped), all 13 browser suites, standalone logic,
 shell syntax, release metadata and repository audit. The skips are five
 unavailable own-process AX web-area fixtures, one SwiftUI descendant fixture
 whose plain Button baseline also lacks AX descendants, and two opt-in
@@ -147,3 +147,14 @@ preserves text and reaches Send/Attach/Mic with both normal and zero-frame AX
 wrappers, but its app-scoped screenshot cannot certify another process's
 overlay presence. Deeper AI was restored on and the fixture closed. See the
 candidate QA record for exact hashes and remaining live-validation limits.
+
+Build 18 replaces the outside-only rule with a dot inside the exact visible
+editor, preferring top-right and using another clear inside edge when needed.
+The 10-point brown/amber paint is unchanged; compact fields use a 20-point
+target instead of forcing a 28-point target outside them. Whole-window/page
+proof is removed as a visibility prerequisite. Bounded source-local text,
+caret, controls, viewport and candidate checks remain, with fresh focus/text
+validation before opening. Independent reviews and the combined automated
+gate pass, including six real WebKit cases. Exposed native text geometry and
+arbitrary custom editors remain best effort. Packaging and external live
+visibility evidence are separate from these source/owned-fixture passes.

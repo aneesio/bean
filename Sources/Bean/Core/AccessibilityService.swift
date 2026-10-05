@@ -118,11 +118,12 @@ enum AccessibilityService {
         CFEqual(a, b)
     }
 
-    /// Read only geometry/roles around the captured editor. No document text,
-    /// labels or value attributes are requested. Opaque or excessively large
-    /// nearby branches fail closed rather than covering an unknown control.
+    /// Capture the exact editor/window and known editor-local control geometry.
+    /// Optional range bounds protect the caret/selection without reading labels
+    /// or inspecting unrelated application branches.
     @MainActor
     static func fieldOverlayGeometry(for element: AXUIElement,
+                                     protectedTextRects: [CGRect] = [],
                                      onDiagnostics: ((FieldOverlayGeometryCapture.Diagnostics) -> Void)? = nil) -> FieldOverlayGeometry? {
         let started = ProcessInfo.processInfo.systemUptime
         let deadline = started + 0.030
@@ -185,11 +186,84 @@ enum AccessibilityService {
                   values.allSatisfy({ CFGetTypeID($0 as CFTypeRef) == AXUIElementGetTypeID() }) else { return nil }
             return values.map { $0 as! AXUIElement }
         }
+        func selectionProtection(_ node: AXUIElement) -> [CGRect] {
+            guard deadline - ProcessInfo.processInfo.systemUptime > 0.015 else { return [] }
+            AXUIElementSetMessagingTimeout(node, 0.002)
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var copied: AnyObject?
+            guard AXUIElementCopyAttributeValue(node, kAXSelectedTextRangeAttribute as CFString, &copied) == .success,
+                  withinBudget(), let copied, CFGetTypeID(copied) == AXValueGetTypeID() else { return [] }
+            var selected = CFRange(location: 0, length: 0)
+            guard AXValueGetValue(copied as! AXValue, .cfRange, &selected), selected.location >= 0, selected.length >= 0,
+                  let range = AXValueCreate(.cfRange, &selected) else { return [] }
+            var bounds: AnyObject?
+            guard AXUIElementCopyParameterizedAttributeValue(node, kAXBoundsForRangeParameterizedAttribute as CFString,
+                  range, &bounds) == .success, withinBudget(), let bounds,
+                  CFGetTypeID(bounds) == AXValueGetTypeID(), let primary = NSScreen.screens.first else { return [] }
+            var axRect = CGRect.zero
+            guard AXValueGetValue(bounds as! AXValue, .cgRect, &axRect), axRect.height > 0,
+                  axRect.origin.x.isFinite, axRect.origin.y.isFinite, axRect.width.isFinite, axRect.height.isFinite else { return [] }
+            let rect = CGRect(x: axRect.minX, y: primary.frame.height - axRect.maxY,
+                              width: max(axRect.width, 1), height: axRect.height)
+            return OverlayGeometry.isFiniteRect(rect) ? [rect] : []
+        }
         return FieldOverlayGeometryCapture.capture(element: element,
             window: { attribute($0, kAXWindowAttribute as String) }, geometry: geometry,
             parent: { attribute($0, kAXParentAttribute as String) }, children: children,
             isSame: isSameElement, now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline,
+            protectedRects: protectedTextRects, protectedGeometry: selectionProtection,
             onDiagnostics: onDiagnostics)
+    }
+
+    typealias FieldOverlayTargetHitTest = FieldOverlayGeometryCapture.TargetHitTest
+
+    /// Content-free, application-local hit probes of the complete target.
+    /// Querying the source application avoids intercepting Bean's own overlay.
+    /// Positive control hits reject a candidate; unavailable AX hit capability
+    /// remains a generic best-effort placement rather than hiding the editor.
+    @MainActor
+    static func fieldOverlayTargetHitTest(_ frame: CGRect, for element: AXUIElement) -> FieldOverlayTargetHitTest {
+        guard OverlayGeometry.isFiniteRect(frame), let primary = NSScreen.screens.first else { return .unavailable }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return .unavailable }
+        let root = AXUIElementCreateApplication(pid)
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.010
+        func prepare(_ node: AXUIElement) -> Bool {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { return false }
+            AXUIElementSetMessagingTimeout(node, Float(min(remaining, 0.002)))
+            return true
+        }
+        func read(_ node: AXUIElement, attribute: String) -> AnyObject? {
+            guard prepare(node) else { return nil }
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var copied: AnyObject?
+            guard AXUIElementCopyAttributeValue(node, attribute as CFString, &copied) == .success,
+                  ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            return copied
+        }
+        func parent(_ node: AXUIElement) -> AXUIElement? {
+            guard let copied = read(node, attribute: kAXParentAttribute as String),
+                  CFGetTypeID(copied) == AXUIElementGetTypeID() else { return nil }
+            return copied as! AXUIElement
+        }
+        let windowValue = read(element, attribute: kAXWindowAttribute as String)
+        let sourceWindow: AXUIElement? = windowValue.flatMap { value in
+            CFGetTypeID(value) == AXUIElementGetTypeID() ? (value as! AXUIElement) : nil
+        }
+        return FieldOverlayGeometryCapture.targetHitTest(frame: frame, source: element, sourceWindow: sourceWindow,
+            hit: { point in
+                guard prepare(root) else { return nil }
+                defer { AXUIElementSetMessagingTimeout(root, messagingTimeout) }
+                var target: AXUIElement?
+                guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(primary.frame.height - point.y), &target) == .success,
+                      ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+                return target
+            }, role: { read($0, attribute: kAXRoleAttribute as String) as? String }, parent: parent,
+            isSame: isSameElement, belongsToSourceApplication: { node in
+                var targetPID: pid_t = 0
+                return AXUIElementGetPid(node, &targetPID) == .success ? targetPID == pid : nil
+            }, now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
     }
 
     // MARK: - Reading

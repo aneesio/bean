@@ -63,6 +63,68 @@ enum TextRangeLocator {
         elementFrame(element)
     }
 
+    /// Protect exposed visible glyphs without changing selection or requiring
+    /// every editor to implement range geometry. Missing range APIs retain a
+    /// best-effort corner; exact field/control/caret checks still apply.
+    static func fieldControlTextRects(in element: AXUIElement, value: String, fieldRect: CGRect) -> [CGRect] {
+        guard !value.isEmpty, OverlayGeometry.isFiniteRect(fieldRect) else { return [] }
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.012
+        AXUIElementSetMessagingTimeout(element, 0.002)
+        defer { AXUIElementSetMessagingTimeout(element, 0.1) }
+        var visibleRange: NSRange?
+        var copied: AnyObject?
+        if AXUIElementCopyAttributeValue(element, kAXVisibleCharacterRangeAttribute as CFString, &copied) == .success,
+           let copied, CFGetTypeID(copied) == AXValueGetTypeID() {
+            var range = CFRange()
+            if AXValueGetValue(copied as! AXValue, .cfRange, &range), range.location >= 0, range.length >= 0 {
+                visibleRange = NSRange(location: range.location, length: range.length)
+            }
+        }
+        var rectangles: [CGRect] = []
+        for range in fieldControlTextRanges(value: value, visibleRange: visibleRange) {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { break }
+            guard let bounds = boundsForRange(range, in: element) else { continue }
+            guard ProcessInfo.processInfo.systemUptime < deadline else { break }
+            let clipped = flipToCocoa(bounds).intersection(fieldRect)
+            if OverlayGeometry.isFiniteRect(clipped) { rectangles.append(clipped) }
+        }
+        return rectangles
+    }
+
+    /// A bounded UTF-16 plan for the visible beginning/end of a draft. Keeping
+    /// separate line/chunk boxes avoids a whole-document union covering blank
+    /// corners between paragraphs. No unbounded per-character AX loop occurs.
+    static func fieldControlTextRanges(value: String, visibleRange: NSRange?) -> [NSRange] {
+        let text = value as NSString
+        guard text.length > 0 else { return [] }
+        let start = min(max(visibleRange?.location ?? 0, 0), text.length - 1)
+        let length = visibleRange.map { min(max($0.length, 0), text.length - start) } ?? (text.length - start)
+        let end = min(text.length, start + max(length, 1))
+        var locations = [start]
+        if end - start > 512 { locations.append(max(start, end - 512)) }
+        var result: [NSRange] = []
+        for initial in locations {
+            var cursor = initial
+            var inspectedLines = 0
+            var added = 0
+            let limit = locations.count > 1 ? 3 : 6
+            while cursor < end, inspectedLines < 8, added < limit {
+                inspectedLines += 1
+                let line = text.lineRange(for: NSRange(location: cursor, length: 0))
+                let upper = min(min(NSMaxRange(line), end), cursor + 512)
+                guard upper > cursor else { break }
+                let range = text.rangeOfComposedCharacterSequences(for: NSRange(location: cursor, length: upper - cursor))
+                if !result.contains(range), !text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    result.append(range); added += 1
+                }
+                // Each logical line is sampled once; long paragraphs get the
+                // visible-end sample rather than thousands of AX requests.
+                cursor = max(NSMaxRange(line), upper)
+            }
+        }
+        return result
+    }
+
     // MARK: - AX plumbing
 
     private static func boundsForRange(_ range: NSRange, in element: AXUIElement) -> CGRect? {

@@ -112,56 +112,44 @@ assert.equal(focusCount, 1, "a synchronous card transition restores keyboard foc
 
 const geometryField={x:100,y:100,w:200,h:100},geometryViewport={x:0,y:0,w:400,h:400};
 const disjoint=(a,b)=>a.x+a.w<=b.x || b.x+b.w<=a.x || a.y+a.h<=b.y || b.y+b.h<=a.y;
+const contained=(a,b)=>a.x>=b.x && a.y>=b.y && a.x+a.w<=b.x+b.w && a.y+a.h<=b.y+b.h;
 const normalized=value=>JSON.parse(JSON.stringify(value));
 assert.deepEqual(normalized(overlay._test.assistantPosition(geometryField,geometryViewport)),
-  {x:304,y:172,w:28,h:28});
-const crowdedControls=[{x:329,y:173,w:2,h:24},{x:272,y:204,w:28,h:28},{x:68,y:172,w:28,h:28}];
+  {x:268,y:104,w:28,h:28},"the first choice is inside the exact editor's top-right");
+const crowdedControls=[{x:275,y:110,w:2,h:24},{x:272,y:170,w:28,h:28},{x:100,y:100,w:130,h:24}];
 const crowdedPosition=overlay._test.assistantPosition(geometryField,geometryViewport,crowdedControls);
-assert.deepEqual(normalized(crowdedPosition),{x:304,y:143,w:28,h:28},
-  "a thin control excludes the whole target and the nearest free interval is used");
-assert.equal(disjoint(crowdedPosition,geometryField),true);
-assert.equal(crowdedControls.every(control=>disjoint(crowdedPosition,control)),true);
-const firstEdges=[{x:304,y:172,w:28,h:28},{x:272,y:204,w:28,h:28},
-  {x:68,y:172,w:28,h:28},{x:272,y:68,w:28,h:28}];
-const slide=overlay._test.assistantPosition(geometryField,geometryViewport,firstEdges);
-assert.deepEqual(normalized(slide),{x:304,y:142,w:28,h:28},"a blocked corner uses the exact safe edge interval");
-assert.equal(disjoint(slide,geometryField),true,"slides never move the target inside the source");
+assert.equal(contained(crowdedPosition,geometryField),true);
+assert.equal(crowdedControls.every(control=>disjoint(crowdedPosition,control)),true,
+  "thin controls and text exclude the entire invisible target");
 for(const unavailable of [null,{x:0,y:0,w:0,h:100},{x:0,y:0,w:NaN,h:100},
-  {x:0,y:500,w:100,h:100},{x:4,y:4,w:392,h:392}]) {
+  {x:0,y:500,w:100,h:100},{x:0,y:0,w:18,h:18}]) {
   assert.equal(overlay._test.assistantPosition(unavailable,geometryViewport),null,
-    "unknown, offscreen, and viewport-filling fields have no forced inside fallback");
+    "unknown, offscreen, and too-small fields never force unsafe placement");
 }
 assert.equal(overlay._test.assistantPosition(geometryField,geometryViewport,[{x:0,y:0,w:NaN,h:1}]),null);
-assert.equal(overlay._test.assistantPosition(geometryField,geometryViewport,[],()=>false),null,
-  "unknown foreground content is occupied space");
-const bottomEdge=overlay._test.assistantPosition({x:100,y:220,w:296,h:176},geometryViewport);
-assert.deepEqual(normalized(bottomEdge),{x:68,y:368,w:28,h:28},"bottom/right viewport edges use an outside left position");
-assert.equal(disjoint(bottomEdge,{x:100,y:220,w:296,h:176}),true);
+assert.equal(overlay._test.assistantPosition(geometryField,geometryViewport,[],()=>false),null);
+assert.equal(overlay._test.assistantPosition(geometryField,geometryViewport,[geometryField]),null,
+  "a fully occupied editor has no outside fallback");
+assert.deepEqual(normalized(overlay._test.assistantPosition({x:100,y:100,w:200,h:24},geometryViewport)),
+  {x:278,y:102,w:20,h:20},"small single-line fields keep a useful inside target without covering their border");
+for(const height of [20,21,22,23,24,27,31]) {
+  const field={x:100,y:100,w:200,h:height},position=overlay._test.assistantPosition(field,geometryViewport);
+  assert.equal(position.w,20);assert.equal(position.h,20);
+  assert.equal(contained(position,field),true,`a ${height}px control keeps an exact inside20px target`);
+}
+assert.equal(overlay._test.assistantPosition({x:100,y:100,w:200,h:19},geometryViewport),null);
 assert.deepEqual(normalized(overlay._test.assistantPosition({x:550,y:700,w:200,h:100},
-  {x:500,y:600,w:400,h:400})),{x:754,y:772,w:28,h:28},"page scroll coordinates remain exact");
-assert.deepEqual(normalized(overlay._test.freeEdgeIntervals(0,100,[[20,50],[10,30]])),[[50,100],[0,10]],
-  "overlapping blocked projections merge before the linear subtraction");
-assert.deepEqual(normalized(overlay._test.freeEdgeIntervals(0,40,[[-10,20],[20,40]])),[[40,40],[20,20]],
-  "exact gap boundaries retain their valid single origin");
+  {x:500,y:600,w:400,h:400})),{x:718,y:704,w:28,h:28},"page scroll coordinates remain exact");
+assert.deepEqual(normalized(overlay._test.freeEdgeIntervals(0,100,[[20,50],[10,30]])),[[50,100],[0,10]]);
+assert.deepEqual(normalized(overlay._test.freeEdgeIntervals(0,40,[[-10,20],[20,40]])),[[40,40],[20,20]]);
 const tallField={x:100,y:100,w:200,h:500};
-const tallObstacles=[{x:304,y:300,w:28,h:300},{x:68,y:100,w:28,h:500},
-  {x:100,y:604,w:200,h:28},{x:100,y:68,w:200,h:28}];
+const tallObstacles=[{x:100,y:100,w:200,h:220}];
 const farther=overlay._test.assistantPosition(tallField,{x:0,y:0,w:400,h:700},tallObstacles);
-assert.deepEqual(normalized(farther),{x:304,y:270,w:28,h:28},
-  "a proven free interval more than 96px up a long edge stays discoverable");
-assert.equal(tallField.y+tallField.h-28-farther.y>96,true);
+assert.deepEqual(normalized(farther),{x:268,y:322,w:28,h:28},"text filling many initial lines permits a clear lower inside edge");
+assert.equal(contained(farther,tallField),true);
 assert.equal(tallObstacles.every(control=>disjoint(farther,control)),true);
-const wideField={x:100,y:100,w:600,h:100};
-const wider=overlay._test.assistantPosition(wideField,{x:0,y:0,w:900,h:400},
-  [{x:704,y:100,w:28,h:100},{x:300,y:204,w:400,h:28}]);
-assert.deepEqual(normalized(wider),{x:270,y:204,w:28,h:28},"the same free interval proof handles a long horizontal edge");
-let boundedProbes=0;
-const fragmented=Array.from({length:160},(_,index)=>({x:304,y:100+index*68,w:28,h:1}));
-assert.equal(overlay._test.assistantPosition({x:100,y:100,w:200,h:11000},
-  {x:0,y:0,w:400,h:12000},fragmented,()=>++boundedProbes%9!==0),null);
-assert.equal(boundedProbes<=96*9,true,"opaque free intervals have a hard bound on DOM hit probes");
 assert.equal(overlay._test.assistantPosition(geometryField,geometryViewport,[],()=>true,()=>false),null,
-  "the capture deadline covers candidate proof as well as traversal");
+  "the deadline covers candidate proof as well as geometry collection");
 
 // A small DOM implementation exercises the actual overlay tree, closed Shadow
 // root, node replacement, focus restoration, and keydown boundary listener. It
@@ -240,6 +228,8 @@ class DOMElement {
     return node === this || this.children.some((child) => child.contains(node));
   }
   get parentElement() { return this.parentNode instanceof DOMElement ? this.parentNode : null; }
+  get previousElementSibling() {const siblings=this.parentElement?.children || [];return siblings[siblings.indexOf(this)-1] || null;}
+  get nextElementSibling() {const siblings=this.parentElement?.children || [];return siblings[siblings.indexOf(this)+1] || null;}
   get childNodes() {return this.children;}
   getBoundingClientRect() {
     const x = this.bounds?.x ?? (parseFloat(this.style.left) || 0);
@@ -353,6 +343,7 @@ const domContext = {
 domContext.window.getComputedStyle=element=>({display:element.style.display || "block",
   pointerEvents:element.style.pointerEvents || "auto",contain:element.style.contain || "",
   contentVisibility:element.style.contentVisibility || "visible"});
+domContext.window.BeanMapping={rectsForRange:(node,start,end)=>node.textRects || (node.value ? [{x:node.bounds.x+8,y:node.bounds.y+8,w:80,h:16}] : [])};
 vm.runInNewContext(source, domContext);
 const domOverlay = domContext.window.BeanOverlay;
 const issue = {
@@ -458,8 +449,8 @@ const assistant = domDocument.lastShadow.querySelectorAll("button").find((button
   button.dataset.beanAssistant !== undefined);
 assert.ok(assistant, "a single field badge provides a predictable review entry point");
 assert.match(assistant.getAttribute("aria-label"), /3 writing suggestions/);
-assert.equal(assistant.style.left,"454px");
-assert.equal(assistant.style.top,"162px","the entire target sits beside the source text");
+assert.equal(assistant.style.left,"418px");
+assert.equal(assistant.style.top,"104px","the entire target sits inside the source top-right corner");
 assert.equal(assistant.getBoundingClientRect().width,28,"the quiet dot retains a useful hit target");
 assert.equal(assistant.children.length,1);
 assert.equal(assistant.children[0].className,"assistant-dot");
@@ -496,127 +487,93 @@ domOverlay.renderAssistant({ ...fieldRect, y:1000 }, 0, "local", {});
 assert.equal(domDocument.lastShadow.querySelector(".assistant"), null,
   "an off-screen editor never leaves a stray floating badge");
 
-// Actual production DOM obstacle probes: controls, labels, unknown wrappers,
-// and controls moving independently of the editor all invalidate a target.
+// Production source-local placement rejects text/controls without scanning a
+// document feed or hiding because an unrelated custom component exists.
 const placementEditor=domDocument.createElement("textarea");
-placementEditor.bounds={x:100,y:100,w:200,h:100};domDocument.body.appendChild(placementEditor);
-const controls=firstEdges.map((bounds,index)=>{
-  const button=domDocument.createElement(index===2 ? "label" : "button");
-  button.bounds=bounds;return button;
+placementEditor.bounds={x:100,y:100,w:200,h:100};placementEditor.value="Synthetic draft";
+placementEditor.textRects=[{x:108,y:108,w:90,h:16}];domDocument.body.appendChild(placementEditor);
+domDocument.layoutControls=[placementEditor];
+assert.equal(domOverlay.renderAssistant(geometryField,2,"nativeLocal",{}, {source:placementEditor}),true);
+let visibleTarget=domDocument.lastShadow.querySelector(".assistant");
+assert.deepEqual({x:parseFloat(visibleTarget.style.left),y:parseFloat(visibleTarget.style.top)},
+  {x:268,y:104},"an ordinary field uses its blank inside top-right corner");
+const thin=domDocument.createElement("button");thin.bounds={x:275,y:111,w:1,h:1};
+domDocument.body.appendChild(thin);domDocument.layoutControls.push(thin);
+assert.equal(domOverlay.refreshAssistantPlacement(),true);
+let targetBounds={x:parseFloat(visibleTarget.style.left),y:parseFloat(visibleTarget.style.top),w:28,h:28};
+assert.equal(contained(targetBounds,geometryField),true);
+assert.equal(disjoint(targetBounds,thin.bounds),true,"a one-pixel sibling control between samples excludes the full target");
+thin.remove();domDocument.layoutControls=[placementEditor];
+placementEditor.textRects=[geometryField];
+assert.equal(domOverlay.refreshAssistantPlacement(),false,"fully occupied writing space hides rather than covers text");
+placementEditor.textRects=[{x:108,y:108,w:90,h:16}];
+assert.equal(domOverlay.refreshAssistantPlacement(),true);
+const unrelated=domDocument.createElement("bean-unrelated-feed");unrelated.bounds={x:0,y:0,w:8,h:8};
+for(let index=0;index<10000;index++)unrelated.appendChild(domDocument.createElement("span"));
+domDocument.body.appendChild(unrelated);
+assert.equal(domOverlay.refreshAssistantPlacement(),true,"a large unrelated custom subtree cannot suppress a clear field");
+unrelated.remove();
+const flatParent=domDocument.createElement("div");flatParent.bounds={x:0,y:0,w:900,h:700};
+const flatChildren=Array.from({length:5000},()=>{
+  const node=domDocument.createElement("div");node.bounds={x:0,y:0,w:8,h:8};return node;
 });
-domDocument.layoutControls=[placementEditor];
-domOverlay.renderAssistant(geometryField,2,"nativeLocal",{}, {source:placementEditor});
-const unobstructed=domDocument.lastShadow.querySelector(".assistant");
-assert.equal(unobstructed.style.left,"304px");
-domDocument.layoutControls.push(...controls);
-for(const control of controls) domDocument.body.appendChild(control);
+flatChildren.forEach(node=>flatParent.appendChild(node));
+placementEditor.remove();flatParent.appendChild(placementEditor);
+const lateControl=domDocument.createElement("button");lateControl.bounds={x:275,y:111,w:1,h:1};flatParent.appendChild(lateControl);
+domDocument.body.appendChild(flatParent);domDocument.layoutControls=[placementEditor,lateControl];
+assert.equal(domOverlay.refreshAssistantPlacement(),true,"a field late in a huge flat feed still gets a dot");
+visibleTarget=domDocument.lastShadow.querySelector(".assistant");
+assert.equal(disjoint({x:parseFloat(visibleTarget.style.left),y:parseFloat(visibleTarget.style.top),w:28,h:28},lateControl.bounds),true,
+  "immediate control neighbors are excluded even beyond the bounded prefix");
+placementEditor.remove();flatParent.remove();domDocument.body.appendChild(placementEditor);domDocument.layoutControls=[placementEditor];
+const hidden=domDocument.createElement("div");hidden.style.display="none";
+Object.defineProperty(hidden,"children",{get:()=>{throw Error("hidden descendants must not be read");},configurable:true});
+domDocument.body.appendChild(hidden);
 assert.equal(domOverlay.refreshAssistantPlacement(),true);
-assert.deepEqual(normalized({x:parseFloat(unobstructed.style.left),y:parseFloat(unobstructed.style.top),w:28,h:28}),
-  {x:304,y:142,w:28,h:28},"Send/attachment/label movement repositions the existing target");
-assert.equal(domDocument.lastShadow.querySelector(".assistant"),unobstructed);
-const unfamiliarWrapper=domDocument.createElement("div");
-unfamiliarWrapper.bounds={x:310,y:145,w:1,h:1};
-domDocument.body.appendChild(unfamiliarWrapper);
-domDocument.layoutNodes=[unfamiliarWrapper];
+Object.defineProperty(hidden,"children",{value:[]});hidden.remove();
+const backdrop=domDocument.createElement("div");backdrop.style.pointerEvents="none";
+const escaped=domDocument.createElement("button");escaped.style.pointerEvents="auto";
+escaped.bounds={x:268,y:104,w:28,h:28};backdrop.appendChild(escaped);domDocument.body.appendChild(backdrop);
+domDocument.layoutControls.push(escaped);
 assert.equal(domOverlay.refreshAssistantPlacement(),true);
-assert.notEqual(unobstructed.style.top,"142px",
-  "a thin non-semantic sibling between hit samples excludes the entire target");
-domDocument.layoutNodes=[];
-domDocument.hitTest=()=>[unfamiliarWrapper,domDocument.body];
-assert.equal(domOverlay.refreshAssistantPlacement(),false,"an unrelated event wrapper is not proven blank space");
-assert.equal(domDocument.lastShadow.querySelector(".assistant"),null);
-assert.equal(domOverlay.hasFieldPresentation(),false,"no dot or findings means no field ownership");
-domOverlay.render([issue],null,null,{});
-assert.equal(domOverlay.hasFieldPresentation(),true,"visible underlines remain owned when the dot must hide");
-domOverlay.clear();
-assert.equal(domOverlay.hasFieldPresentation(),false,"an unrelated browser toolbar is not field presentation");
+visibleTarget=domDocument.lastShadow.querySelector(".assistant");
+targetBounds={x:parseFloat(visibleTarget.style.left),y:parseFloat(visibleTarget.style.top),w:28,h:28};
+assert.equal(disjoint(targetBounds,escaped.bounds),true,"pointer-none wrappers do not hide escaped child controls");
+backdrop.remove();domDocument.layoutControls=[placementEditor];
+// Optional far-page reads stop early, retaining time for exact source hits.
+const originalStyle=domContext.window.getComputedStyle;let simulatedClock=0,optionalStyleReads=0;
+const farPageNodes=Array.from({length:80},()=>{
+  const node=domDocument.createElement("div");node.bounds={x:0,y:0,w:8,h:8};node.optionalFarNode=true;
+  domDocument.body.appendChild(node);return node;
+});
+domContext.performance={now:()=>simulatedClock};
+domContext.window.getComputedStyle=node=>{
+  if(node.optionalFarNode){simulatedClock+=1;optionalStyleReads++;}
+  return originalStyle(node);
+};
+assert.equal(domOverlay.refreshAssistantPlacement(),true,"slow optional feed geometry cannot exhaust exact-source placement time");
+assert.equal(optionalStyleReads<=8,true,"at least4ms of the12ms deadline is retained for placement");
+assert.equal(simulatedClock<=8,true);
+const uncertainFarNode=domDocument.createElement("div");uncertainFarNode.getBoundingClientRect=()=>{throw Error("unrelated geometry unavailable");};
+domDocument.body.appendChild(uncertainFarNode);simulatedClock=0;
+assert.equal(domOverlay.refreshAssistantPlacement(),true,"optional unrelated geometry failure does not invalidate the source field");
+uncertainFarNode.remove();farPageNodes.forEach(node=>node.remove());
+domContext.window.getComputedStyle=originalStyle;delete domContext.performance;
+const opaque=domDocument.createElement("div");
+domDocument.hitTest=()=>[opaque,domDocument.body];
+assert.equal(domOverlay.refreshAssistantPlacement(),false,"an opaque surface over the actual field never receives an overlay target");
 delete domDocument.hitTest;
-domDocument.layoutControls=[placementEditor];
-assert.equal(domOverlay.refreshAssistantPlacement(),true,"a later free slot can restore the dot without a draft reload");
-const restoredDot=domDocument.lastShadow.querySelector(".assistant");
-domDocument.hitTest=()=>[unfamiliarWrapper,domDocument.body];
-for(const listener of restoredDot.listeners.click) listener(fakeEvent({detail:1}));
-assert.equal(domDocument.lastShadow.querySelector(".card"),null,
-  "a newly obstructed target is rejected again at activation without opening stale actions");
-delete domDocument.hitTest;domDocument.layoutControls=[];domOverlay.clearAssistant();
-unfamiliarWrapper.remove();placementEditor.remove();for(const control of controls)control.remove();
-
-const visibilityEditor=domDocument.createElement("textarea");visibilityEditor.bounds=geometryField;
-domDocument.body.appendChild(visibilityEditor);domDocument.layoutControls=[visibilityEditor];
-const visibilityOptions={source:visibilityEditor};
-const hiddenBackdrop=domDocument.createElement("div");hiddenBackdrop.bounds={x:0,y:0,w:900,h:700};
-hiddenBackdrop.style.pointerEvents="none";domDocument.body.appendChild(hiddenBackdrop);
-hiddenBackdrop.getBoundingClientRect=()=>{throw Error("optional untargetable wrapper bounds");};
-assert.equal(domOverlay.renderAssistant(geometryField,0,"nativeLocal",{},visibilityOptions),true,
-  "a non-targetable empty backdrop does not falsely suppress every field edge");
-const escapedButton=domDocument.createElement("button");escapedButton.bounds={x:304,y:172,w:28,h:28};
-escapedButton.style.pointerEvents="auto";hiddenBackdrop.appendChild(escapedButton);
-domDocument.layoutControls.push(escapedButton);
 assert.equal(domOverlay.refreshAssistantPlacement(),true);
-let visibleTarget=domDocument.lastShadow.querySelector(".assistant").getBoundingClientRect();
-assert.equal(disjoint({x:visibleTarget.x,y:visibleTarget.y,w:28,h:28},escapedButton.bounds),true,
-  "a fixed/auto child outside a non-targetable wrapper is still fully excluded");
-hiddenBackdrop.remove();domDocument.layoutControls=[visibilityEditor];
-const boxlessWrapper=domDocument.createElement("div");boxlessWrapper.style.display="contents";
-boxlessWrapper.getBoundingClientRect=undefined;
-const boxlessChild=domDocument.createElement("div");boxlessChild.bounds={x:329,y:173,w:1,h:24};
-boxlessWrapper.appendChild(boxlessChild);domDocument.body.appendChild(boxlessWrapper);
-assert.equal(domOverlay.refreshAssistantPlacement(),true,"a known boxless wrapper needs only its children's complete geometry");
-visibleTarget=domDocument.lastShadow.querySelector(".assistant").getBoundingClientRect();
-assert.equal(disjoint({x:visibleTarget.x,y:visibleTarget.y,w:28,h:28},boxlessChild.bounds),true);
-boxlessWrapper.remove();
-const hiddenBranch=domDocument.createElement("div");hiddenBranch.style.display="none";
-Object.defineProperty(hiddenBranch,"children",{configurable:true,get:()=>{throw Error("hidden descendants must not be visited");}});
-domDocument.body.appendChild(hiddenBranch);
-assert.equal(domOverlay.refreshAssistantPlacement(),true,"proven display:none branches are pruned before their children or global counts");
-Object.defineProperty(hiddenBranch,"children",{value:[]});hiddenBranch.remove();
-const hiddenContentHost=domDocument.createElement("div");hiddenContentHost.style.contentVisibility="hidden";
-hiddenContentHost.bounds={x:310,y:177,w:1,h:1};domDocument.body.appendChild(hiddenContentHost);
-assert.equal(domOverlay.refreshAssistantPlacement(),true);
-visibleTarget=domDocument.lastShadow.querySelector(".assistant").getBoundingClientRect();
-assert.equal(disjoint({x:visibleTarget.x,y:visibleTarget.y,w:28,h:28},hiddenContentHost.bounds),true,
-  "content-visibility:hidden retains its thin host hit rectangle between the point probes");
-hiddenContentHost.remove();
-for (const [label,style] of [
-  ["non-atomic inline paint",{display:"inline",contain:"paint"}],
-  ["positive clip margin",{contain:"paint",overflowClipMargin:"100px"}],
-  ["top-layer escape",{contain:"paint"}]
-]) {
-  const branch=domDocument.createElement("div");Object.assign(branch.style,style);
-  branch.bounds={x:0,y:0,w:8,h:100};
-  const child=domDocument.createElement("button");child.bounds={x:304,y:172,w:28,h:28};
-  branch.appendChild(child);domDocument.body.appendChild(branch);domDocument.layoutControls.push(child);
-  assert.equal(domOverlay.refreshAssistantPlacement(),true,label);
-  visibleTarget=domDocument.lastShadow.querySelector(".assistant").getBoundingClientRect();
-  assert.equal(disjoint({x:visibleTarget.x,y:visibleTarget.y,w:28,h:28},child.bounds),true,
-    `${label} still traverses and excludes the complete escaped child`);
-  branch.remove();domDocument.layoutControls=[visibilityEditor];
-}
-const clippedBranch=domDocument.createElement("div");clippedBranch.style.contain="paint";
-clippedBranch.bounds={x:0,y:0,w:40,h:700};
-for(let index=0;index<8200;index++) {
-  const child=domDocument.createElement("button");child.bounds={x:0,y:0,w:0,h:0};clippedBranch.appendChild(child);
-}
-domDocument.body.appendChild(clippedBranch);
-assert.equal(domOverlay.refreshAssistantPlacement(),false,
-  "an over-budget contained subtree hides instead of assuming its complete geometry");
-clippedBranch.remove();
-const containedShadow=domDocument.createElement("bean-control");containedShadow.style.contain="paint";
-containedShadow.bounds={x:0,y:0,w:8,h:100};domDocument.body.appendChild(containedShadow);
-assert.equal(domOverlay.refreshAssistantPlacement(),false,"containment does not bypass unknown shadow/custom controls");
-containedShadow.remove();
-assert.equal(domOverlay.refreshAssistantPlacement(),true,"removing unverifiable geometry restores the dot without recapturing writing");
-const unknownLeaf=domDocument.createElement("div");unknownLeaf.getBoundingClientRect=undefined;
-domDocument.body.appendChild(unknownLeaf);
-assert.equal(domOverlay.refreshAssistantPlacement(),false,"an unlocated targetable leaf still refuses unsafe placement");
-unknownLeaf.remove();visibilityEditor.remove();domDocument.layoutControls=[];domOverlay.clearAssistant();
-
+const recovered=domDocument.lastShadow.querySelector(".assistant");
+domDocument.hitTest=()=>[opaque,domDocument.body];
+for(const listener of recovered.listeners.click)listener(fakeEvent({detail:1}));
+assert.equal(domDocument.lastShadow.querySelector(".card"),null,"activation rechecks actual source ownership");
+delete domDocument.hitTest;placementEditor.remove();domDocument.layoutControls=[];domOverlay.clearAssistant();
 domContext.window.visualViewport={offsetLeft:80,offsetTop:90,width:200,height:180};
 assert.deepEqual(normalized(domOverlay._test.assistantViewport()),{x:80,y:90,w:200,h:180});
-domOverlay.renderAssistant({x:80,y:90,w:200,h:180},0,"nativeLocal",{});
-assert.equal(domDocument.lastShadow.querySelector(".assistant"),null,
-  "a keyboard/zoom-reduced visible viewport never clamps the hit target over its full-screen editor");
-delete domContext.window.visualViewport;
+assert.equal(domOverlay.renderAssistant({x:80,y:90,w:200,h:180},0,"nativeLocal",{}),true,
+  "a viewport-filling editor now has a legitimate inside target");
+delete domContext.window.visualViewport;domOverlay.clearAssistant();
 
 // Production closed-shadow controls expose scope, deterministic Fix All,
 // dictionary persistence and cancellation through real keyboard buttons.

@@ -41,6 +41,12 @@ final class InlineHighlightService {
         var placementGeometry: (AXUIElement) -> FieldOverlayGeometry? = { AccessibilityService.fieldOverlayGeometry(for: $0) }
         var presentPlacement: ((FieldOverlayGeometry?) -> Void)?
         var monotonicTime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+        var protectedTextRects: (AXUIElement, String, CGRect) -> [CGRect] = { TextRangeLocator.fieldControlTextRects(in: $0, value: $1, fieldRect: $2) }
+        var isFocusedField: (AXUIElement, NSRunningApplication?) -> Bool = { element, app in
+            guard let app, let field = AccessibilityService.focusedFieldMetadata(in: app) else { return false }
+            return AccessibilityService.isSameElement(field.element, element)
+        }
+        var placementTargetAvailable: (AXUIElement, CGRect) -> Bool = { AccessibilityService.fieldOverlayTargetHitTest($1, for: $0) != .blocked }
     }
 
     private var lastCallTime: Date?
@@ -81,6 +87,8 @@ final class InlineHighlightService {
     private var renderedSourceAnchor: CGRect?
     private var renderedPlacementGeometry: FieldOverlayGeometry?
     private var placementCheckedAt: TimeInterval = 0
+    private var placementSelection: NSRange?
+    private var placementValue: String?
     private var placementElement: AXUIElement?
     private var placementPID: pid_t?
 
@@ -127,7 +135,20 @@ final class InlineHighlightService {
         overlay.onFixAll = { [weak self] in self?.fixAll() }
         overlay.onUndo = { [weak self] in self?.undoLastCorrection() }
         overlay.onPauseApp = { [weak self] in self?.pauseCurrentApp() }
-        overlay.onPrepareAssistant = { [weak self] in self?.renderOverlay() }
+        overlay.onPrepareAssistant = { [weak self] in
+            guard let self, let session = self.session else { return }
+            guard self.analysisDependencies.isFocusedField(session.element, session.app),
+                  TextSelectionService.exactTextMatches(self.analysisDependencies.value(session.element), session.value),
+                  session.app == nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == session.app?.processIdentifier else {
+                self.hideUI(); return
+            }
+            self.refreshPlacementGeometry(for: session, sourceAnchor: self.analysisDependencies.anchor(session.element), force: true)
+            self.renderOverlay()
+        }
+        overlay.validateFieldControl = { [weak self] frame in
+            guard let self, let session = self.session else { return false }
+            return self.analysisDependencies.placementTargetAvailable(session.element, frame)
+        }
     }
 
     func hideUI() {
@@ -139,6 +160,7 @@ final class InlineHighlightService {
     private func clearPresentation() {
         overlay.hide(); entries = []; selectedID = nil; session = nil; renderedSourceAnchor = nil
         renderedPlacementGeometry = nil; placementCheckedAt = 0
+        placementSelection = nil; placementValue = nil
         placementElement = nil; placementPID = nil
     }
 
@@ -229,17 +251,26 @@ final class InlineHighlightService {
         renderOverlay()
     }
 
-    private func refreshPlacementGeometry(for session: Session, sourceAnchor: CGRect?) {
+    private func refreshPlacementGeometry(for session: Session, sourceAnchor: CGRect?, force: Bool = false) {
         let ownerChanged = (placementElement.map { !AccessibilityService.isSameElement($0, session.element) } ?? true)
             || placementPID != session.app?.processIdentifier
         if ownerChanged {
             renderedPlacementGeometry = nil; placementCheckedAt = 0
             placementElement = session.element; placementPID = session.app?.processIdentifier
         }
-        if ownerChanged || analysisDependencies.monotonicTime() - placementCheckedAt >= 0.250
+        let selection = analysisDependencies.selectedRange(session.element)
+        if force || ownerChanged || selection != placementSelection
+            || !TextSelectionService.exactTextMatches(placementValue, session.value)
+            || analysisDependencies.monotonicTime() - placementCheckedAt >= 0.250
             || sourceAnchor != renderedSourceAnchor {
-            renderedPlacementGeometry = analysisDependencies.placementGeometry(session.element)
+            if let geometry = analysisDependencies.placementGeometry(session.element) {
+                let textRects = analysisDependencies.protectedTextRects(session.element, session.value, geometry.fieldRect)
+                    .filter { OverlayGeometry.isFiniteRect($0) && $0.intersects(geometry.fieldRect) }
+                renderedPlacementGeometry = FieldOverlayGeometry(fieldRect: geometry.fieldRect,
+                    windowRect: geometry.windowRect, exclusionRects: geometry.exclusionRects + textRects)
+            } else { renderedPlacementGeometry = nil }
             placementCheckedAt = analysisDependencies.monotonicTime()
+            placementSelection = selection; placementValue = session.value
         }
     }
 

@@ -575,3 +575,63 @@ unchanged. The fixture was quit normally and Deeper AI was restored on. The
 app-scoped fixture screenshot does not establish another process's overlay
 presence, so this is a control-routing smoke check, not a certified live dot
 visibility pass or third-party composer check. No paid QA call was made.
+
+## Build 18 inside-field dot — October 5, 2026
+
+The user reports no dot in external apps and requests inside placement,
+preferably top-right. This supersedes the previous outside-only rule. The
+previous whole-window AX and whole-document DOM prerequisites could suppress
+otherwise usable fields because unrelated branches lacked complete geometry.
+That is a code finding, not a live diagnosis of every reported app.
+
+Both launchers now prefer the editor's inside top-right, with other clear
+inside edges available. Paint stays 10 points, brown by default and amber for
+suggestions; the complete semantic target is 28 points normally, 20 in compact
+fields. Below 20 points, missing exact source geometry or no usable inside slot
+can still hide the dot. No issue count or outer pill is added.
+
+Native capture requires exact field/window continuity, samples bounded local
+controls and protects exposed caret/text bounds. A positively bounded immediate
+scroll viewport clips the source area; neutral wrapper frames do not.
+Application-local candidate probes reject identified controls but distinguish
+unavailable AX hit APIs from positive obstruction. Text geometry is best
+effort, uses the existing captured draft, and does not change selection or
+request a provider. The full target is checked before explicit opening; stale
+focus, text, relocation or an identified obstruction prevents opening.
+
+Browser placement uses actual text fragments, source-local controls and bounded
+nearby geometry with time reserved for candidate ownership checks. Input
+alignment/direction, CSS-styled placeholders, scrolling and compact 20-point
+fields have real WebKit coverage. Arbitrary contenteditable pseudo-element
+placeholders and unobservable custom controls remain limitations.
+
+Independent native, browser and integration reviews are complete. They found
+and repaired placeholder style copying, compact target parity, optional feed
+budget consumption, scroll viewport clipping, explicit-open focus identity and
+text-bounds deadlines. Two first WebKit failures were fixture setup errors
+(pre-render shadow root and paragraph layout boxes mistaken for glyphs); they
+were corrected without changing production code or relaxing text-overlap
+assertions. The corrected six WebKit cases pass. An initial test launch used
+the Command Line Tools instead of the repository's Xcode toolchain and failed
+to load SwiftUI macros; the Xcode run and final script are the valid evidence.
+
+`scripts/run_all_tests.sh` passes **639 Swift cases: 631 passed, eight baseline
+skips, zero failures**, all 13 Node suites, standalone logic, shell syntax,
+release metadata and repository audit. Focused native placement, panel, cached
+selection/text and bounded Unicode range-planning checks also pass. The eight
+skips retain the existing own-process WebKit AX, plain SwiftUI AX baseline and
+opt-in evaluation reasons; they are not successful live app tests.
+
+Twelve native and 17 browser light/dark/narrow/short renders were exported to
+`build/qa-build18-native` and `build/qa-build18-browser`. Representative native
+brown/amber and browser inside light/dark screenshots were inspected. The
+geometry assertions check the complete pointer target, source preservation,
+local control routing and known text avoidance. Owned fixtures do not certify
+all third-party editors or installed Chrome bridge behavior.
+
+Before installation, exactly one `Bean` process is running, at the stable
+installed application path, and actual build 17 General reports Accessibility
+ready. Bean Writer has no writer-owned system dot implementation; the global
+polling path skips Bean's own process. Its reported dot is not accepted as proof
+of external source ownership. Build 18 packaging/activation and external
+fixture observations will be recorded separately. No paid QA call was made.

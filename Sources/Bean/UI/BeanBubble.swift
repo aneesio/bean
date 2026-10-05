@@ -10,10 +10,11 @@ final class BeanBubbleController {
     private var menuPanel: NonKeyBubblePanel?
     private var menuFocusSession: OverlaySourceFocusSession?
 
-    private let bubbleSize = OverlayGeometry.beanLauncherSize
+    private var bubbleSize = OverlayGeometry.beanLauncherSize
+    private var bubbleView: BeanBubbleView?
 
     // Legacy drag offsets remain usable only while the whole target has a
-    // freshly verified safe destination outside the editor and controls.
+    // freshly verified inside-field destination clear of known text/controls.
     private var bubbleBaseOrigin: NSPoint = .zero
     private var bubbleSavedOffset: CGSize = .zero
     private var onCommitOffset: ((CGSize) -> Void)?
@@ -27,11 +28,13 @@ final class BeanBubbleController {
     // MARK: - Bubble
 
     func showBubble(at point: CGPoint, savedOffset: CGSize, openOnHover: Bool,
+                    targetSize: CGFloat = OverlayGeometry.beanLauncherSize,
                     isSafeOrigin: @escaping (CGPoint) -> Bool,
                     onOpen: @escaping (OverlayActivationIntent) -> Void,
                     onDismiss: @escaping () -> Void,
                     onCommitOffset: @escaping (CGSize) -> Void, onReset: @escaping () -> Void) {
         hide()
+        bubbleSize = targetSize
         bubbleBaseOrigin = NSPoint(x: point.x, y: point.y)
         bubbleSavedOffset = savedOffset
         self.onCommitOffset = onCommitOffset
@@ -40,11 +43,12 @@ final class BeanBubbleController {
         let origin = NSPoint(x: bubbleBaseOrigin.x + savedOffset.width, y: bubbleBaseOrigin.y + savedOffset.height)
         guard isSafeOrigin(origin) else { return }
         let view = BeanBubbleView(
-            openOnHover: openOnHover, onOpen: onOpen, onDismiss: onDismiss,
+            openOnHover: openOnHover, onOpen: onOpen, onDismiss: onDismiss, targetSize: targetSize,
             onResetPosition: { [weak self] in self?.resetBubblePosition() },
             onDragChanged: { [weak self] t in self?.dragBubble(t) },
             onDragEnded: { [weak self] t, moved in self?.endDragBubble(t, moved: moved, onOpen: onOpen) }
         )
+        bubbleView = view
         let panel = makePanel(size: NSSize(width: bubbleSize, height: bubbleSize))
         panel.contentViewController = NSHostingController(rootView: view)
         // Attaching an NSHostingController can reset a borderless panel's
@@ -67,8 +71,15 @@ final class BeanBubbleController {
         }
     }
 
-    func moveBubble(to point: CGPoint) {
+    func moveBubble(to point: CGPoint, targetSize: CGFloat? = nil) {
         guard let bubblePanel else { return }
+        if let targetSize, targetSize != bubbleSize, var view = bubbleView {
+            bubbleSize = targetSize
+            view.targetSize = targetSize
+            bubbleView = view
+            bubblePanel.contentViewController = NSHostingController(rootView: view)
+            bubblePanel.setContentSize(NSSize(width: targetSize, height: targetSize))
+        }
         bubbleBaseOrigin = point
         var origin = CGPoint(
             x: point.x + bubbleSavedOffset.width,
@@ -177,6 +188,7 @@ final class BeanBubbleController {
 
     func hide() {
         bubblePanel?.orderOut(nil); bubblePanel = nil
+        bubbleView = nil
         isSafeOrigin = nil
         hideMenu()
     }
@@ -227,6 +239,7 @@ struct BeanBubbleView: View {
     let openOnHover: Bool
     let onOpen: (OverlayActivationIntent) -> Void
     let onDismiss: () -> Void
+    var targetSize: CGFloat = OverlayGeometry.beanLauncherSize
     var onResetPosition: () -> Void = {}
     var onDragChanged: (CGSize) -> Void = { _ in }
     var onDragEnded: (CGSize, Bool) -> Void = { _, _ in }
@@ -238,8 +251,8 @@ struct BeanBubbleView: View {
     var body: some View {
         ZStack { NativeStatusDot(hasSuggestions: false) }
             .frame(
-                width: OverlayGeometry.beanLauncherSize,
-                height: OverlayGeometry.beanLauncherSize
+                width: targetSize,
+                height: targetSize
             )
             .contentShape(Rectangle())
             .help("Bean: live checking unavailable here. Click for writing actions.")

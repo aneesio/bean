@@ -4,11 +4,12 @@ struct NativeAssistantBadgeView: View {
     let state: NativeAssistantState
     let onOpen: () -> Void
     let onKeyboardOpen: () -> Void
+    var targetSize: CGFloat = OverlayGeometry.minimumMotorTarget
 
     var body: some View {
         Button(action: onOpen) {
             NativeStatusDot(hasSuggestions: state.hasSuggestions)
-            .frame(width: OverlayGeometry.minimumMotorTarget, height: OverlayGeometry.minimumMotorTarget)
+            .frame(width: targetSize, height: targetSize)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -20,7 +21,7 @@ struct NativeAssistantBadgeView: View {
 }
 
 /// The visible status stays ten points; the surrounding clear motor target is
-/// positioned outside the editor and surrounding controls as one unit.
+/// positioned inside the editor, clear of known text and controls as one unit.
 struct NativeStatusDot: View {
     let hasSuggestions: Bool
     private let amber = Color.beanDynamic(light: BeanDesign.SRGB(217, 119, 6).nsColor,

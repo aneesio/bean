@@ -8,15 +8,16 @@ service.
 > **Public beta.** Replacement and UI behavior depend on what each macOS app
 > exposes through Accessibility. Review important text before sending it.
 >
-> Current release contract: Bean **1.7.0 (build 17)** with Bean for the Web
-> **0.8.3**.
+> Current release contract: Bean **1.7.0 (build 18)** with Bean for the Web
+> **0.8.4**.
 
 ## What works today
 
 - Checks spelling, basic grammar, and spacing while you type in editable macOS fields.
   Local live assistance and the Bean dot are on by default. The dot is brand brown
   when there are no current suggestions and amber when suggestions are found.
-  Hover for status or click for details; it hides when no clear placement exists.
+  It sits inside a clear corner of the text area, usually at the top right.
+  Hover for status or click for details; it hides when the field has no usable clear space.
 - Draws underlines when an app supplies exact text positions, with a compact
   issue button and correction cards when that geometry is unavailable.
 - Accepts individual corrections without moving you away from your app.
@@ -88,12 +89,12 @@ builds.
 
 Checksum verification is an optional advanced safety check, not part of the
 normal Finder-only install. Download the release's `.sha256` file beside the DMG,
-then, for example, run the following for version 1.7.0, build 17 and compare the printed
+then, for example, run the following for version 1.7.0, build 18 and compare the printed
 value with the `.dmg` line in that file:
 
 ```bash
 cd ~/Downloads
-shasum -a 256 Bean-1.7.0-build17-unnotarized.dmg
+shasum -a 256 Bean-1.7.0-build18-unnotarized.dmg
 ```
 
 Developer ID-signed and notarized artifacts, if introduced later, will omit the
@@ -119,12 +120,12 @@ because it intentionally removes Bean data.
 1. Keep Bean in `/Applications` and allow its Accessibility access during setup.
    macOS requires this permission to check and change writing in other apps.
 2. Continue typing in your normal app. Local live suggestions are enabled by
-   default. Click an underline or the issue button beside the field, then choose
+   default. Click an underline or the dot inside the field, then choose
    **Accept** or **Dismiss**. No comparison window is needed for a correction.
 3. Press **⌘⇧G** to fix selected text, or the active editable field when nothing
    is selected. This shortcut runs free local Quick Fix by default. Choose
    **AI Proofread** in Settings → General for provider-backed proofreading.
-4. Press **⌃⌥B**, or use the Bean dot beside your field, to choose a rewrite.
+4. Press **⌃⌥B**, or use the Bean dot inside your field, to choose a rewrite.
    Proofread and rewrite apply directly to the unchanged source, with Bean Undo
    when a safe restoration path is available.
    Reply and compose actions create new content and retain their draft review.

@@ -23,6 +23,7 @@ final class HighlightOverlayController {
     var onUndo: (() -> Void)?
     var onPauseApp: (() -> Void)?
     var onPrepareAssistant: (() -> Void)?
+    var validateFieldControl: ((CGRect) -> Bool)?
     var assistantState = NativeAssistantState()
     var showsAssistantControl = true
     var showExplanation = true
@@ -242,16 +243,16 @@ final class HighlightOverlayController {
     }
 
     private func showTray() {
-        let size = CGSize(width: OverlayGeometry.minimumMotorTarget, height: OverlayGeometry.minimumMotorTarget)
         guard let geometry = placementGeometry,
+              let size = OverlayGeometry.fieldControlSize(for: geometry.fieldRect),
               let screen = OverlayGeometry.screen(containing: geometry.fieldRect, from: OverlayScreenArea.current),
-              let origin = OverlayGeometry.issueTrayOrigin(geometry: geometry, panelSize: size, in: screen.visibleFrame) else {
+              let frame = availableControlFrame(geometry: geometry, size: size, visibleFrame: screen.visibleFrame) else {
             trayPanel?.orderOut(nil); trayPanel = nil
             return
         }
         let view = NativeAssistantBadgeView(state: assistantState,
             onOpen: { [weak self] in self?.openAssistant(intent: .pointer) },
-            onKeyboardOpen: { [weak self] in self?.openAssistant(intent: .explicit) })
+            onKeyboardOpen: { [weak self] in self?.openAssistant(intent: .explicit) }, targetSize: size.width)
         let host: NSHostingController<NativeAssistantBadgeView>
         if let existing = trayPanel?.contentViewController as? NSHostingController<NativeAssistantBadgeView> {
             existing.rootView = view
@@ -274,12 +275,32 @@ final class HighlightOverlayController {
         panel.describeAccessibility(title: "Bean writing control", identifier: "com.bean.overlay.field-control")
         if panel.contentViewController !== host { panel.contentViewController = host }
         panel.setContentSize(size)
-        panel.setFrameOrigin(origin)
+        panel.setFrameOrigin(frame.origin)
         panel.orderFrontRegardless()
     }
 
+    private func availableControlFrame(geometry: FieldOverlayGeometry, size: CGSize, visibleFrame: CGRect) -> CGRect? {
+        let candidates = OverlayGeometry.issueTrayCandidateFrames(geometry: geometry, panelSize: size, in: visibleFrame)
+        guard let validateFieldControl else { return candidates.first }
+        // Keep AX work bounded and try distinct destinations, rather than
+        // spending every probe on subpixel variants of one blocked corner.
+        var checked: [CGRect] = []
+        for frame in candidates {
+            if checked.contains(where: { abs($0.minX - frame.minX) < size.width && abs($0.minY - frame.minY) < size.height }) { continue }
+            checked.append(frame)
+            if validateFieldControl(frame) { return frame }
+            if checked.count == 3 { break }
+        }
+        return nil
+    }
+
     private func openAssistant(intent: OverlayActivationIntent) {
+        let activatedFrame = trayPanel?.frame
         onPrepareAssistant?()
+        // A moving caret/control may invalidate the formerly drawn corner.
+        // The click cannot authorize a new assistant at that stale location.
+        guard let activatedFrame, trayPanel?.frame == activatedFrame,
+              validateFieldControl?(activatedFrame) != false else { return }
         assistantOpen = true
         if intent.allowsKeyboardInteraction, !cardIsInteractive {
             cardFocusSession = OverlaySourceFocusSession.capture()

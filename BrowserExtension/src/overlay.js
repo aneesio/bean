@@ -732,30 +732,28 @@
     return free.sort((a,b)=>b[1]-a[1]);
   }
 
-  // Subtract full obstacle projections from each outside edge. A free spot
-  // farther along a long editor needs no additional DOM traversal, and the
-  // normal coordinate never moves back into the writing area.
+  // The control belongs to the editable area. Start at its top-right corner,
+  // then use another clear inside edge; typed text and controls are exclusions.
   function assistantPosition(rect,viewport,exclusions = [],pointSafe = () => true,withinBudget = () => true) {
     if (!validRect(rect) || !validRect(viewport) || !intersects(rect,viewport) ||
         !Array.isArray(exclusions) || exclusions.some(r => !validRect(r))) return null;
-    const size = ASSISTANT_TARGET_SIZE,gap = ASSISTANT_GAP,inset = 4;
+    const shortest=Math.min(rect.w,rect.h);
+    if (shortest<20) return null;
+    const size=shortest<32 ? 20 : ASSISTANT_TARGET_SIZE,padding=size===20 ? 2 : ASSISTANT_GAP;
+    const insetX=Math.min(padding,(rect.w-size)/2),insetY=Math.min(padding,(rect.h-size)/2);
+    const left = Math.max(rect.x+insetX,viewport.x+insetX),top = Math.max(rect.y+insetY,viewport.y+insetY);
+    const right = Math.min(rect.x+rect.w-insetX,viewport.x+viewport.w-insetX)-size;
+    const bottom = Math.min(rect.y+rect.h-insetY,viewport.y+viewport.h-insetY)-size;
+    if (left > right || top > bottom) return null;
     const edges = [
-      {vertical:true,fixed:rect.x+rect.w+gap},
-      {vertical:false,fixed:rect.y+rect.h+gap},
-      {vertical:true,fixed:rect.x-size-gap},
-      {vertical:false,fixed:rect.y-size-gap}
+      {vertical:false,fixed:top,lower:left,upper:right,reverse:true},
+      {vertical:true,fixed:right,lower:top,upper:bottom,reverse:false},
+      {vertical:false,fixed:bottom,lower:left,upper:right,reverse:true},
+      {vertical:true,fixed:left,lower:top,upper:bottom,reverse:false}
     ];
     let attempts = 0;
     for (const edge of edges) {
       if (!withinBudget()) return null;
-      const normalViewportStart = edge.vertical ? viewport.x : viewport.y;
-      const normalViewportEnd = normalViewportStart + (edge.vertical ? viewport.w : viewport.h);
-      if (edge.fixed < normalViewportStart + inset || edge.fixed + size > normalViewportEnd - inset) continue;
-      const start = edge.vertical ? rect.y : rect.x,end = start + (edge.vertical ? rect.h : rect.w);
-      const viewportStart = edge.vertical ? viewport.y : viewport.x;
-      const viewportEnd = viewportStart + (edge.vertical ? viewport.h : viewport.w);
-      const lower = Math.max(viewportStart+inset,Math.min(start,end-size));
-      const upper = Math.min(viewportEnd-size-inset,Math.max(start,end-size));
       const blocked = exclusions.filter(obstacle => {
         const normal = edge.vertical ? obstacle.x : obstacle.y;
         const length = edge.vertical ? obstacle.w : obstacle.h;
@@ -764,14 +762,14 @@
         const tangent = edge.vertical ? obstacle.y : obstacle.x;
         return [tangent-size-2,tangent+(edge.vertical ? obstacle.h : obstacle.w)+2];
       });
-      for (const [a,b] of freeEdgeIntervals(lower,upper,blocked)) {
-        // Endpoints carry the exact full-rectangle proof. The center also
-        // allows a neutral visible background when an endpoint is occluded.
-        for (const origin of [...new Set([b,(a+b)/2,a])]) {
+      const intervals=freeEdgeIntervals(edge.lower,edge.upper,blocked)
+        .sort((a,b)=>edge.reverse ? b[1]-a[1] : a[0]-b[0]);
+      for (const [a,b] of intervals) {
+        for (const origin of [...new Set(edge.reverse ? [b,(a+b)/2,a] : [a,(a+b)/2,b])]) {
           if (++attempts > 96 || !withinBudget()) return null;
           const candidate = edge.vertical ? {x:edge.fixed,y:origin,w:size,h:size} : {x:origin,y:edge.fixed,w:size,h:size};
-          if (intersects(candidate,rect) || exclusions.some(obstacle=>intersects(candidate,obstacle,2))) continue;
-          if ([1,14,27].every(dx => [1,14,27].every(dy => pointSafe(candidate.x + dx,candidate.y + dy)))) return candidate;
+          if (exclusions.some(obstacle=>intersects(candidate,obstacle,2))) continue;
+          if ([1,size/2,size-1].every(dx => [1,size/2,size-1].every(dy => pointSafe(candidate.x+dx,candidate.y+dy)))) return candidate;
         }
       }
     }
@@ -793,12 +791,6 @@
     return false;
   }
 
-  function sourceAncestors(source) {
-    const ancestors = new Set([document.body,document.documentElement]);
-    for (let current = composedParent(source); current; current = composedParent(current)) ancestors.add(current);
-    return ancestors;
-  }
-
   function sourceVisible(rect,viewport,source) {
     if (!source) return true;
     const x = Math.max(rect.x,viewport.x),y = Math.max(rect.y,viewport.y);
@@ -815,79 +807,160 @@
 
   function assistantDOMPosition(rect,source) {
     const started = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : null;
-    const overBudget = () => started !== null && performance.now() - started > 8;
+    const overBudget = () => started !== null && performance.now() - started > 12;
+    // Optional surrounding geometry cannot spend the time needed to prove the
+    // exact-source candidate. Keep at least four milliseconds for placement.
+    const optionalBudgetSpent = () => started !== null && performance.now() - started >= 8;
     const viewport = assistantViewport();
     if (!validRect(rect) || !viewport || typeof document.elementsFromPoint !== "function" ||
-        source && (!document.contains(source) ||
-          source.ownerDocument !== document || typeof source.getRootNode === "function" && source.getRootNode() !== document)) return null;
+        source && (!document.contains(source) || source.ownerDocument !== document ||
+          typeof source.getRootNode === "function" && source.getRootNode() !== document)) return null;
     if (!sourceVisible(rect,viewport,source)) return null;
-    const backgrounds = sourceAncestors(source);
-    const exclusions = [];
-    const root = document.documentElement || document.body;
-    if (!root) return null;
-    const pending = [{node:root,depth:0}];
-    let visited = 0;
-    while (pending.length) {
-      const {node,depth} = pending.pop();
-      if (++visited > 8192 || depth > 256 || overBudget()) return null;
-      if (beanOwned(node)) continue;
-      const style = typeof window.getComputedStyle === "function" ? window.getComputedStyle(node) : null;
-      // display:none hides this host and all descendants, including top-layer
-      // descendants. content-visibility:hidden still paints/hits the host.
-      // pointer-events:none proves only the wrapper; children may override it.
-      if (style && style.display === "none") continue;
-      const semantic = typeof node.matches === "function" && node.matches(ASSISTANT_OBSTACLES);
-      const background = backgrounds.has(node) || node === source;
-      const untargetable = style && style.pointerEvents === "none";
-      const boxless = style && style.display === "contents";
-      if (boxless && !background && !untargetable) {
-        if (!node.childNodes) return null;
-        for (const child of node.childNodes) {
-          if (++visited > 8192 || overBudget()) return null;
-          if (child.nodeType !== 3) continue;
-          if (typeof document.createRange !== "function") return null;
-          const range = document.createRange();range.selectNode(child);
-          for (const r of range.getClientRects()) {
-            if (exclusions.length >= 8192 || overBudget()) return null;
-            const textRect = {x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height};
-            if (![textRect.x,textRect.y,textRect.w,textRect.h].every(Number.isFinite)) return null;
-            if (validRect(textRect)) exclusions.push(textRect);
-          }
+    const exclusions=[];let visited=0;
+    const add = (r,caret=false) => {
+      if (!r || overBudget() || exclusions.length>=2048) return false;
+      const box={x:r.x ?? r.left+window.scrollX,y:r.y ?? r.top+window.scrollY,
+        w:r.w ?? r.width,h:r.h ?? r.height};
+      if (![box.x,box.y,box.w,box.h].every(Number.isFinite) || box.w<0 || box.h<0) return false;
+      if (caret && box.h>0 && box.w===0) box.w=2;
+      if (validRect(box) && intersects(box,rect)) exclusions.push(box);
+      return true;
+    };
+    const addClient = r => add({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height});
+    const styleOf = node => typeof window.getComputedStyle === "function" ? window.getComputedStyle(node) : null;
+    const measureTextControl = (node) => {
+      const mapping=window.BeanMapping;
+      if (!mapping || typeof mapping.rectsForRange!=="function") return !node.value && !node.placeholder;
+      const value=String(node.value || "");
+      const controlStyle=styleOf(node);
+      if (controlStyle && controlStyle.writingMode && controlStyle.writingMode!=="horizontal-tb") return false;
+      if (value.length>50000) return false;
+      const rects=mapping.rectsForRange(node,0,value.length);
+      if (value && !rects.length || !rects.every(r=>add(r))) return false;
+      if (!value && node.placeholder) {
+        // Measure an inert copy, never change the real value or its selection.
+        if (typeof node.cloneNode!=="function") return false;
+        const copy=node.cloneNode(false),style=styleOf(node),bounds=node.getBoundingClientRect();
+        copy.removeAttribute("id");copy.removeAttribute("name");copy.tabIndex=-1;
+        copy.setAttribute("aria-hidden","true");copy.value=String(node.placeholder);
+        if (style) for (const property of ["boxSizing","paddingTop","paddingRight","paddingBottom","paddingLeft",
+          "borderTopWidth","borderRightWidth","borderBottomWidth","borderLeftWidth","fontFamily","fontSize",
+          "fontWeight","fontStyle","letterSpacing","textTransform","lineHeight","textIndent","textAlign","direction","writingMode","tabSize"]) copy.style[property]=style[property];
+        Object.assign(copy.style,{position:"fixed",left:`${bounds.left}px`,top:`${bounds.top}px`,
+          width:`${bounds.width}px`,height:`${bounds.height}px`,visibility:"hidden",pointerEvents:"none"});
+        document.body.appendChild(copy);
+        try {const placeholder=mapping.rectsForRange(copy,0,copy.value.length);
+          if (!placeholder.length || !placeholder.every(r=>add(r))) return false;
+        } finally {copy.remove();}
+      }
+      if (document.activeElement===node && Number.isInteger(node.selectionStart)) {
+        const caret=mapping.rectsForRange(node,node.selectionStart,node.selectionStart);
+        if (!caret.length || !caret.every(r=>add(r,true))) return false;
+      }
+      // Keep the target out of a real scrollbar and resize grip.
+      const cs=styleOf(node),border=cs ? (parseFloat(cs.borderLeftWidth)||0)+(parseFloat(cs.borderRightWidth)||0) : 0;
+      if (Number.isFinite(node.clientWidth) && rect.w-node.clientWidth-border>2) {
+        const width=rect.w-node.clientWidth-(parseFloat(cs && cs.borderLeftWidth)||0);
+        exclusions.push({x:rect.x+rect.w-width,y:rect.y,w:width,h:rect.h});
+      }
+      if (cs && cs.resize && cs.resize!=="none") exclusions.push({x:rect.x+rect.w-18,y:rect.y+rect.h-18,w:18,h:18});
+      return true;
+    };
+    if (source && ["INPUT","TEXTAREA"].includes(source.tagName)) {
+      if (!measureTextControl(source)) return null;
+    } else if (source) {
+      const pending=[source];
+      while(pending.length) {
+        const node=pending.pop();if (++visited>1024 || overBudget()) return null;
+        if (node.nodeType===3) {
+          if (!node.nodeValue) continue;
+          if (typeof document.createRange!=="function") return null;
+          const range=document.createRange();range.selectNodeContents(node);
+          const rects=[...range.getClientRects()];
+          if (node.nodeValue.trim() && !rects.length || !rects.every(addClient)) return null;
+          continue;
         }
+        const cs=styleOf(node);if (cs && cs.display==="none") continue;
+        if (node!==source && (typeof node.matches==="function" && node.matches(ASSISTANT_OBSTACLES) ||
+            ["IMG","SVG","CANVAS","VIDEO","AUDIO","HR"].includes(node.tagName) ||
+            node.getAttribute && node.getAttribute("contenteditable")==="false")) {
+          if (typeof node.getBoundingClientRect!=="function" || !addClient(node.getBoundingClientRect())) return null;
+          continue;
+        }
+        if (node.shadowRoot || String(node.tagName || "").includes("-")) return null;
+        if (!node.childNodes) return null;
+        if (node.childNodes.length+pending.length+visited>1024) return null;
+        for(let i=node.childNodes.length-1;i>=0;i--) pending.push(node.childNodes[i]);
       }
-      let obstacle = null;
-      if ((!background || semantic) && !boxless && (!untargetable || semantic)) {
-        if (typeof node.getBoundingClientRect !== "function") return null;
-        const r = node.getBoundingClientRect();
-        obstacle = {x:r.left + window.scrollX,y:r.top + window.scrollY,w:r.width,h:r.height};
-        if (![obstacle.x,obstacle.y,obstacle.w,obstacle.h].every(Number.isFinite) || obstacle.w < 0 || obstacle.h < 0) return null;
-        if (validRect(obstacle) && (!untargetable || semantic)) exclusions.push(obstacle);
+      const selection=typeof window.getSelection==="function" ? window.getSelection() : null;
+      if (selection && selection.rangeCount && source.contains(selection.anchorNode)) {
+        const range=selection.getRangeAt(0);
+        for (const r of range.getClientRects()) if (!add({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height},true)) return null;
       }
-      // A containment declaration cannot certify this subtree: it may be
-      // ineffective on inline boxes, expand via overflow-clip-margin, or have
-      // top-layer descendants outside its clip. Traverse within the same
-      // bounded budget instead of assuming the host covers its children.
-      // Shadow/custom branches cannot expose complete child geometry.
-      if (node.shadowRoot || String(node.tagName || "").includes("-")) return null;
-      if (!node.children || !Number.isFinite(node.children.length)) return null;
-      for (let index = node.children.length - 1; index >= 0; index--) {
-        if (pending.length + visited > 8192) return null;
-        pending.push({node:node.children[index],depth:depth+1});
+    }
+    // Inspect nearby sibling geometry, not the entire page. A large unrelated
+    // feed or custom element cannot suppress every editor's dot. Intersecting
+    // sibling branches are occupied in full; boxless/pointer-none wrappers
+    // are traversed so an embedded Send button remains an exclusion.
+    if (source) {
+      let child=source;
+      for(let level=0;level<4 && !optionalBudgetSpent();level++) {
+        const parent=composedParent(child);if (!parent || !parent.children) break;
+        const pending=[],seen=new Set();
+        const queueSibling=node=>{
+          if (node && node!==child && !seen.has(node) && !beanOwned(node)) {
+            seen.add(node);pending.push({node,depth:0});
+          }
+        };
+        // Bound collection itself, including a very large flat parent's list.
+        // Immediate neighbors are visited even when the editor occurs late in
+        // a feed; no Array spread/indexOf walks the complete document branch.
+        for(let index=0;index<Math.min(parent.children.length,128);index++) queueSibling(parent.children[index]);
+        for(const direction of ["previousElementSibling","nextElementSibling"]) {
+          let sibling=child[direction];
+          for(let distance=0;sibling && distance<32;distance++,sibling=sibling[direction]) queueSibling(sibling);
+        }
+        let nearbyVisited=0;
+        while(pending.length) {
+          const {node,depth}=pending.pop();if (++nearbyVisited>256 || optionalBudgetSpent()) break;
+          let cs=null;
+          try {cs=styleOf(node);} catch (_optionalGeometryError) {continue;}
+          if (optionalBudgetSpent()) break;
+          if (cs && cs.display==="none") continue;
+          const transparent=cs && (cs.display==="contents" || cs.pointerEvents==="none");
+          if (transparent) {
+            if (!node.children) continue;
+            if (depth<2 && node.children.length<=32) for(const descendant of node.children) pending.push({node:descendant,depth:depth+1});
+            continue;
+          }
+          if (typeof node.getBoundingClientRect!=="function") continue;
+          let r=null;
+          try {r=node.getBoundingClientRect();} catch (_optionalGeometryError) {continue;}
+          if (optionalBudgetSpent()) break;
+          if (!r || ![r.left,r.top,r.width,r.height].every(Number.isFinite) || r.width<0 || r.height<0) continue;
+          addClient(r);
+          // Child fixed/absolute boxes may escape a non-intersecting wrapper.
+          // Only shallow nearby controls are relevant; candidate hit testing
+          // additionally rejects any opaque sibling/top-layer surface.
+          const near={x:rect.x-36,y:rect.y-36,w:rect.w+72,h:rect.h+72};
+          if (node.children && node.children.length<=32 && depth<2 &&
+              (depth===0 || intersects({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height},near)))
+            for(const descendant of node.children) pending.push({node:descendant,depth:depth+1});
+        }
+        if (parent===document.body || parent===document.documentElement) break;
+        child=parent;
       }
     }
     return assistantPosition(rect,viewport,exclusions,(x,y) => {
       if (overBudget()) return false;
-      const stack = document.elementsFromPoint(x - window.scrollX,y - window.scrollY);
-      const hit = stack.find(element => !beanOwned(element));
-      // A neutral ancestor/background is usable only after all its semantic
-      // controls have been excluded. Unknown sibling/closed-shadow content is
-      // occupied, even if the small sampling grid does not reveal its label.
-      if (!hit || !backgrounds.has(hit) || hit === source || hit.shadowRoot ||
-          String(hit.tagName || "").includes("-")) return false;
-      for (let current = hit; current; current = composedParent(current)) {
-        if (typeof current.matches === "function" && current.matches(ASSISTANT_OBSTACLES)) return false;
+      const hit=document.elementsFromPoint(x-window.scrollX,y-window.scrollY).find(element=>!beanOwned(element));
+      if (!hit) return false;
+      if (!source) return hit===document.body || hit===document.documentElement;
+      for(let current=hit;current;current=composedParent(current)) {
+        if (current===source) return true;
+        if (typeof current.matches==="function" && current.matches(ASSISTANT_OBSTACLES)) return false;
       }
-      return true;
+      return false;
     },()=>!overBudget());
   }
 
@@ -947,13 +1020,13 @@
     assistantEl.setAttribute("aria-label",`Bean: ${description}. Open writing suggestions.`);
     assistantEl.title = `Bean: ${description}`;
     assistantEl.dataset.hasIssues = String(current.count > 0);
-    Object.assign(assistantEl.style,{left:`${position.x}px`,top:`${position.y}px`});
+    Object.assign(assistantEl.style,{left:`${position.x}px`,top:`${position.y}px`,width:`${position.w}px`,height:`${position.h}px`});
     if (assistantCardState && assistantCardEl) assistantCardState.refresh(current.rect,current.status,current.count);
     return true;
   }
 
   // One quiet status dot per field, with a larger semantic hit target. The
-  // editor remains usable when no nearby space can safely contain that target.
+  // editor remains usable when no clear inside corner can safely contain that target.
   function renderAssistant(rect, count, status, handlers, options = {}) {
     const focusToken = keyboardFocusToken();
     assistantPlacementState = {rect,count,status,handlers:handlers || {},source:options.source || null};
