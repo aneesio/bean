@@ -527,3 +527,36 @@ visually inspected at `/private/tmp/bean-build17-native-dot-visuals` and
 renders, not certification of installed native AX or physical Chrome delivery.
 No personal draft, provider key, clipboard contents, paid request or outgoing
 message was used for this update.
+
+Build 17 was packaged from **`b0d7dee`** and installed at
+`/Applications/Bean.app`. Built, staged, ZIP, mounted DMG and installed complete
+45-file bundle trees match. Strict signatures, universal architectures, both
+artifact checksums, DMG integrity, the Applications link and eight exact public
+documents pass. The verification mount was detached. Independent inspection
+confirms all 72 file-backed product sections and both architecture UUIDs match:
+arm64 `9C7136DD-141C-364F-8DC4-0CE47CB2F568` (37 sections), x86_64
+`A898591D-6BDF-3BE3-80F9-6E1679D5F987` (35 sections). All 30 bundled extension
+files match source 0.8.3 exactly; both native-host utilities also match.
+Build 16 rollback: `build/installed-backups/installed.Fd2LVL/Bean.app`.
+Earlier completed release artifacts remain intact.
+
+```text
+e6bc22aec10fca222b66a344c7e640f2dce19a46c395346d8c7c8c96490578ba  Bean executable
+ffa7836e7fa15dda836d7027f7492cdd6fc9223049bc1fdafa0aca28d3db6e03  Bean-1.7.0-build17-unnotarized.zip
+0caf6f5f9785a31c97ff9501a65c09a33f62b3d9414ad56fbaeafe5110b9dd5a  Bean-1.7.0-build17-unnotarized.dmg
+```
+
+Logs: `/private/tmp/bean-package-build17.log`,
+`/private/tmp/bean-build17-artifact-verify.log`,
+`/private/tmp/bean-install-build17.log` and
+`/private/tmp/bean-build17-installed-verify.log`. Retained ZIP verification tree:
+`/var/folders/mt/ywk26cl921l2mt__0nw71jv00000gn/T/bean-build17-artifact-verify-bz6b_d_k`.
+
+Actual installed General shows **1.7.0 (17)**. Live suggestions, Deeper AI, Bean
+dot and launch-at-login remain on; AI Proofread/⌘⇧G is unchanged. General reports
+that Accessibility recovery is required after the changed local ad hoc build.
+The existing System Settings Bean entry is on, but refreshing it presents a
+Touch ID sheet. The user was asked to authenticate and toggle the same entry
+off/on; physical refresh remains pending at this record. Manual extension
+0.8.3 reload/page refresh was also requested and is not yet confirmed. No live
+build 17 native overlay or installed Chrome bridge pass is claimed.

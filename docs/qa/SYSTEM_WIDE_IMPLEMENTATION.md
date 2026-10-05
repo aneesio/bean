@@ -135,3 +135,11 @@ light/dark snapshots were inspected. The actual build 16 Accessibility status
 was ready before this update. The user's specific missing-dot composer remains
 unidentified, and computer-use review rejected com.openai.codex inspection;
 there is no universal or third-party placement sign-off.
+
+Build 17 source `b0d7dee` is packaged and installed. Complete installed/ZIP/DMG
+bundle identity, strict signatures/checksums, universal product sections, eight
+public documents and all 30 extension files pass. Actual Settings shows
+1.7.0 (17) and retained writing/shortcut preferences. Build 16 rollback is
+preserved. The local ad hoc signature requires another existing Accessibility
+entry refresh; Touch ID and extension 0.8.3 reload/page refresh are pending at
+this record. See the candidate QA record for exact hashes and limits.
