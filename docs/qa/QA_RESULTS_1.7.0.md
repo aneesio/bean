@@ -635,3 +635,47 @@ ready. Bean Writer has no writer-owned system dot implementation; the global
 polling path skips Bean's own process. Its reported dot is not accepted as proof
 of external source ownership. Build 18 packaging/activation and external
 fixture observations will be recorded separately. No paid QA call was made.
+
+Build 18 source **`e63b239`** is packaged and installed at the stable
+`/Applications/Bean.app` path. Strict signatures, universal architectures,
+checksums, ZIP extraction and read-only mounted DMG verification pass. All
+45 bundle files match across the assembled, staged, extracted ZIP, mounted
+DMG and installed app. All 30 extension files and eight public documents
+exactly match source. Independent native verification matches all 72
+file-backed Mach-O sections to the current SwiftPM release product:
+
+- arm64 UUID `EA938B8B-D8C4-3FF8-9808-CD355F77CB6E`, 37 sections.
+- x86_64 UUID `51388131-E9DB-3B4F-A09C-F785DA747F8F`, 35 sections.
+- Executable SHA-256: `5ac59f42855648a37e3d6207cc50d7369e195d17e5068d4471ded80eb6e4d0f3`.
+- ZIP SHA-256: `2ce6e926646896660ae603d3ebaf646797a043f58eff4c7bd2a727c768900b91`.
+- DMG SHA-256: `7392792dedac1a8aeaf2015da06698ddb95e0ed83d02be72103ac926e2f6a12f`.
+
+The installer initially refused because a Bean process remained/restarted
+after Quit. A normal Quit and process absence check preceded successful
+installation. Build 17 rollback is retained at
+`build/installed-backups/installed.68HMzr/Bean.app`; all 45 files match its
+previous release bundle. No process was forcibly killed.
+
+Actual General shows **1.7.0 (18)**. Its initial Accessibility state was stale
+despite the existing System Settings switch being on. Refreshing the same
+entry off/on succeeded within the already unlocked session; actual General
+then reports **Accessibility is ready**. Live suggestions, Bean dot, login
+and AI Proofread/⌘⇧G preferences remain intact. Deeper AI was switched off for
+the owned live fixture and restored on after the fixture quit.
+
+The owned external composer preserves its synthetic text and reaches Send,
+Attach and Mic through screenshot-grounded pointer clicks, once with a normal
+AX wrapper and once with its wrapper frame zero (all counters reach two).
+The fixture is closed and its process absence is verified. An app-scoped
+fixture screenshot omits Bean's other-process overlay; observing Bean's own
+floating-control AX window does not establish its external source/coordinates
+and can disturb focus. Therefore no independent screenshot-based live dot
+placement sign-off is claimed from those tools. The user independently reports
+that the dot now starts appearing in different apps while this work is active.
+This is recorded as user-reported external visibility, not every-app coverage.
+
+Extension 0.8.4 is bundled and source/owned-WebKit tested. Its manual Chrome
+reload/page refresh has been requested and is not yet confirmed at this record.
+The browser tool cannot navigate to extension settings. No installed Chrome
+bridge or universal custom-editor pass is inferred from the Node/WebKit gate.
+No paid QA action was invoked.

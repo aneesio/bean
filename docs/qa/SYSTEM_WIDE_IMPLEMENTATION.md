@@ -158,3 +158,15 @@ validation before opening. Independent reviews and the combined automated
 gate pass, including six real WebKit cases. Exposed native text geometry and
 arbitrary custom editors remain best effort. Packaging and external live
 visibility evidence are separate from these source/owned-fixture passes.
+
+Build 18 source `e63b239` is packaged and installed. Full installed/ZIP/DMG
+bundle identity, strict signatures/checksums, both architecture product UUIDs
+and all 72 sections, eight public documents and 30 extension files pass. The
+existing Accessibility entry was refreshed off/on in its unlocked session;
+actual build 18 General reports ready and preferences remain intact. The user
+reports dots starting to appear in different apps. The owned external fixture
+reaches all three adjacent controls with normal/zero wrappers and preserves
+text, but its app-scoped screenshot cannot certify another process's overlay
+position. Fixture closed; Deeper AI restored on; build 17 rollback preserved.
+Extension 0.8.4 manual reload/page refresh remains unconfirmed. No universal
+app support or installed Chrome bridge sign-off is claimed.
