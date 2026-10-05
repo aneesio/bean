@@ -560,3 +560,18 @@ Touch ID sheet. The user was asked to authenticate and toggle the same entry
 off/on; physical refresh remains pending at this record. Manual extension
 0.8.3 reload/page refresh was also requested and is not yet confirmed. No live
 build 17 native overlay or installed Chrome bridge pass is claimed.
+
+Activation follow-up: the user reports completing Touch ID, refreshing Bean's
+Accessibility entry and reloading extension 0.8.3/pages. System Settings shows
+Bean enabled. After one normal Bean restart, actual build 17 General reports
+**Accessibility is ready**. AI Proofread/⌘⇧G and all writing/login preferences
+remain intact. The user-reported extension reload is not an independently
+observed installed Chrome bridge test.
+
+A final owned native fixture check used screenshot-grounded pointer clicks on
+Send, Attach and Mic. Each counter incremented once with a normal wrapper and
+once with its AX frame zero (all counters reached two); synthetic text remained
+unchanged. The fixture was quit normally and Deeper AI was restored on. The
+app-scoped fixture screenshot does not establish another process's overlay
+presence, so this is a control-routing smoke check, not a certified live dot
+visibility pass or third-party composer check. No paid QA call was made.

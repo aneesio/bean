@@ -140,6 +140,10 @@ Build 17 source `b0d7dee` is packaged and installed. Complete installed/ZIP/DMG
 bundle identity, strict signatures/checksums, universal product sections, eight
 public documents and all 30 extension files pass. Actual Settings shows
 1.7.0 (17) and retained writing/shortcut preferences. Build 16 rollback is
-preserved. The local ad hoc signature requires another existing Accessibility
-entry refresh; Touch ID and extension 0.8.3 reload/page refresh are pending at
-this record. See the candidate QA record for exact hashes and limits.
+preserved. The user completed the existing Accessibility refresh; after a
+normal restart actual build 17 reports Accessibility ready. The user also
+reports extension 0.8.3 reload/page refresh. An owned native pointer smoke check
+preserves text and reaches Send/Attach/Mic with both normal and zero-frame AX
+wrappers, but its app-scoped screenshot cannot certify another process's
+overlay presence. Deeper AI was restored on and the fixture closed. See the
+candidate QA record for exact hashes and remaining live-validation limits.
