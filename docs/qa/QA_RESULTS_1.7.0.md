@@ -426,3 +426,44 @@ physical Chrome input. Chrome automation rejected `chrome://extensions/` because
 its URL policy permits HTTP/HTTPS only; no alternate surface or bypass was used.
 Manual extension reload remains separate. Broader real-app placement, VoiceOver,
 the existing writing-quality gate and signed/notarized release limits remain.
+
+Build 16 was packaged from **`2dc8a9f`** and installed at
+`/Applications/Bean.app`. Build, staged, ZIP, mounted DMG and installed complete
+bundle trees match; strict signatures, both artifact checksums and DMG integrity
+pass. Independent inspection confirms both architecture UUIDs and all 72
+file-backed sections match the universal SwiftPM product (37 arm64, 35 x86_64).
+All 30 bundled extension files match source 0.8.2 byte for byte. The DMG includes
+the Applications link and eight exact public documents, and was detached after
+verification. Completed earlier artifacts remain intact. Build 15 rollback:
+`build/installed-backups/installed.AEAzAv/Bean.app`.
+
+```text
+83d8facd2820ef606232290f7beb745f633343e3d9aaa7ca2433ff3ce9995c45  Bean executable
+292baebdf4c5b168362cdb9230b48bdbae0c9783ea7192e140ad9b3524602847  Bean-1.7.0-build16-unnotarized.zip
+683e79b078e879b83544db7b4214b4f2f4b26e2ae4674f5e199ec7678caee571  Bean-1.7.0-build16-unnotarized.dmg
+```
+
+Logs: `/private/tmp/bean-package-build16.log`,
+`/private/tmp/bean-install-build16.log`,
+`/private/tmp/bean-build16-artifact-verify.log` and
+`/private/tmp/bean-build16-installed-verify.log`. The first verification ZIP
+extraction is retained at
+`/var/folders/mt/ywk26cl921l2mt__0nw71jv00000gn/T/bean-build16-artifact-verify-9es06y1r`.
+
+Actual installed General shows **1.7.0 (16)** and Writing shows **Bean dot** with
+the new safe-space explanation. AI Proofread/⌘⇧G, Deeper AI on, Live suggestions
+on, dot on and launch-at-login on retain their settings. General requires
+Accessibility recovery. Refreshing the existing System Settings switch presents
+a Touch ID sheet; the user was asked to authenticate and toggle Bean off/on.
+Native live placement awaits that physical refresh. Extension 0.8.2 reload/page
+refresh was also requested; it is not yet independently observed or reported.
+
+Chrome allowed a separate owned HTTP fixture in explicit `beanqa=1` mock mode.
+Its production scripts displayed a tiny amber dot outside a textarea; a real
+browser pointer click opened assistance without losing the source caret. One
+Proofread click changed synthetic `This is teh draft.` to `This is the draft.`
+directly, and the status became a hollow gray ring. AX text and pixels agree.
+This verifies Chrome rendering/click flow against local API mocks, not the
+installed extension/native bridge or real model judgment. The disposable tab
+was closed and the loopback-only fixture server stopped. No personal draft,
+clipboard contents, provider key, paid request or external message was used.

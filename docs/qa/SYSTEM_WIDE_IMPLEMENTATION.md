@@ -113,3 +113,12 @@ the same rule. Independent review, native geometry/refresh/paint regressions and
 real owned WebKit crowded-composer/corner hit tests pass. This evidence does not
 certify third-party AX placement or physical Chrome delivery. See the candidate
 record for the final verification and activation state.
+
+Build 16 source `2dc8a9f` is packaged and installed; actual Settings shows
+1.7.0 (16) and the Bean dot preference. Universal product sections, complete
+bundle identity, ZIP/DMG signatures/checksums, eight public documents and all 30
+extension files pass. Build 15 is retained for rollback. Actual Chrome also
+renders/clicks the production dot and directly replaces synthetic text in the
+provider-free mock fixture; that is separate from installed-extension transport.
+The required ad hoc Accessibility refresh and manual extension reload were
+handed to the user and remain pending at this record.
