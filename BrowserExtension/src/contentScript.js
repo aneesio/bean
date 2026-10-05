@@ -48,6 +48,7 @@
   let lastBridgeAt = 0;
   let pauseExpiryTimer = null;
   let appPauseRefreshTimer = null;
+  let assistantGeometryTimer = null,assistantGeometryUrgent = false,assistantGeometryObserver = null,assistantResizeObserver = null;
   let lastInputAt = null;
   function recordMetric(kind,started,inputLength,issueCount,outcome) {
     const elapsedMilliseconds = Math.max(0,Math.min(180000,Math.round(Date.now() - started)));
@@ -578,7 +579,9 @@
   function ownsFocusedField() {
     const paused = suppressionNeeded();
     const el = paused ? state.suppressedField : state.active;
-    return !!el && (paused || state.assistantVisible) && document.visibilityState !== "hidden" &&
+    const presentationVisible = state.assistantVisible || BeanOverlay &&
+      typeof BeanOverlay.hasFieldPresentation === "function" && BeanOverlay.hasFieldPresentation();
+    return !!el && (paused || presentationVisible) && document.visibilityState !== "hidden" &&
       (typeof document.hasFocus !== "function" || document.hasFocus()) &&
       document.contains(el) && (paused || siteAllowed()) && eligibleEditableSurface(el) === el &&
       (document.activeElement === el || (el.contains && el.contains(document.activeElement)) ||
@@ -712,6 +715,53 @@
     scrollThrottle = setTimeout(() => { scrollThrottle = null; recomputeRects(); }, 60);
   }, true);
   window.addEventListener("resize", () => { if (state.active) recomputeRects(); });
+  if (window.visualViewport && typeof window.visualViewport.addEventListener === "function") {
+    for (const event of ["resize","scroll"]) window.visualViewport.addEventListener(event,() => scheduleAssistantGeometryRefresh(0));
+  }
+
+  function scheduleAssistantGeometryRefresh(delay = 500) {
+    if (!state.active || !BeanOverlay || typeof BeanOverlay.refreshAssistantPlacement !== "function") return;
+    if (assistantGeometryTimer) {
+      if (delay === 500 || assistantGeometryUrgent) return;
+      clearTimeout(assistantGeometryTimer);
+    }
+    assistantGeometryUrgent = delay !== 500;
+    assistantGeometryTimer = setTimeout(() => {
+      assistantGeometryTimer = null;
+      assistantGeometryUrgent = false;
+      if (!state.active) return;
+      if (document.visibilityState !== "hidden") {
+        if (eligibleEditableSurface(state.active) !== state.active) { teardown(); return; }
+        const visible = BeanOverlay.refreshAssistantPlacement();
+        if (state.assistantVisible !== visible) {
+          state.assistantVisible = visible;
+          syncKeyboardBridge();renewOwnership();
+        }
+      }
+      scheduleAssistantGeometryRefresh();
+    },delay);
+  }
+
+  function observeAssistantGeometry(el) {
+    if (typeof MutationObserver === "function" && document.body) {
+      assistantGeometryObserver = new MutationObserver(records => {
+        const external = records.some(record => {
+          if (isBeanOverlayNode(record.target)) return false;
+          if (record.type !== "childList") return true;
+          const nodes = [...record.addedNodes,...record.removedNodes];
+          return nodes.length === 0 || nodes.some(node => !isBeanOverlayNode(node));
+        });
+        if (external) scheduleAssistantGeometryRefresh(80);
+      });
+      assistantGeometryObserver.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,
+        attributeFilter:["class","style","hidden","role","tabindex","disabled"]});
+    }
+    if (typeof ResizeObserver === "function") {
+      assistantResizeObserver = new ResizeObserver(() => scheduleAssistantGeometryRefresh(80));
+      assistantResizeObserver.observe(el);
+      if (document.documentElement) assistantResizeObserver.observe(document.documentElement);
+    }
+  }
 
   function setActive(el) {
     if (state.disabledFields.has(el)) return;
@@ -730,6 +780,7 @@
     state.localSpellingAvailable = false;
     state.composing = false;
     state.suppressedField = null;
+    observeAssistantGeometry(el);
     el.addEventListener("input", onInput, true);
     el.addEventListener("compositionstart", onCompositionStart, true);
     el.addEventListener("compositionend", onCompositionEnd, true);
@@ -938,6 +989,10 @@
     state.assistantVisible = false;
     releaseOwnership();
     if (appPauseRefreshTimer) { clearTimeout(appPauseRefreshTimer); appPauseRefreshTimer = null; }
+    if (assistantGeometryTimer) { clearTimeout(assistantGeometryTimer); assistantGeometryTimer = null; }
+    assistantGeometryUrgent = false;
+    if (assistantGeometryObserver) { assistantGeometryObserver.disconnect(); assistantGeometryObserver = null; }
+    if (assistantResizeObserver) { assistantResizeObserver.disconnect(); assistantResizeObserver = null; }
     if (focusoutTimer) { clearTimeout(focusoutTimer); focusoutTimer = null; }
     if (debounce) { clearTimeout(debounce); debounce = null; }
     if (state.active) {
@@ -1452,10 +1507,11 @@
       onDisableField: () => disableCurrentField(),
       onPauseSite:(event) => pauseCurrentSite(event),
       onDisableSite: () => disableCurrentSite()
-    });
+    },{source:el});
     state.assistantVisible = shown !== false;
     syncKeyboardBridge();
     renewOwnership();
+    scheduleAssistantGeometryRefresh();
   }
 
   function captureActionTarget(el,scope) {

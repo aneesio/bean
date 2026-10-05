@@ -289,9 +289,9 @@ struct SettingsView: View {
 
             Divider()
 
-            Toggle("Bean button", isOn: $settings.bubbleEnabled)
-                .accessibilityHint("Shows a writing-actions button beside eligible editable fields")
-            Text("Shows a small shortcut beside supported editable fields. It stays hidden in secure, read-only, and unsupported fields.")
+            Toggle("Bean dot", isOn: $settings.bubbleEnabled)
+                .accessibilityHint("Shows a status dot beside supported fields when there is clear space")
+            Text("A small dot shows writing status. Hover for status or click for suggestions and writing actions. It stays hidden when there is no clear space beside the field.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
 
             DisclosureGroup("Advanced") { writingAdvancedOptions }
@@ -837,12 +837,12 @@ struct SettingsView: View {
 
             Divider()
 
-            Text("Bean button")
+            Text("Bean dot")
                 .font(.subheadline.weight(.semibold))
             if settings.bubbleEnabled {
                 bubbleOptions
             } else {
-                Text("Turn on Bean button above to customize when and where it appears.")
+                Text("Turn on Bean dot above to customize when and where it appears.")
                     .font(.caption)
                     .foregroundColor(BeanDesign.secondaryText)
             }
@@ -858,16 +858,16 @@ struct SettingsView: View {
             HStack {
                 Text("Delay before showing")
                 Slider(value: $settings.bubbleDelay, in: 0.3...2.0, step: 0.1)
-                    .accessibilityLabel("Bean button delay")
+                    .accessibilityLabel("Bean dot delay")
                     .accessibilityValue(String(format: "%.1f seconds", settings.bubbleDelay))
-                    .accessibilityHint("Adjusts how long Bean waits before showing the button")
+                    .accessibilityHint("Adjusts how long Bean waits before showing the dot")
                 Text(String(format: "%.1fs", settings.bubbleDelay)).monospacedDigit().frame(width: 40)
             }
             Toggle("Allow in chat apps", isOn: $settings.bubbleInChat)
             Toggle("Allow in mail and browser fields", isOn: $settings.bubbleInMailBrowser)
             Toggle("Allow in code editors", isOn: $settings.bubbleInCode)
             Toggle("Allow in search fields", isOn: $settings.bubbleInSearch)
-            Text("These preferences only narrow eligible fields. Bean still hides the button anywhere it cannot verify safe editing.")
+            Text("These preferences only narrow eligible fields. Bean still hides the dot anywhere it cannot verify safe editing or clear space.")
                 .font(BeanDesign.Typography.smallCaption())
                 .foregroundColor(BeanDesign.secondaryText)
         }

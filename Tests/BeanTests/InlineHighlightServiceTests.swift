@@ -269,6 +269,49 @@ final class InlineHighlightServiceTests: XCTestCase {
         XCTAssertFalse(fixture.service.assistantState.canChooseParagraph)
     }
 
+    func testPlacementCacheIsOwnedByExactFieldEvenWithIdenticalBounds() throws {
+        let fixture = try Fixture(text: "Synthetic clean draft.")
+        defer { fixture.close() }
+        let fieldRect = CGRect(x: 100, y: 100, width: 300, height: 100)
+        let windowRect = CGRect(x: 0, y: 0, width: 800, height: 600)
+        fixture.editor.geometry = FieldOverlayGeometry(fieldRect: fieldRect, windowRect: windowRect, exclusionRects: [])
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        let initialCaptures = fixture.editor.placementCaptureCount
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        XCTAssertEqual(fixture.editor.placementCaptureCount, initialCaptures, "Same-field refresh is bounded by cadence")
+        let secondIdentity = AXUIElementCreateSystemWide() // Opaque identity only; never queried.
+        let send = CGRect(x: 404, y: 100, width: 28, height: 28)
+        fixture.editor.geometry = FieldOverlayGeometry(fieldRect: fieldRect, windowRect: windowRect, exclusionRects: [send])
+        fixture.service.prepare(field: fixture.field(element: secondIdentity), app: nil)
+        XCTAssertEqual(fixture.editor.placementCaptureCount, initialCaptures + 1)
+        XCTAssertEqual(fixture.editor.placements.last!, fixture.editor.geometry)
+    }
+
+    func testUnchangedFieldRefreshRechecksMovedNeighborAtBoundedCadence() throws {
+        let fixture = try Fixture(text: "Synthetic clean draft.")
+        defer { fixture.close() }
+        let fieldRect = CGRect(x: 100, y: 100, width: 300, height: 100)
+        let windowRect = CGRect(x: 0, y: 0, width: 800, height: 600)
+        fixture.editor.geometry = FieldOverlayGeometry(fieldRect: fieldRect, windowRect: windowRect, exclusionRects: [])
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        let initialCaptures = fixture.editor.placementCaptureCount
+        fixture.editor.geometry = FieldOverlayGeometry(fieldRect: fieldRect, windowRect: windowRect,
+            exclusionRects: [CGRect(x: 404, y: 100, width: 28, height: 28)])
+        fixture.editor.time += 0.251
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        XCTAssertEqual(fixture.editor.placementCaptureCount, initialCaptures + 1)
+        XCTAssertEqual(fixture.editor.placements.last!, fixture.editor.geometry)
+        fixture.editor.geometry = nil // A now-opaque neighborhood must hide.
+        fixture.editor.time += 0.251
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        XCTAssertNil(fixture.editor.placements.last!)
+        XCTAssertTrue(fixture.service.ownsFocusedFieldSession,
+            "A hidden dot still owns the field and suppresses legacy fallback")
+        XCTAssertFalse(fixture.service.isShowingUI)
+        fixture.service.hideUI()
+        XCTAssertFalse(fixture.service.ownsFocusedFieldSession)
+    }
+
     private func assertRun(_ fixture: Fixture, shows expected: Bool, reason: inout String,
                            file: StaticString = #filePath, line: UInt = #line) async {
         let shown = await fixture.run(reason: &reason)
@@ -283,6 +326,10 @@ final class InlineHighlightServiceTests: XCTestCase {
         var states: [NativeAssistantState] = []
         var canEditRanges = true
         var selectedRange: NSRange?
+        var geometry: FieldOverlayGeometry?
+        var placementCaptureCount = 0
+        var placements: [FieldOverlayGeometry?] = []
+        var time: TimeInterval = 1
         var localCoverage: IssueDetector.LocalCoverage = .complete
 
         init(text: String) { value = text }
@@ -333,8 +380,10 @@ final class InlineHighlightServiceTests: XCTestCase {
                         spellingCoverage: editor.localCoverage, grammarCoverage: editor.localCoverage)
                 },
                 present: { editor.presentations.append($0.map(\.issue)) },
-                selectedRange: { _ in editor.selectedRange }, anchor: { _ in nil },
-                presentState: { editor.states.append($0) }, canEditRanges: { _ in editor.canEditRanges }
+                selectedRange: { _ in editor.selectedRange }, anchor: { _ in editor.geometry?.fieldRect },
+                presentState: { editor.states.append($0) }, canEditRanges: { _ in editor.canEditRanges },
+                placementGeometry: { _ in editor.placementCaptureCount += 1; return editor.geometry },
+                presentPlacement: { editor.placements.append($0) }, monotonicTime: { editor.time }
             )
             service = InlineHighlightService(
                 settings: settings,
@@ -353,8 +402,8 @@ final class InlineHighlightServiceTests: XCTestCase {
             SourceAppContext.current(app: nil, field: field(), mode: .focusedFieldFullText)
         }
 
-        func field() -> AccessibilityService.FocusedField {
-            .init(element: element, role: "AXTextArea", subrole: nil, value: editor.value,
+        func field(element override: AXUIElement? = nil) -> AccessibilityService.FocusedField {
+            .init(element: override ?? element, role: "AXTextArea", subrole: nil, value: editor.value,
                   title: nil, placeholder: nil, isValueSettable: false,
                   isSelectedTextSettable: false, isEnabled: true,
                   hasEditableAncestor: false, isExplicitlyEditable: true,

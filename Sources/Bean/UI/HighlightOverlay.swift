@@ -31,6 +31,7 @@ final class HighlightOverlayController {
     private var cardPanel: OverlayPanel?
     private var trayPanel: OverlayPanel?
     private var sourceAnchor: CGRect?
+    private var placementGeometry: FieldOverlayGeometry?
     private var cardPinned = false
     private var preferTrayCardAnchor = false
     private var renderedEntries: [Entry] = []
@@ -46,8 +47,9 @@ final class HighlightOverlayController {
     // MARK: - Render
 
     func render(entries: [Entry], selectedID: UUID?, position: (index: Int, total: Int)?,
-                sourceAnchor: CGRect? = nil) {
+                sourceAnchor: CGRect? = nil, placementGeometry: FieldOverlayGeometry? = nil) {
         self.sourceAnchor = sourceAnchor
+        self.placementGeometry = placementGeometry
         renderedEntries = entries
         renderedSelectedID = selectedID
 
@@ -65,7 +67,7 @@ final class HighlightOverlayController {
                 highlightPanels[entry.issue.id] = makeHighlightPanel(for: entry.issue.id, frame: frame)
             }
         }
-        if showsAssistantControl { showTray(issueCount: entries.count) }
+        if showsAssistantControl { showTray() }
         else { trayPanel?.orderOut(nil); trayPanel = nil }
 
         // Card for the selected issue (if any).
@@ -88,6 +90,7 @@ final class HighlightOverlayController {
         trayPanel?.orderOut(nil)
         trayPanel = nil
         sourceAnchor = nil
+        placementGeometry = nil
         hideCard()
     }
 
@@ -238,7 +241,14 @@ final class HighlightOverlayController {
         makeInteractive(cardPanel, firstResponder: cardPanel.contentViewController?.view)
     }
 
-    private func showTray(issueCount: Int) {
+    private func showTray() {
+        let size = CGSize(width: OverlayGeometry.minimumMotorTarget, height: OverlayGeometry.minimumMotorTarget)
+        guard let geometry = placementGeometry,
+              let screen = OverlayGeometry.screen(containing: geometry.fieldRect, from: OverlayScreenArea.current),
+              let origin = OverlayGeometry.issueTrayOrigin(geometry: geometry, panelSize: size, in: screen.visibleFrame) else {
+            trayPanel?.orderOut(nil); trayPanel = nil
+            return
+        }
         let view = NativeAssistantBadgeView(state: assistantState,
             onOpen: { [weak self] in self?.openAssistant(intent: .pointer) },
             onKeyboardOpen: { [weak self] in self?.openAssistant(intent: .explicit) })
@@ -250,28 +260,21 @@ final class HighlightOverlayController {
         let panel: OverlayPanel
         if let existing = trayPanel { panel = existing }
         else {
-            panel = OverlayPanel(contentRect: NSRect(x: 0, y: 0, width: 160, height: 36),
+            panel = OverlayPanel(contentRect: NSRect(origin: .zero, size: size),
                                  styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.level = .statusBar
             panel.isFloatingPanel = true
             panel.backgroundColor = .clear
             panel.isOpaque = false
-            panel.hasShadow = true
+            panel.hasShadow = false
             panel.hidesOnDeactivate = false
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             trayPanel = panel
         }
         panel.describeAccessibility(title: "Bean writing control", identifier: "com.bean.overlay.field-control")
         if panel.contentViewController !== host { panel.contentViewController = host }
-        panel.setContentSize(host.view.fittingSize)
-        let screens = OverlayScreenArea.current
-        let screen = sourceAnchor.flatMap { OverlayGeometry.screen(containing: $0, from: screens) }
-            ?? OverlayGeometry.screen(containing: NSEvent.mouseLocation, from: screens)
-        if let screen {
-            panel.setFrameOrigin(OverlayGeometry.issueTrayOrigin(anchoredTo: sourceAnchor,
-                                                                 panelSize: panel.frame.size,
-                                                                 in: screen.visibleFrame))
-        }
+        panel.setContentSize(size)
+        panel.setFrameOrigin(origin)
         panel.orderFrontRegardless()
     }
 

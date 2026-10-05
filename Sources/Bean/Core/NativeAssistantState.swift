@@ -54,14 +54,7 @@ struct NativeAssistantState: Equatable {
         }
     }
 
-    var badgeText: String {
-        if issueCount > 0 { return String(issueCount) }
-        switch phase {
-        case .checkingLocal, .checkingAI: return "…"
-        case .unavailable: return "!"
-        default: return ""
-        }
-    }
+    var hasSuggestions: Bool { issueCount > 0 }
 
     var isBusy: Bool { phase == .checkingLocal || phase == .checkingAI }
     var proofreadLabel: String { "Proofread \(scope)" }

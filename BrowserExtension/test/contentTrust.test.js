@@ -59,6 +59,18 @@ async function run() {
   let localCheckComplete=null,nativeProtectedRanges=[];
   let appAssistancePaused=false;
   let fieldPresent = true;
+  let assistantPlacementVisible=true,overlayPresentationVisible=false,geometryRefreshes=0;
+  const geometryMutationObservers=[],geometryResizeObservers=[];
+  class GeometryMutationObserver {
+    constructor(callback) {this.callback=callback;this.disconnected=false;geometryMutationObservers.push(this);}
+    observe(target,options) {this.target=target;this.options=options;}
+    disconnect() {this.disconnected=true;}
+  }
+  class GeometryResizeObserver {
+    constructor(callback) {this.callback=callback;this.disconnected=false;this.targets=[];geometryResizeObservers.push(this);}
+    observe(target) {this.targets.push(target);}
+    disconnect() {this.disconnected=true;}
+  }
   let now = 1_000_000;
   const domNodes = new Set();
   const fieldParent = {
@@ -107,6 +119,7 @@ async function run() {
 
   const document = {
     documentElement: { dataset: {} },
+    body: {},
     activeElement: field,
     addEventListener: (name, listener) => { documentListeners[name] = listener; },
     removeEventListener: () => {},
@@ -328,7 +341,11 @@ async function run() {
   const BeanOverlay = {
     clear: () => { paragraphBusy = false; renderedEntries = []; },
     clearUndo: () => {},
-    renderAssistant: (rect, count, status, handlers) => assistantCalls.push({ rect, count, status, handlers }),
+    renderAssistant: (rect, count, status, handlers, options) => {
+      assistantCalls.push({rect,count,status,handlers,options});return assistantPlacementVisible;
+    },
+    refreshAssistantPlacement:()=>{geometryRefreshes++;return assistantPlacementVisible;},
+    hasFieldPresentation:()=>overlayPresentationVisible || renderedEntries.some(entry=>entry.rects.length>0) || paragraphBusy,
     clearAssistant: () => {},
     render: (entries, _selected, _position, handlers) => {
       renderedEntries = entries;
@@ -411,6 +428,7 @@ async function run() {
     Event: function Event() {}, URL, Date: { now: () => now }, Math, Promise, Set, WeakSet, Map, Object, Array,
     setTimeout, clearTimeout
   };
+  context.MutationObserver=GeometryMutationObserver;context.ResizeObserver=GeometryResizeObserver;
   const actualTrustContext = {window:{}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,"..","src","trustPolicy.js"),"utf8"),actualTrustContext);
   for (const name of ["mergeLocalIssues","localCheckChunks","localBridgeReadiness","isPlainTextContentEditableBlock"]) {
@@ -427,6 +445,45 @@ async function run() {
   await settle();
   assert.deepEqual(localChecks, [field.value], "an already-autofocused field runs the offline detector");
   assert.equal(bridgeMessages.length, 0, "focus with existing text never sends page text");
+  assert.equal(assistantCalls.at(-1).options.source,field,"placement probes the actual editor without a writing snapshot");
+  const geometryObserver=geometryMutationObservers.at(-1);
+  assert.equal(geometryObserver.target,document.body);
+  assert.equal(geometryObserver.options.subtree,true);
+  assert.equal(geometryResizeObservers.at(-1).targets.includes(field),true);
+  const refreshGeometry=()=>{
+    geometryMutationObservers.at(-1).callback([{type:"attributes",target:{}}]);
+    const callback=timers.get(timerID);assert.ok(callback);timers.delete(timerID);callback();
+  };
+  const oldValue=field.value;let placementValueReads=0;
+  Object.defineProperty(field,"value",{configurable:true,get:()=>{placementValueReads++;return oldValue;}});
+  const checksBeforeGeometry=localChecks.length,requestsBeforeGeometry=localBridgeMessages.length;
+  assistantPlacementVisible=false;refreshGeometry();
+  assert.equal(ownershipMessages.at(-1).ownership.active,false,"hiding all field UI releases native ownership");
+  assistantPlacementVisible=true;refreshGeometry();
+  assert.equal(ownershipMessages.at(-1).ownership.active,true,"free space restores field ownership without a reload");
+  overlayPresentationVisible=true;assistantPlacementVisible=false;refreshGeometry();
+  assert.equal(ownershipMessages.at(-1).ownership.active,true,
+    "visible underlines/review retain browser ownership when the dot cannot safely fit");
+  assert.equal(placementValueReads,0,"layout movement never reads writing or captures a new action target");
+  assert.equal(localChecks.length,checksBeforeGeometry);assert.equal(localBridgeMessages.length,requestsBeforeGeometry);
+  Object.defineProperty(field,"value",{configurable:true,writable:true,value:oldValue});
+  overlayPresentationVisible=false;assistantPlacementVisible=true;refreshGeometry();
+  const timersBeforeBeanMutation=timers.size;
+  geometryObserver.callback([{type:"attributes",target:{id:"bean-inline-host"}}]);
+  assert.equal(timers.size,timersBeforeBeanMutation,"Bean's own status mutations never create a refresh feedback loop");
+  geometryObserver.callback([{type:"attributes",target:{}}]);
+  const timerAfterFirstMutation=timerID;
+  for(let i=0;i<100;i++) geometryObserver.callback([{type:"attributes",target:{}}]);
+  assert.equal(timerID,timerAfterFirstMutation,"mutation bursts coalesce without continually postponing the refresh");
+  const burstCallback=timers.get(timerID);timers.delete(timerID);burstCallback();
+  assert.ok(geometryRefreshes>=4);
+  documentListeners.focusin({target:document.body});
+  assert.equal(geometryObserver.disconnected,true,"leaving the editor disconnects its mutation observer");
+  assert.equal(geometryResizeObservers.at(-1).disconnected,true);
+  const refreshesAfterTeardown=geometryRefreshes;
+  runTimers();await settle();
+  assert.equal(geometryRefreshes,refreshesAfterTeardown,"teardown cancels the recurring geometry probe");
+  document.activeElement=field;documentListeners.focusin({target:field});
 
   documentListeners.focusout({ target: { id: "bean-inline-host" }, relatedTarget: null });
   assert.equal(typeof elementListeners.input, "function",

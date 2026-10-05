@@ -12,6 +12,10 @@
   let keyboardActivationPending = false, keyboardActivationTimer = null;
   let keyboardExitHandler = null, assistantEl = null, assistantCardEl = null;
   let assistantCardState = null;
+  let assistantPlacementState = null;
+  const ASSISTANT_TARGET_SIZE = 28;
+  const ASSISTANT_GAP = 4;
+  const ASSISTANT_OBSTACLES = 'button,input,textarea,select,a[href],label,summary,iframe,[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="combobox"],[role="slider"],[role="menuitem"],[contenteditable]:not([contenteditable="false"]),[tabindex],[onclick],[onmousedown],[draggable="true"],video[controls],audio[controls]';
 
   function officialMarkURL() {
     try {
@@ -53,7 +57,7 @@
     const style = document.createElement("style");
     style.textContent = `
       :host { color-scheme:light dark; --bean-accent:${ACCENT}; --bean-ink:#252321;
-              --bean-muted:#66615c; --bean-surface:rgba(255,253,250,.98); --bean-line:#d8d1c9; }
+              --bean-muted:#66615c; --bean-issue:#D97706; --bean-surface:rgba(255,253,250,.98); --bean-line:#d8d1c9; }
       * { box-sizing:border-box; }
       .layer { position:absolute; top:0; left:0; pointer-events:none; }
       button { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
@@ -88,13 +92,14 @@
       .pico { position:absolute; pointer-events:auto; cursor:pointer; width:30px; height:30px; padding:2px;
               border-radius:9px; background:var(--bean-surface); border:1px solid var(--bean-line);
               box-shadow:0 2px 8px rgba(0,0,0,.2); box-sizing:border-box; }
-      .assistant { position:absolute; display:flex; align-items:center; gap:5px; min-width:36px;
-                   height:30px; padding:3px 7px; pointer-events:auto; cursor:pointer;
-                   border:1px solid var(--bean-line); border-radius:18px; background:var(--bean-surface);
-                   color:var(--bean-ink); box-shadow:0 2px 9px rgba(0,0,0,.12); font:600 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-      .assistant img { width:21px; height:21px; border-radius:50%; }
-      .assistant:hover { border-color:var(--bean-accent); }
-      .assistant-count { min-width:12px; color:var(--bean-accent); text-align:center; }
+      .assistant { position:absolute; display:flex; align-items:center; justify-content:center;
+                   width:28px; height:28px; padding:0; pointer-events:auto; cursor:pointer;
+                   appearance:none; border:0; border-radius:0; background:transparent; color:var(--bean-muted); }
+      .assistant::before { content:""; position:absolute; inset:0; border-radius:50%; pointer-events:none; }
+      .assistant-dot { display:block; width:10px; height:10px; flex:none; border:1.5px solid currentColor;
+                       border-radius:50%; background:transparent; pointer-events:none; }
+      .assistant[data-has-issues="true"] .assistant-dot { border-color:var(--bean-issue); background:var(--bean-issue); }
+      .assistant:hover::before { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .source { font-size:10px; color:var(--bean-muted); margin:0 0 5px; }
       .pico img { display:block; width:24px; height:24px; border-radius:7px; }
       .pico:hover { border-color:var(--bean-accent); transform:translateY(-1px); }
@@ -133,11 +138,13 @@
       @media (max-width:620px) { .compare { grid-template-columns:1fr; } .compare pre { height:100px; } }
       @media (prefers-color-scheme:dark) {
         :host { --bean-accent:${DARK_ACCENT}; --bean-ink:#f2efeb; --bean-muted:#c4bdb5;
-                --bean-surface:rgba(41,38,34,.98); --bean-line:#59514a; }
+                --bean-issue:#FBBF24; --bean-surface:rgba(41,38,34,.98); --bean-line:#59514a; }
         button.primary { color:#21160d; }
       }
       @media (prefers-reduced-motion:reduce) { .pico:hover { transform:none; } * { transition:none !important; } }
       @media (forced-colors:active) { .card,.pico,.toast,button.b,.overflow-menu { border:1px solid CanvasText; }
+                                     .assistant-dot { border-color:ButtonText; }
+                                     .assistant[data-has-issues="true"] .assistant-dot { border-color:Highlight; background:Highlight; }
                                      .ul { border-bottom:3px solid LinkText; } }
     `;
     underlineLayer = document.createElement("div");
@@ -683,52 +690,221 @@
     return "Basic checks only · spelling connection unavailable";
   }
 
-  // One quiet, predictable entry point per field. Keep it out of the text so
-  // reading, selecting, and placing the caret continue to work normally.
-  function renderAssistant(rect, count, status, handlers) {
-    if (!rect || rect.x + rect.w < window.scrollX || rect.x > window.scrollX + window.innerWidth ||
-        rect.y + rect.h < window.scrollY || rect.y > window.scrollY + window.innerHeight) {
-      clearAssistant(); return false;
+  function validRect(rect) {
+    return !!rect && [rect.x,rect.y,rect.w,rect.h].every(Number.isFinite) && rect.w > 0 && rect.h > 0;
+  }
+
+  function intersects(a,b,gap = 0) {
+    return a.x < b.x + b.w + gap && a.x + a.w + gap > b.x &&
+      a.y < b.y + b.h + gap && a.y + a.h + gap > b.y;
+  }
+
+  function assistantViewport() {
+    const viewport = {x:window.scrollX,y:window.scrollY,w:window.innerWidth,h:window.innerHeight};
+    if (!validRect(viewport)) return null;
+    const visual = window.visualViewport;
+    if (!visual) return viewport;
+    const visible = {x:viewport.x + visual.offsetLeft,y:viewport.y + visual.offsetTop,
+      w:visual.width,h:visual.height};
+    if (!validRect(visible)) return null;
+    const x = Math.max(viewport.x,visible.x),y = Math.max(viewport.y,visible.y);
+    const w = Math.min(viewport.x + viewport.w,visible.x + visible.w) - x;
+    const h = Math.min(viewport.y + viewport.h,visible.y + visible.h) - y;
+    return validRect({x,y,w,h}) ? {x,y,w,h} : null;
+  }
+
+  // Validate the entire invisible target. Never clamp a rejected outside
+  // position back over the editor. Slides remain on their original edge.
+  function assistantPosition(rect,viewport,exclusions = [],pointSafe = () => true) {
+    if (!validRect(rect) || !validRect(viewport) || !intersects(rect,viewport) ||
+        !Array.isArray(exclusions) || exclusions.some(r => !validRect(r))) return null;
+    const size = ASSISTANT_TARGET_SIZE,gap = ASSISTANT_GAP,inset = 4;
+    const candidates = [];
+    for (const slide of [0,32,64,96]) {
+      candidates.push({x:rect.x + rect.w + gap,y:rect.y + rect.h - size - slide,w:size,h:size},
+        {x:rect.x + rect.w - size - slide,y:rect.y + rect.h + gap,w:size,h:size},
+        {x:rect.x - size - gap,y:rect.y + rect.h - size - slide,w:size,h:size},
+        {x:rect.x + rect.w - size - slide,y:rect.y - size - gap,w:size,h:size});
     }
-    ensureHost();
-    const focusToken = keyboardFocusToken();
-    if (assistantEl) assistantEl.remove();
+    for (const candidate of candidates) {
+      if (candidate.x < viewport.x + inset || candidate.y < viewport.y + inset ||
+          candidate.x + size > viewport.x + viewport.w - inset ||
+          candidate.y + size > viewport.y + viewport.h - inset || intersects(candidate,rect) ||
+          exclusions.some(obstacle => intersects(candidate,obstacle,2))) continue;
+      if ([1,14,27].every(dx => [1,14,27].every(dy => pointSafe(candidate.x + dx,candidate.y + dy)))) return candidate;
+    }
+    return null;
+  }
+
+  function composedParent(node) {
+    if (!node) return null;
+    if (node.assignedSlot) return node.assignedSlot;
+    if (node.parentElement) return node.parentElement;
+    const root = typeof node.getRootNode === "function" ? node.getRootNode() : null;
+    return root && root.host || null;
+  }
+
+  function beanOwned(node) {
+    for (let current = node; current; current = composedParent(current)) {
+      if (current === hostEl) return true;
+    }
+    return false;
+  }
+
+  function sourceAncestors(source) {
+    const ancestors = new Set([document.body,document.documentElement]);
+    for (let current = composedParent(source); current; current = composedParent(current)) ancestors.add(current);
+    return ancestors;
+  }
+
+  function sourceVisible(rect,viewport,source) {
+    if (!source) return true;
+    const x = Math.max(rect.x,viewport.x),y = Math.max(rect.y,viewport.y);
+    const width = Math.min(rect.x + rect.w,viewport.x + viewport.w) - x;
+    const height = Math.min(rect.y + rect.h,viewport.y + viewport.h) - y;
+    if (width <= 0 || height <= 0) return false;
+    return [0.1,0.5,0.9].some(dx => [0.1,0.5,0.9].some(dy => {
+      const hit = document.elementsFromPoint(x + width * dx - window.scrollX,
+        y + height * dy - window.scrollY).find(element => !beanOwned(element));
+      for (let current = hit; current; current = composedParent(current)) if (current === source) return true;
+      return false;
+    }));
+  }
+
+  function assistantDOMPosition(rect,source) {
+    const started = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : null;
+    const overBudget = () => started !== null && performance.now() - started > 8;
+    const viewport = assistantViewport();
+    if (!validRect(rect) || !viewport || typeof document.elementsFromPoint !== "function" ||
+        typeof document.querySelectorAll !== "function" || source && (!document.contains(source) ||
+          source.ownerDocument !== document || typeof source.getRootNode === "function" && source.getRootNode() !== document)) return null;
+    if (!sourceVisible(rect,viewport,source)) return null;
+    const controls = document.querySelectorAll(ASSISTANT_OBSTACLES);
+    const nodes = document.querySelectorAll("*");
+    // Unbounded or unverifiable control geometry is not empty space.
+    if (controls.length > 2048 || nodes.length > 4096) return null;
+    const backgrounds = sourceAncestors(source);
+    const exclusions = [];
+    const measured = new Set();
+    for (const control of [...controls,...nodes]) {
+      if (beanOwned(control)) continue;
+      if (measured.has(control)) continue;
+      measured.add(control);
+      const semantic = typeof control.matches === "function" && control.matches(ASSISTANT_OBSTACLES);
+      if (!semantic && (backgrounds.has(control) || control === source)) continue;
+      if (overBudget()) return null;
+      if (typeof control.getBoundingClientRect !== "function") return null;
+      const r = control.getBoundingClientRect();
+      const obstacle = {x:r.left + window.scrollX,y:r.top + window.scrollY,w:r.width,h:r.height};
+      if (![obstacle.x,obstacle.y,obstacle.w,obstacle.h].every(Number.isFinite)) return null;
+      if (validRect(obstacle)) exclusions.push(obstacle);
+    }
+    return assistantPosition(rect,viewport,exclusions,(x,y) => {
+      if (overBudget()) return false;
+      const stack = document.elementsFromPoint(x - window.scrollX,y - window.scrollY);
+      const hit = stack.find(element => !beanOwned(element));
+      // A neutral ancestor/background is usable only after all its semantic
+      // controls have been excluded. Unknown sibling/closed-shadow content is
+      // occupied, even if the small sampling grid does not reveal its label.
+      if (!hit || !backgrounds.has(hit) || hit === source || hit.shadowRoot ||
+          String(hit.tagName || "").includes("-")) return false;
+      for (let current = hit; current; current = composedParent(current)) {
+        if (typeof current.matches === "function" && current.matches(ASSISTANT_OBSTACLES)) return false;
+      }
+      return true;
+    });
+  }
+
+  function makeAssistantButton() {
     const button = document.createElement("button");
-    button.type = "button";
-    button.className = "assistant";
-    button.dataset.bean = "overlay";
-    button.dataset.beanAssistant = "";
-    const description = assistantDescription(status, count);
-    button.setAttribute("aria-label", `Bean: ${description}. Open writing suggestions.`);
-    button.title = description;
-    const mark = document.createElement("img");
-    mark.src = officialMarkURL(); mark.alt = "";
-    const number = document.createElement("span");
-    number.className = "assistant-count";
-    number.textContent = count ? String(count) : (["checking","checkingLocal"].includes(status) ? "…" : "");
-    button.append(mark, number);
-    const x = Math.max(window.scrollX + 4, Math.min(rect.x + rect.w - 48,
-      window.scrollX + window.innerWidth - 56));
-    const y = Math.max(window.scrollY + 4, Math.min(rect.y + rect.h + 5,
-      window.scrollY + window.innerHeight - 36));
-    Object.assign(button.style, { left:`${x}px`, top:`${y}px` });
-    button.addEventListener("mousedown", (event) => event.preventDefault());
-    wireButton(button, (event) => {
+    button.type = "button";button.className = "assistant";
+    button.dataset.bean = "overlay";button.dataset.beanAssistant = "";
+    const dot = document.createElement("span");dot.className = "assistant-dot";
+    dot.setAttribute("aria-hidden","true");button.appendChild(dot);
+    let lastPointerCheck = 0;
+    button.addEventListener("pointerenter",() => {lastPointerCheck = Date.now();refreshAssistantPlacement();});
+    button.addEventListener("pointermove",() => {
+      if (Date.now() - lastPointerCheck < 120) return;
+      lastPointerCheck = Date.now();refreshAssistantPlacement();
+    });
+    button.addEventListener("mousedown",event => {refreshAssistantPlacement();event.preventDefault();});
+    wireButton(button,event => {
+      const current = assistantPlacementState;
+      if (!current) return;
+      // A page control can move between render and click. Revalidate without
+      // taking a new writing snapshot or stealing focus from that control.
+      if (!refreshAssistantPlacement()) return;
       queueFocusForActivationEvent(event);
-      const scope = call(handlers,"onPrepareActions",event);
-      if (scope) handlers.actionScope = scope;
-      showAssistantCard(rect, status, handlers, count);
+      const scope = call(current.handlers,"onPrepareActions",event);
+      if (scope) current.handlers.actionScope = scope;
+      showAssistantCard(current.rect,current.status,current.handlers,current.count);
     });
     shadow.appendChild(button);
-    assistantEl = button;
+    return button;
+  }
+
+  function refreshAssistantPlacement() {
+    const current = assistantPlacementState;
+    if (!current) return false;
+    const focusToken = keyboardFocusToken();
+    let position = null;
+    try {
+      if (current.source) {
+        const r = current.source.getBoundingClientRect();
+        current.rect = {x:r.left + window.scrollX,y:r.top + window.scrollY,w:r.width,h:r.height};
+      }
+      position = assistantDOMPosition(current.rect,current.source);
+    } catch (_error) {}
+    if (!position) {
+      if (assistantEl) assistantEl.remove();
+      assistantEl = null;
+      if (!validRect(current.rect) || !intersects(current.rect,assistantViewport() || {x:0,y:0,w:0,h:0})) {
+        if (assistantCardEl) assistantCardEl.remove();
+        assistantCardEl = null;assistantCardState = null;
+      }
+      if (focusToken && shadow && !shadow.activeElement) restoreKeyboardFocus(focusToken);
+      return false;
+    }
+    ensureHost();
+    if (!assistantEl) assistantEl = makeAssistantButton();
+    const description = assistantDescription(current.status,current.count);
+    assistantEl.setAttribute("aria-label",`Bean: ${description}. Open writing suggestions.`);
+    assistantEl.title = `Bean: ${description}`;
+    assistantEl.dataset.hasIssues = String(current.count > 0);
+    Object.assign(assistantEl.style,{left:`${position.x}px`,top:`${position.y}px`});
+    if (assistantCardState && assistantCardEl) assistantCardState.refresh(current.rect,current.status,current.count);
+    return true;
+  }
+
+  // One quiet status dot per field, with a larger semantic hit target. The
+  // editor remains usable when no nearby space can safely contain that target.
+  function renderAssistant(rect, count, status, handlers, options = {}) {
+    const focusToken = keyboardFocusToken();
+    assistantPlacementState = {rect,count,status,handlers:handlers || {},source:options.source || null};
+    const shown = refreshAssistantPlacement();
     if (assistantCardState && assistantCardEl) {
       const scope = assistantCardState.handlers.actionScope;
       Object.assign(assistantCardState.handlers,handlers || {});
       assistantCardState.handlers.actionScope = scope;
-      assistantCardState.refresh(rect,status,count);
+      assistantCardState.refresh(assistantPlacementState.rect,status,count);
     }
     restoreKeyboardFocus(focusToken);
-    return true;
+    return shown;
+  }
+
+  function hasFieldPresentation() {
+    const viewport = assistantViewport();
+    if (!viewport) return false;
+    const elements = [assistantEl,assistantCardEl,cardEl,groupCardEl,paragraphBusyEl,paragraphReviewEl,
+      ...(underlineLayer && underlineLayer.children || [])];
+    return elements.some(element => {
+      if (!element || typeof element.getBoundingClientRect !== "function") return false;
+      try {
+        const r = element.getBoundingClientRect();
+        const rect = {x:r.left + window.scrollX,y:r.top + window.scrollY,w:r.width,h:r.height};
+        return validRect(rect) && intersects(rect,viewport);
+      } catch (_error) {return false;}
+    });
   }
 
   function showAssistantCard(rect, status, handlers, count = 0) {
@@ -816,6 +992,7 @@
     if (assistantCardEl) assistantCardEl.remove();
     assistantCardEl = null;
     assistantCardState = null;
+    assistantPlacementState = null;
   }
 
   function showParagraphBusy(pageRect, message, onCancel) {
@@ -1074,9 +1251,10 @@
   window.BeanOverlay = {
     render, renderGroups, clear, clearUndo, flash, reviewParagraph, showParagraphBusy,
     clearParagraphBusy, showUndo, setFieldDisabled, focusFirstControl, focusLastControl,
-    hasKeyboardControls, setKeyboardExitHandler, renderAssistant, clearAssistant,
+    hasKeyboardControls, setKeyboardExitHandler, renderAssistant, clearAssistant, refreshAssistantPlacement, hasFieldPresentation,
     _test: { cap, assistantDescription, visibleCorrectionText, paragraphDiff, officialMarkURL, wireActivationControl, wireButton,
              queueKeyboardActivationFocus, focusAfterKeyboardActivation, keyboardControls,
-             isPlainTabEvent, keyboardExitDirection, keyboardFocusToken, restoreKeyboardFocus, anchor }
+             isPlainTabEvent, keyboardExitDirection, keyboardFocusToken, restoreKeyboardFocus, anchor,
+             assistantPosition, assistantViewport }
   };
 })();

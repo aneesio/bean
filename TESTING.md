@@ -1,6 +1,6 @@
 # Bean Testing Guide
 
-Current candidate: **Bean 1.7.0 (15), Chromium extension 0.8.1**. A checklist
+Current candidate: **Bean 1.7.0 (16), Chromium extension 0.8.2**. A checklist
 below is a required test, not a recorded pass. Historical user reports and the
 current automated evidence must be recorded separately.
 
@@ -153,7 +153,7 @@ card without automatic card opening or overlapping native/browser controls.
 
 ## Cost and privacy gate
 
-- Fresh preferences enable local live suggestions and the Bean button;
+- Fresh preferences enable local live suggestions and the Bean dot;
   diagnostics remain Off.
 - Fresh preferences show Automatic provider checks: Off.
 - Pausing after typing makes no provider request with defaults.
@@ -288,7 +288,7 @@ manual reset gate against personal API keys, personalization, or browser data.
   active style as a canonical built-in or `custom`, and omit custom profile
   names, personalization text, full app/native-host paths, hostnames, and field
   labels.
-- About shows Bean 1.7.0 (15), identifies the community-supported public beta,
+- About shows Bean 1.7.0 (16), identifies the community-supported public beta,
   and opens only the canonical `aneesio/bean` GitHub, Support, Privacy, License,
   Changelog, and manual update-check destinations. At the minimum width and
   larger Accessibility text sizes, links reflow and **Open Update Check…** lands
@@ -323,7 +323,7 @@ Verify:
 
 - the app is universal (`arm64` and `x86_64`);
 - the ZIP and DMG names include `-unnotarized`;
-- filenames also include build 15; packaging must refuse overwriting an already
+- filenames also include build 16; packaging must refuse overwriting an already
   committed build, while an interrupted/failed package can be retried safely;
 - the SHA-256 file matches both artifacts;
 - the app contains current README, TESTING, QA_TEST_PLAN, SUPPORT, PRIVACY, LICENSE, CHANGELOG,
@@ -367,3 +367,17 @@ success and zero critical wrong-target/data-loss goals also need independent
 evidence on declared supported paths; grammar recall and preferred correction
 accuracy are separate measures. Keep missing manual, provider and profiling
 evidence open in [SYSTEM_WIDE_IMPLEMENTATION.md](docs/qa/SYSTEM_WIDE_IMPLEMENTATION.md).
+
+
+### Compact status dot regression (build 16)
+
+Use crowded native and browser composer fixtures with Send, attachments,
+microphone and scrollbar controls. Verify the 10-point paint has no logo, pill or
+visible count, while its complete 28-point pointer target stays outside the
+editor and clear of controls. Move neighboring controls without editing text;
+change focus between two fields with identical bounds; scroll, resize and zoom.
+Missing geometry and a full-window editor must hide the dot rather than move it
+over content. Check hollow/filled status in light/dark appearance, hover details,
+click/keyboard review, and source focus. The older native launcher must obey the
+same rules, including dragging only into verified space. Browser ownership must
+remain with visible underlines/cards when the dot cannot fit.

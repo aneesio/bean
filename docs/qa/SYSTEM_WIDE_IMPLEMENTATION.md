@@ -9,9 +9,9 @@ Authorized scope: the complete product/quality roadmap discussed October 2,
 | Requirement | Implementation and evidence | Status |
 | --- | --- | --- |
 | Precise proofreading and rich-document preservation | Bounded minimal span plan, guarded native edits, per-span and complete verification, batch/partial Undo; rich fixtures preserve formatting, attachments and exact caret affinity | Implemented; reference-app candidate journeys remain separate |
-| One native/browser assistant experience | Quiet badge, explicit checking/basic/issues/unavailable states, click review, consistent actions/scope, keyboard focus retention; actual light/dark/narrow/short-window renders | Implemented; external browser/VoiceOver transport not certified |
+| One native/browser assistant experience | Tiny status dot, full-target safe placement or hiding, explicit checking/basic/issues/unavailable details, click review, consistent actions/scope, keyboard focus retention; actual light/dark/narrow/short-window renders | Implemented; external browser/VoiceOver transport not certified |
 | Writing judgment | Family-isolated 1,024-case synthetic benchmark, dialects, entity/negation/commitment safeguards; final precision 100%, recall 91.57%, preferred correction 98.52% | Implemented; strict heldout correction gate fails (92.5% vs 99%); human/provider review remains pending |
-| Editor-family compatibility | AppKit/WebKit/DOM journeys, interruption/clipboard/caret/Undo/composition cases; 22 owned web-editor/overlay tests pass without skips | Implemented; five own-process AX web-area tests unavailable in this host; reference apps remain separate |
+| Editor-family compatibility | AppKit/WebKit/DOM journeys, interruption/clipboard/caret/Undo/composition cases; 23 owned web-editor/overlay tests pass without skips | Implemented; five own-process AX web-area tests unavailable in this host; reference apps remain separate |
 | Speed and attention | Bounded native/browser timings, cancellation, content-free CPU/RSS profiler; scan p95 20.35ms; synthetic browser pipeline distinguishes debounce from scan time | Implemented instrumentation; actual feedback/acceptance p95 goals remain unmeasured |
 | Vocabulary and dismissal | GUI-owned persisted dictionary learning, acknowledged browser IPC, stable occurrence dismissal with Unicode word-boundary invalidation, shared dialect | Implemented and covered by fixture/IPC tests |
 | Pause/resume | One-hour or indefinite app pause; website controls/expiry; permanent blocked-site content-free focus guard; five-second app status refresh | Implemented; explicit manual actions retained |
@@ -38,8 +38,8 @@ No personal writing or paid provider requests are needed for the automated
 work. Developer signing and notarization are deferred, so local candidates must
 remain truthfully labelled ad hoc and unnotarized.
 
-Latest build 15 combined checks: `scripts/run_all_tests.sh` passed 593 Swift
-test cases (585 passed, eight skipped), all 13 browser suites, standalone logic,
+Latest build 16 combined checks: `scripts/run_all_tests.sh` passed 610 Swift
+test cases (602 passed, eight skipped), all 13 browser suites, standalone logic,
 shell syntax, release metadata and repository audit. The skips are five
 unavailable own-process AX web-area fixtures, one SwiftUI descendant fixture
 whose plain Button baseline also lacks AX descendants, and two opt-in
@@ -103,3 +103,13 @@ suggestions are already 488/488 correct, so changing weights to fit known
 heldout failures is not justified. Real provider/human evaluation, broader
 candidate app/VoiceOver journeys, live latency and edit reliability remain open.
 Historical roadmap items outside this accepted milestone are not claimed done.
+
+Build 16 addresses the October 5 field-control obstruction feedback in both the
+native app and extension 0.8.2. A 10-point/pixel gray/amber dot retains a clear
+28-point/pixel target. Exact bounded field/window/viewport and nearby-control
+geometry must prove the entire target fits outside the editor; otherwise it
+hides without guessed anchors. Native legacy drag and launcher ownership follow
+the same rule. Independent review, native geometry/refresh/paint regressions and
+real owned WebKit crowded-composer/corner hit tests pass. This evidence does not
+certify third-party AX placement or physical Chrome delivery. See the candidate
+record for the final verification and activation state.

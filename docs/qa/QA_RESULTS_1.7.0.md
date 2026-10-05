@@ -379,3 +379,50 @@ still awaits a budget, and broader candidate app journeys, VoiceOver, actual
 feedback/acceptance latency and real-app edit reliability remain unverified.
 Developer ID signing/notarization remains explicitly postponed by the user.
 This final local candidate is not universal-app or Grammarly-parity sign-off.
+
+## Build 16 compact field control — October 5, 2026
+
+The Mac app (1.7.0 build 16) and browser extension (0.8.2) replace the field
+logo/pill/count with a 10-point/CSS-pixel status dot. A hollow gray ring indicates
+no current findings; amber indicates suggestions. Gray does not certify clean
+writing. Hover/help and accessibility labels retain status details; clicking
+retains the existing assistant and actions. The clear rectangular pointer target
+is 28 points/pixels in both implementations.
+
+Automatic placement validates the entire target outside the complete editable
+field, within its source window/display or browser viewport, and clear of nearby
+controls. Bounded, content-free AX/DOM geometry collection fails closed on
+unknown, opaque, incomplete, crowded or offscreen layouts. Controls are refreshed
+even when text does not change. No caret/click guess or viewport clamp may place
+the control inside the editor. Hidden native sessions suppress the old launcher;
+browser underlines/cards retain ownership when the dot alone cannot fit. Legacy
+native drag is restricted to freshly verified safe space. Existing shortcuts,
+menu actions and eligible underlines remain available when the dot hides.
+
+Independent native/browser source review found no remaining placement blocker.
+The new regressions caught and repaired a legacy hosting-controller zero-size
+panel and circular browser hit target; final rectangular-corner hit tests pass.
+All 54 focused native cases pass, with one existing SwiftUI AX descendant skip.
+All four owned WebKit overlay cases pass, including desktop/narrow/light/dark
+crowded composers, neighboring Send/attachment/microphone hit routing, thin
+unknown controls, full-target corner clicks, tooltip/assistant focus retention,
+offscreen recovery and deliberate no-space/shadow-layout hiding.
+
+`scripts/run_all_tests.sh`: **PASS**, **610 Swift cases: 602 passed, eight skipped,
+zero failures**. All 13 browser suites, standalone logic, shell syntax, version
+metadata and repository/credential audit pass. The existing skips remain five
+own-process AX WebKit fixtures, one SwiftUI descendant baseline and two opt-in
+evaluations. Logs: `/private/tmp/bean-build16-full-tests.log`,
+`/private/tmp/bean-build16-dot-render-tests.log` and the earlier focused geometry
+run `/private/tmp/bean-build16-dot-focused-tests-final.log` (before the browser
+corner repair, whose four failures are superseded by the final passing run).
+
+Actual production-view renders were inspected at
+`/private/tmp/bean-build16-native-dot-visuals` and
+`/private/tmp/bean-build16-browser-dot-visuals`. Owned AppKit geometry fixtures
+exercise the shared traversal but do not certify external AX transport. Owned
+WebKit hits and synthetic dispatch verify layout and handler routing, not trusted
+physical Chrome input. Chrome automation rejected `chrome://extensions/` because
+its URL policy permits HTTP/HTTPS only; no alternate surface or bypass was used.
+Manual extension reload remains separate. Broader real-app placement, VoiceOver,
+the existing writing-quality gate and signed/notarized release limits remain.

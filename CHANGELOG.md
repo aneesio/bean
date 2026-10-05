@@ -3,6 +3,16 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.7.0 build 16 — 2026-10-05 (local candidate)
+
+- Replace native and browser field pills, Bean logos and visible counts with a
+  10-point status dot. Hover retains status; click opens suggestions and actions.
+- Keep the complete click target outside the typing area and clear of neighboring
+  controls. Hide the dot when clear space cannot be verified; underlines and
+  menu-bar/shortcut actions remain available.
+- Apply the same placement safety to the older native launcher so it cannot
+  return over a composer control when the assistant dot is hidden.
+
 ## 1.7.0 — 2026-10-02 (public beta candidate)
 
 - Made local live checking and field-side writing actions the default; Bean no

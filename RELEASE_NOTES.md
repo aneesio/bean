@@ -1,10 +1,17 @@
 # Bean 1.7.0 — public beta candidate
 
-Build **15**, with Chromium extension **0.8.1**. This candidate focuses on writing
+Build **16**, with Chromium extension **0.8.2**. This candidate focuses on writing
 in other apps; ordinary launch and completed setup return to the menu-bar
 experience.
 
 ## What changed
+
+- Field controls are now tiny status dots without a pill, logo or visible count.
+  Neutral hollow dots indicate no current suggestions; amber filled dots indicate
+  suggestions. Hover shows status and click opens the review/actions panel.
+- The whole click target must fit in clear space outside the editor, away from
+  neighboring controls. When safe placement is unavailable, the dot hides while
+  underlines and menu-bar/shortcut assistance remain available.
 
 - One field-side assistant provides quiet checking status, issue review,
   Proofread and Rewrite. Supported browser fields use the extension assistant

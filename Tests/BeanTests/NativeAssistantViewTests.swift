@@ -53,6 +53,93 @@ final class NativeAssistantViewTests: XCTestCase {
         }
     }
 
+    func testCompactDotAndLegacyLauncherUseFixedTargetWithoutCountGrowth() async throws {
+        _ = NSApplication.shared
+        for count in [0, 1, 3, 99] {
+            let state = NativeAssistantState(phase: .complete, issueCount: count)
+            let root = NativeAssistantBadgeView(state: state, onOpen: {}, onKeyboardOpen: {})
+                .background(Color.white)
+            let view = NSHostingView(rootView: root)
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 28, height: 28),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = view
+            XCTAssertEqual(view.fittingSize.width, 28, accuracy: 0.01)
+            XCTAssertEqual(view.fittingSize.height, 28, accuracy: 0.01)
+            view.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 50_000_000)
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let center = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+            if count > 0 {
+                XCTAssertGreaterThan(center.redComponent, center.blueComponent + 0.2, "Suggestions fill the dot amber")
+            } else {
+                XCTAssertGreaterThan(center.redComponent, 0.9)
+                XCTAssertGreaterThan(center.greenComponent, 0.9, "No suggestions leaves the center hollow")
+            }
+        }
+        let legacy = NSHostingView(rootView: BeanBubbleView(openOnHover: false, onOpen: { _ in }, onDismiss: {}))
+        XCTAssertEqual(legacy.fittingSize, CGSize(width: 28, height: 28))
+        let dot = NSHostingView(rootView: NativeStatusDot(hasSuggestions: false))
+        XCTAssertEqual(dot.fittingSize, CGSize(width: 10, height: 10))
+    }
+
+    func testUnknownAndCrowdedPlacementHideOnlyDotAndKeepUnderline() throws {
+        _ = NSApplication.shared
+        let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let controller = HighlightOverlayController()
+        defer { closeOwnedOverlay(controller, excluding: previousWindows) }
+        let issue = TextIssue(range: NSRange(location: 0, length: 3), original: "teh", suggestion: "the",
+            explanation: nil, type: .spelling, confidence: 1, source: .local)
+        let entries = [HighlightOverlayController.Entry(issue: issue, rect: fixturePlacement.fieldRect.insetBy(dx: 30, dy: 20))]
+        controller.render(entries: entries, selectedID: nil, position: nil)
+        XCTAssertFalse(ownedPanels(excluding: previousWindows).contains { $0.accessibilityIdentifier() == "com.bean.overlay.field-control" })
+        XCTAssertTrue(ownedPanels(excluding: previousWindows).contains { $0.accessibilityIdentifier().hasPrefix("com.bean.overlay.underline.") })
+        controller.render(entries: entries, selectedID: nil, position: nil,
+            sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
+        let control = try XCTUnwrap(ownedPanels(excluding: previousWindows).first { $0.accessibilityIdentifier() == "com.bean.overlay.field-control" })
+        XCTAssertEqual(control.frame.size, CGSize(width: 28, height: 28))
+        let crowded = FieldOverlayGeometry(fieldRect: fixturePlacement.fieldRect, windowRect: fixturePlacement.windowRect,
+            exclusionRects: [fixturePlacement.validatedNeighborhood])
+        controller.render(entries: entries, selectedID: nil, position: nil,
+            sourceAnchor: crowded.fieldRect, placementGeometry: crowded)
+        XCTAssertFalse(control.isVisible, "Moving a nearby control must remove the full pointer target")
+        XCTAssertTrue(ownedPanels(excluding: previousWindows).contains { $0.isVisible && $0.accessibilityIdentifier().hasPrefix("com.bean.overlay.underline.") })
+    }
+
+    func testLegacyLauncherRefusesUnsafeSavedOffsetAndNewlyOccupiedDestination() {
+        _ = NSApplication.shared
+        let placement = fixturePlacement
+        let visible = NSScreen.screens.first!.visibleFrame
+        let origin = OverlayGeometry.issueTrayOrigin(geometry: placement,
+            panelSize: CGSize(width: 28, height: 28), in: visible)!
+        var occupied = false
+        let controller = BeanBubbleController()
+        defer { controller.hide() }
+        let validate: (CGPoint) -> Bool = { point in
+            !occupied && OverlayGeometry.isSafeFieldControlFrame(CGRect(origin: point, size: CGSize(width: 28, height: 28)),
+                geometry: placement, in: visible)
+        }
+        controller.showBubble(at: origin, savedOffset: CGSize(width: 300, height: 0), openOnHover: false,
+            isSafeOrigin: validate, onOpen: { _ in XCTFail("Placement must not open writing actions") },
+            onDismiss: {}, onCommitOffset: { _ in }, onReset: {})
+        XCTAssertFalse(controller.isShowing)
+        controller.showBubble(at: origin, savedOffset: .zero, openOnHover: false,
+            isSafeOrigin: validate, onOpen: { _ in XCTFail("Placement must not open writing actions") },
+            onDismiss: {}, onCommitOffset: { _ in }, onReset: {})
+        XCTAssertEqual(controller.bubbleFrame?.size, CGSize(width: 28, height: 28))
+        occupied = true
+        controller.moveBubble(to: origin)
+        XCTAssertFalse(controller.isShowing, "An old position cannot survive a newly occupied target")
+    }
+
+    private var fixturePlacement: FieldOverlayGeometry {
+        let visible = NSScreen.screens.first?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        return FieldOverlayGeometry(fieldRect: CGRect(x: visible.midX - 150, y: visible.midY - 50, width: 300, height: 100),
+            windowRect: visible.insetBy(dx: 8, dy: 8), exclusionRects: [])
+    }
+
     func testNativeOverlayPanelsCannotTakeKeyboardFocusWithoutExplicitActivation() {
         let panel = OverlayPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -79,13 +166,13 @@ final class NativeAssistantViewTests: XCTestCase {
         let controller = HighlightOverlayController()
         defer { controller.hide(); editorWindow.close() }
         controller.assistantState = NativeAssistantState(phase: .checkingLocal)
-        controller.render(entries: [], selectedID: nil, position: nil)
+        controller.render(entries: [], selectedID: nil, position: nil, sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         XCTAssertTrue(editorWindow.firstResponder === originalResponder)
         XCTAssertTrue(NSApplication.shared.keyWindow === originalKeyWindow)
         let issue = TextIssue(range: NSRange(location: 21, length: 3), original: "teh", suggestion: "the",
             explanation: nil, type: .spelling, confidence: 1, source: .local)
         controller.assistantState = NativeAssistantState(phase: .complete, issueCount: 1)
-        controller.render(entries: [.init(issue: issue, rect: nil)], selectedID: nil, position: nil)
+        controller.render(entries: [.init(issue: issue, rect: nil)], selectedID: nil, position: nil, sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         XCTAssertFalse(controller.ownsKeyboardInteraction)
         XCTAssertTrue(editorWindow.firstResponder === originalResponder)
         XCTAssertTrue(NSApplication.shared.keyWindow === originalKeyWindow)
@@ -102,11 +189,11 @@ final class NativeAssistantViewTests: XCTestCase {
         var activatedIssue: UUID?
         controller.onActivateIssue = { id in
             activatedIssue = id
-            controller.render(entries: entries, selectedID: id, position: (0, 1))
+            controller.render(entries: entries, selectedID: id, position: (0, 1), sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         }
         defer { closeOwnedOverlay(controller, excluding: previousWindows) }
         controller.assistantState = NativeAssistantState(phase: .complete, issueCount: 1)
-        controller.render(entries: entries, selectedID: nil, position: nil)
+        controller.render(entries: entries, selectedID: nil, position: nil, sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let underline = try XCTUnwrap(ownedPanels(excluding: previousWindows).first {
@@ -158,14 +245,14 @@ final class NativeAssistantViewTests: XCTestCase {
         let controller = HighlightOverlayController()
         defer { closeOwnedOverlay(controller, excluding: previousWindows) }
         controller.assistantState = NativeAssistantState(phase: .checkingLocal)
-        controller.render(entries: [], selectedID: nil, position: nil)
+        controller.render(entries: [], selectedID: nil, position: nil, sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         let control = try XCTUnwrap(ownedPanels(excluding: previousWindows).first {
             $0.accessibilityIdentifier() == "com.bean.overlay.field-control"
         })
         let host = try XCTUnwrap(control.contentViewController as? NSHostingController<NativeAssistantBadgeView>)
         let hostingView = host.view
         controller.assistantState = NativeAssistantState(phase: .complete, issueCount: 3)
-        controller.render(entries: [], selectedID: nil, position: nil)
+        controller.render(entries: [], selectedID: nil, position: nil, sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         hostingView.layoutSubtreeIfNeeded()
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertTrue(control.contentViewController === host)
@@ -212,7 +299,7 @@ final class NativeAssistantViewTests: XCTestCase {
         let controller = HighlightOverlayController()
         defer { closeOwnedOverlay(controller, excluding: previousWindows) }
         controller.assistantState = NativeAssistantState(phase: .checkingLocal)
-        controller.render(entries: [], selectedID: nil, position: nil)
+        controller.render(entries: [], selectedID: nil, position: nil, sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         let control = try XCTUnwrap(ownedPanels(excluding: previousWindows).first {
             $0.accessibilityIdentifier() == "com.bean.overlay.field-control"
         })
@@ -221,7 +308,7 @@ final class NativeAssistantViewTests: XCTestCase {
             explanation: nil, type: .spelling, confidence: 1, source: .local)
         let entries = [HighlightOverlayController.Entry(issue: issue, rect: nil)]
         controller.assistantState = NativeAssistantState(phase: .complete, issueCount: 1)
-        controller.render(entries: entries, selectedID: nil, position: nil)
+        controller.render(entries: entries, selectedID: nil, position: nil, sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         control.contentView?.layoutSubtreeIfNeeded()
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertTrue(accessibilityLabels(in: control).contains {
@@ -238,7 +325,7 @@ final class NativeAssistantViewTests: XCTestCase {
         XCTAssertTrue(assistantLabels.contains("Close writing assistant"))
         XCTAssertTrue(assistantLabels.contains("Proofread draft"))
 
-        controller.render(entries: entries, selectedID: issue.id, position: (0, 1))
+        controller.render(entries: entries, selectedID: issue.id, position: (0, 1), sourceAnchor: self.fixturePlacement.fieldRect, placementGeometry: self.fixturePlacement)
         let correction = try XCTUnwrap(ownedPanels(excluding: previousWindows).first {
             $0.accessibilityIdentifier() == "com.bean.overlay.correction"
         })

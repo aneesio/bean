@@ -52,15 +52,12 @@ final class BeanBubbleService {
         guard controller.isShowing else { return }
         guard let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier == sourcePID else { hide("sourceChanged"); return }
-        guard let offsetElement else {
-            if ElectronTextFocusEvidence.validAnchor(for: app) == nil { hide("typingEvidenceExpired") }
-            return
-        }
-        guard let field = AccessibilityService.focusedField(in: app),
+        guard let offsetElement else { hide("noFieldBounds"); return }
+        guard let field = AccessibilityService.focusedFieldMetadata(in: app),
               AccessibilityService.isSameElement(field.element, offsetElement),
               !field.isSecure,
               let origin = bubbleOrigin(for: field) else { hide("fieldChanged"); return }
-        if !controller.isMenuOpen { controller.moveBubble(to: origin) }
+        controller.moveBubble(to: origin)
     }
 
     private func dismissForCurrentField() {
@@ -70,14 +67,12 @@ final class BeanBubbleService {
 
     // MARK: - Evaluate (called by the dispatcher on focus/selection)
 
-    func evaluate(fallbackOrigin: CGPoint? = nil) {
+    func evaluate() {
         guard settings.bubbleEnabled else { return hide() }
         guard !settings.isAssistancePaused(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) else { return hide("appPaused") }
         guard PermissionService.isAccessibilityGranted else { return hide("noPermission") }
-        guard let field = AccessibilityService.focusedField() else {
-            if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
-            return hide("noField")
-        }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let field = AccessibilityService.focusedFieldMetadata(in: app) else { return hide("noFieldBounds") }
         guard !field.isSecure else { return hide("secureField") }
         if let dismissedElement {
             if AccessibilityService.isSameElement(dismissedElement, field.element) { return hide("dismissedField") }
@@ -92,12 +87,10 @@ final class BeanBubbleService {
             preferences: settings.capabilityPreferences
         )
         guard capabilities.beanBubble.level != .unsupported else {
-            if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
             return hide(capabilities.beanBubble.reason)
         }
 
         guard let origin else {
-            if let fallbackOrigin { return showSlackFallback(near: fallbackOrigin) }
             return hide("noBounds")
         }
 
@@ -109,60 +102,26 @@ final class BeanBubbleService {
         }
 
         sourcePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let savedOrigin = CGPoint(x: origin.x + bubbleOffset.width, y: origin.y + bubbleOffset.height)
+        if !isSafeBubbleOrigin(savedOrigin) { bubbleOffset = .zero }
         controller.showBubble(
             at: origin,
             savedOffset: bubbleOffset,
             openOnHover: settings.bubbleOpenOnHover,
+            isSafeOrigin: { [weak self] point in self?.isSafeBubbleOrigin(point) == true },
             onOpen: { [weak self] intent in self?.openMenu(intent: intent) },
             onDismiss: { [weak self] in self?.dismissForCurrentField() },
             onCommitOffset: { [weak self] off in self?.bubbleOffset = off; self?.diag(["bubbleDragged": "true"]) },
             onReset: { [weak self] in self?.bubbleOffset = .zero; self?.diag(["bubbleReset": "true"]) }
         )
-        diag(["bubbleShown": "true", "app": AppCategory.from(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier).rawValue])
-    }
-
-    /// Slack desktop sometimes exposes neither a focused AX element nor editor
-    /// bounds. After the dispatcher has independently observed a recent click
-    /// plus printable typing in Slack, place the bubble beside that click. The
-    /// evidence gate prevents this path from appearing on ordinary controls.
-    private func showSlackFallback(near point: CGPoint) {
-        let app = NSWorkspace.shared.frontmostApplication
-        let screens = OverlayScreenArea.current
-        guard app?.bundleIdentifier == "com.tinyspeck.slackmacgap",
-              settings.bubbleInChat,
-              let screen = OverlayGeometry.screen(containing: point, from: screens) else {
-            return hide("invalidSlackFallback")
-        }
-
-        if offsetElement != nil { diag(["bubbleReset": "true"]) }
-        offsetElement = nil
-        bubbleOffset = .zero
-        let origin = OverlayGeometry.clampedOrigin(
-            CGPoint(x: point.x + 12, y: point.y + 12),
-            panelSize: CGSize(
-                width: OverlayGeometry.beanLauncherSize,
-                height: OverlayGeometry.beanLauncherSize
-            ),
-            in: screen.visibleFrame,
-            inset: 4
-        )
-        sourcePID = app?.processIdentifier
-        controller.showBubble(
-            at: origin,
-            savedOffset: .zero,
-            openOnHover: settings.bubbleOpenOnHover,
-            onOpen: { [weak self] intent in self?.openMenu(intent: intent) },
-            onDismiss: { [weak self] in self?.dismissForCurrentField() },
-            onCommitOffset: { [weak self] off in self?.bubbleOffset = off; self?.diag(["bubbleDragged": "true"]) },
-            onReset: { [weak self] in self?.bubbleOffset = .zero; self?.diag(["bubbleReset": "true"]) }
-        )
-        diag(["bubbleShown": "true", "app": "chat", "anchor": "slackTypingEvidence"])
+        diag(["bubbleShown": controller.isShowing ? "true" : "false", "app": AppCategory.from(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier).rawValue])
     }
 
     // MARK: - Mini menu
 
     private func openMenu(intent: OverlayActivationIntent) {
         guard let frame = controller.bubbleFrame else { return }
+        guard isSafeBubbleOrigin(frame.origin) else { hide("unsafePlacement"); return }
         controller.showMenu(
             near: CGPoint(x: frame.minX, y: frame.minY),
             intent: intent,
@@ -216,7 +175,7 @@ final class BeanBubbleService {
                 return
             }
             if let element {
-                guard let field = AccessibilityService.focusedField(in: app),
+                guard let field = AccessibilityService.focusedFieldMetadata(in: app),
                       AccessibilityService.isSameElement(field.element, element) else {
                     self.statusHUD.show(.warning, "Return to the original field, then choose Bean again.")
                     return
@@ -229,37 +188,26 @@ final class BeanBubbleService {
     // MARK: - Positioning
 
     private func bubbleOrigin(for field: AccessibilityService.FocusedField) -> CGPoint? {
-        let size = OverlayGeometry.beanLauncherSize
-        let screens = OverlayScreenArea.current
-
-        // 1. Prefer the selection's top-right, when enabled and available.
-        if settings.bubbleOnSelection, let sel = TextRangeLocator.selectionRect(for: field.element),
-           isValid(sel), let screen = OverlayGeometry.screen(containing: sel, from: screens) {
-            return OverlayGeometry.clampedOrigin(
-                CGPoint(x: sel.maxX + 6, y: sel.maxY - size),
-                panelSize: CGSize(width: size, height: size),
-                in: screen.visibleFrame,
-                inset: 4
-            )
-        }
-        // 2. Else the focused field's top-right inner corner.
-        if settings.bubbleOnFocus, let rect = TextRangeLocator.fieldRect(for: field.element),
-           isValid(rect), rect.height >= 14, rect.width >= 40,
-           let screen = OverlayGeometry.screen(containing: rect, from: screens) {
-            return OverlayGeometry.clampedOrigin(
-                CGPoint(x: rect.maxX - size - 8, y: rect.maxY - size - 8),
-                panelSize: CGSize(width: size, height: size),
-                in: screen.visibleFrame,
-                inset: 4
-            )
-        }
-        return nil
+        guard settings.bubbleOnFocus || (settings.bubbleOnSelection && (AccessibilityService.selectedRange(of: field.element)?.length ?? 0) > 0),
+              let geometry = AccessibilityService.fieldOverlayGeometry(for: field.element),
+              let screen = OverlayGeometry.screen(containing: geometry.fieldRect, from: OverlayScreenArea.current) else { return nil }
+        return OverlayGeometry.issueTrayOrigin(geometry: geometry,
+            panelSize: CGSize(width: OverlayGeometry.beanLauncherSize, height: OverlayGeometry.beanLauncherSize),
+            in: screen.visibleFrame)
     }
 
-    private func isValid(_ rect: CGRect) -> Bool {
-        guard rect.width > 1, rect.height > 1 else { return false }
-        // Must intersect some screen (on-screen, not offscreen/invalid).
-        return NSScreen.screens.contains { $0.frame.intersects(rect) }
+    /// Called on every legacy drag move/commit, not just at initial display.
+    /// No persistent offset can carry the transparent target onto text/Send.
+    private func isSafeBubbleOrigin(_ point: CGPoint) -> Bool {
+        guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier == sourcePID,
+              let element = offsetElement,
+              let field = AccessibilityService.focusedFieldMetadata(in: app),
+              !field.isSecure, AccessibilityService.isSameElement(field.element, element),
+              let geometry = AccessibilityService.fieldOverlayGeometry(for: element),
+              let screen = OverlayGeometry.screen(containing: geometry.fieldRect, from: OverlayScreenArea.current) else { return false }
+        return OverlayGeometry.isSafeFieldControlFrame(
+            CGRect(origin: point, size: CGSize(width: OverlayGeometry.beanLauncherSize, height: OverlayGeometry.beanLauncherSize)),
+            geometry: geometry, in: screen.visibleFrame)
     }
 
     private func diag(_ extra: [String: String]) {

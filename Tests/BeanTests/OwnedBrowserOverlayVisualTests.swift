@@ -25,7 +25,7 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                         const r=editor.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
                         const handlers={actionScope:'\(state == "selection" ? "selection" : "draft")',safeFixCount:2,
                             learnWordAvailable:true,onPrepareActions:()=>handlers.actionScope};
-                        BeanOverlay.renderAssistant(rect,3,'nativeLocal',handlers);
+                        BeanOverlay.renderAssistant(rect,3,'nativeLocal',handlers,{source:editor});
                         const passivePreserved=document.activeElement===editor;
                         if('\(state)'==='suggestion') {
                             BeanOverlay.render([{id:'synthetic',rects:[{x:r.x+12,y:r.y+30,w:35,h:18}],
@@ -50,7 +50,7 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                     XCTAssertEqual(geometry["controlsFit"] as? Bool, true, "\(name): \(geometry)")
                     XCTAssertEqual(geometry["controlsInsideCards"] as? Bool, true, "\(name): \(geometry)")
                     XCTAssertEqual(geometry["scopeVisibilityMatchesSelection"] as? Bool, true, "\(name): \(geometry)")
-                    XCTAssertEqual(geometry["officialMarkLoaded"] as? Bool, true)
+                    XCTAssertEqual(geometry["compactDotMeasured"] as? Bool, true)
                     print("OWNED_BROWSER_OVERLAY_GEOMETRY \(name) \(geometry)")
                 }
             }
@@ -64,7 +64,7 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
         _ = try await fixture.object("""
             const e=document.getElementById('editor');e.focus();
             const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
-            BeanOverlay.renderAssistant(rect,0,'nativeLocal',{actionScope:'draft'});
+            BeanOverlay.renderAssistant(rect,0,'nativeLocal',{actionScope:'draft'},{source:e});
             return {entered:BeanOverlay.focusFirstControl()};
             """)
         let entered = try await fixture.object("""
@@ -93,7 +93,7 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
             window.requestAnimationFrame=(callback)=>{frames.push(callback);return frames.length;};
             // Mirror the normal contentScript overlay update after a check.
             BeanOverlay.render([],null,null,{});BeanOverlay.renderGroups([],null,{});
-            BeanOverlay.renderAssistant(rect,1,'nativeLocal',{actionScope:'draft'});
+            BeanOverlay.renderAssistant(rect,1,'nativeLocal',{actionScope:'draft'},{source:e});
             window.requestAnimationFrame=originalFrame;frames.forEach(callback=>callback(0));
             const updatedProofread=root.querySelector('[data-act="proofread"]');
             return {onProofread,focusPreservedAfterRender:!!updatedProofread && root.activeElement===updatedProofread,
@@ -140,6 +140,114 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
         if let directory = ProcessInfo.processInfo.environment["BEAN_BROWSER_QA_OUTPUT_DIRECTORY"] {
             try await fixture.snapshot(to: URL(fileURLWithPath: directory, isDirectory: true)
                 .appendingPathComponent("long-suggestion-short-light.png"))
+        }
+    }
+
+    func testCompactDotKeepsCrowdedComposerControlsClickableAndHidesWithoutSafeSpace() async throws {
+        for dark in [false, true] {
+            for (name, size) in [("desktop", NSSize(width: 800, height: 640)),
+                                  ("narrow", NSSize(width: 320, height: 480))] {
+                let fixture = try OwnedBrowserOverlayFixture(size: size, dark: dark)
+                defer { fixture.close() }
+                try await fixture.load()
+                let crowded = try await fixture.object("""
+                    const e=document.getElementById('editor');
+                    e.style.cssText=`position:fixed;left:48px;top:72px;width:${Math.min(280,innerWidth-96)}px;height:110px;resize:none`;
+                    e.focus();e.setSelectionRange(8,8);
+                    const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
+                    const placements=[{x:r.right+4,y:r.bottom-28},{x:r.right-28,y:r.bottom+4},
+                        {x:r.left-32,y:r.bottom-28}];
+                    window.__dotControlClicks={};
+                    const controls=['Send','Attach','Microphone'].map((label,index)=>{
+                        const button=document.createElement('button');button.textContent=label;
+                        button.setAttribute('aria-label',label);button.id='owned-'+label;
+                        button.style.cssText=`position:fixed;left:${placements[index].x}px;top:${placements[index].y}px;width:28px;height:28px;padding:0;overflow:hidden`;
+                        button.addEventListener('click',()=>window.__dotControlClicks[label]=(window.__dotControlClicks[label]||0)+1);
+                        document.body.appendChild(button);return button;
+                    });
+                    const shown=BeanOverlay.renderAssistant(rect,3,'nativeLocal',{actionScope:'draft'},{source:e});
+                    const root=window.__ownedBeanShadow,button=root.querySelector('.assistant'),dot=root.querySelector('.assistant-dot');
+                    const b=button.getBoundingClientRect(),d=dot.getBoundingClientRect();
+                    const overlap=(a,c)=>a.left<c.right && a.right>c.left && a.top<c.bottom && a.bottom>c.top;
+                    const controlsUntouched=controls.every(control=>{
+                        const c=control.getBoundingClientRect(),hit=document.elementFromPoint(c.x+c.width/2,c.y+c.height/2);
+                        if(hit!==control)return false;
+                        hit.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));return window.__dotControlClicks[control.textContent]===1;
+                    });
+                    // Hover gives details through the semantic title. It does
+                    // not expand a card or move the editor's selection.
+                    button.dispatchEvent(new MouseEvent('mouseenter',{bubbles:false}));
+                    const hoverQuiet=!root.querySelector('.card') && document.activeElement===e && e.selectionStart===8;
+                    const titleUseful=/Bean: 3 writing suggestions/.test(button.title);
+                    // document hit testing retargets a closed-shadow control
+                    // to its host. ShadowRoot.elementFromPoint is nonstandard
+                    // and is not needed to prove this target owns the pixels.
+                    const host=document.getElementById('bean-inline-host');
+                    const hitSamples=[1,14,27].flatMap(dx=>[1,14,27].map(dy=>{
+                        const hit=document.elementFromPoint(b.x+dx,b.y+dy);
+                        return {dx,dy,owned:hit===host,tag:hit && hit.tagName,id:hit && hit.id};
+                    }));
+                    const dotHit=hitSamples.every(sample=>sample.owned);
+                    button.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+                    const clickOpens=!!root.querySelector('[aria-label="Bean writing assistant"]');
+                    root.querySelector('[aria-label="Close writing assistant"]').dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+                    // A one-pixel unknown sibling between the original hit
+                    // samples still occupies the full invisible target.
+                    const thin=document.createElement('div');thin.id='owned-thin-control';
+                    thin.style.cssText=`position:fixed;left:${b.x+6}px;top:${b.y+5}px;width:1px;height:1px;background:red`;
+                    document.body.appendChild(thin);
+                    const moved=BeanOverlay.refreshAssistantPlacement();
+                    const after=root.querySelector('.assistant').getBoundingClientRect();
+                    return {shown,paint10:d.width===10 && d.height===10,target28:b.width===28 && b.height===28,
+                        noLogoOrCount:button.children.length===1 && !button.querySelector('img'),amber:button.dataset.hasIssues==='true',
+                        outsideEditor:!overlap(b,r),outsideControls:controls.every(control=>!overlap(b,control.getBoundingClientRect())),
+                        controlsUntouched,hoverQuiet,titleUseful,dotHit,hitSamples,clickOpens,
+                        movedAwayFromThin:moved && !overlap(after,thin.getBoundingClientRect()),
+                        sourceUntouched:e.value==='Synthetic draft with teh spelling issue.' && e.selectionStart===8};
+                    """)
+                for key in ["shown", "paint10", "target28", "noLogoOrCount", "amber", "outsideEditor",
+                            "outsideControls", "controlsUntouched", "hoverQuiet", "titleUseful", "dotHit", "clickOpens",
+                            "movedAwayFromThin", "sourceUntouched"] {
+                    XCTAssertEqual(crowded[key] as? Bool, true, "\(name) \(dark): \(key) \(crowded)")
+                }
+                if let directory = ProcessInfo.processInfo.environment["BEAN_BROWSER_QA_OUTPUT_DIRECTORY"] {
+                    try await fixture.snapshot(to: URL(fileURLWithPath: directory, isDirectory: true)
+                        .appendingPathComponent("dot-crowded-\(name)-\(dark ? "dark" : "light").png"))
+                }
+                let unavailable = try await fixture.object("""
+                    const e=document.getElementById('editor'),root=window.__ownedBeanShadow;
+                    document.querySelectorAll('[id^="owned-"]').forEach(node=>node.remove());
+                    e.style.cssText=`position:fixed;left:4px;top:4px;width:${innerWidth-8}px;height:${innerHeight-8}px;resize:none`;
+                    const r=e.getBoundingClientRect(),rect={x:r.x,y:r.y,w:r.width,h:r.height};
+                    const hidden=BeanOverlay.renderAssistant(rect,0,'nativeLocal',{}, {source:e})===false && !root.querySelector('.assistant');
+                    BeanOverlay.render([{id:'owned-issue',rects:[{x:16,y:30,w:35,h:18}],
+                        issue:{original:'teh',suggestion:'the',type:'spelling',source:'local'}}],null,null,{});
+                    const underlineOwned=BeanOverlay.hasFieldPresentation() && !!root.querySelector('.ul');
+                    BeanOverlay.clear();const noFalseOwnership=!BeanOverlay.hasFieldPresentation();
+                    e.style.cssText='position:fixed;left:48px;top:72px;width:180px;height:110px;resize:none';
+                    const restored=BeanOverlay.refreshAssistantPlacement();
+                    const neutral=root.querySelector('.assistant').dataset.hasIssues==='false' &&
+                        getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor==='rgba(0, 0, 0, 0)';
+                    e.style.left='1200px';BeanOverlay.refreshAssistantPlacement();
+                    const offscreenHidden=!root.querySelector('.assistant');
+                    e.style.left='48px';const recovered=BeanOverlay.refreshAssistantPlacement();
+                    const host=document.createElement('div');document.body.appendChild(host);
+                    const shadow=host.attachShadow({mode:'open'}),shadowEditor=document.createElement('textarea');
+                    shadowEditor.style.cssText='position:fixed;left:48px;top:72px;width:180px;height:110px';
+                    shadow.appendChild(shadowEditor);
+                    const shadowSend=document.createElement('button');shadowSend.textContent='Send';
+                    shadowSend.style.cssText='position:fixed;left:232px;top:154px;width:28px;height:28px';shadow.appendChild(shadowSend);
+                    const s=shadowEditor.getBoundingClientRect();
+                    const unknownShadowHidden=BeanOverlay.renderAssistant({x:s.x,y:s.y,w:s.width,h:s.height},1,'nativeLocal',{},
+                        {source:shadowEditor})===false && !root.querySelector('.assistant');
+                    return {hidden,underlineOwned,noFalseOwnership,restored,neutral,offscreenHidden,recovered,unknownShadowHidden,
+                        sourceUntouched:e.value==='Synthetic draft with teh spelling issue.'};
+                    """)
+                for key in ["hidden", "underlineOwned", "noFalseOwnership", "restored", "neutral",
+                            "offscreenHidden", "recovered", "unknownShadowHidden", "sourceUntouched"] {
+                    XCTAssertEqual(unavailable[key] as? Bool, true, "\(name) \(dark): \(key) \(unavailable)")
+                }
+            }
         }
     }
 }
@@ -203,8 +311,13 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
     }
 
     func object(_ body: String) async throws -> [String: Any] {
-        let result = try await webView.evaluateJavaScript("(()=>{\(body)})()")
-        return try XCTUnwrap(result as? [String: Any])
+        let result = try await webView.evaluateJavaScript("(()=>{try{\(body)}catch(error){return {ownedFixtureJavaScriptError:String(error),ownedFixtureStack:error.stack || ''};}})()")
+        let object = try XCTUnwrap(result as? [String: Any])
+        if let error = object["ownedFixtureJavaScriptError"] as? String {
+            XCTFail("Owned overlay fixture JavaScript: \(error) \(object["ownedFixtureStack"] ?? "")")
+            throw FixtureError.javaScript(error)
+        }
+        return object
     }
 
     func geometry(selection: Bool) async throws -> [String: Any] {
@@ -216,7 +329,7 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
             const fit=(r)=>r.x>=-1 && r.y>=-1 && r.right<=innerWidth+1 && r.bottom<=innerHeight+1;
             const cards=[...root.querySelectorAll('.card')].filter(visible);
             const controls=[...root.querySelectorAll('button')].filter(visible);
-            const mark=root.querySelector('.assistant img');
+            const dot=root.querySelector('.assistant-dot'),entry=root.querySelector('.assistant');
             const insideCard=(e)=>{const owner=e.closest('.card');if(!owner)return true;
                 const c=rect(owner),r=rect(e);return r.x>=c.x-1 && r.y>=c.y-1 && r.right<=c.right+1 && r.bottom<=c.bottom+1;};
             const group=root.querySelector('.scope');
@@ -227,7 +340,8 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
                 scopeVisibilityMatchesSelection:!group || (!!visible(group)===\(selection ? "false" : "true")),
                 clippedControls:controls.filter(e=>!fit(rect(e))).map(e=>({label:e.textContent,rect:rect(e)})),
                 protrudingControls:controls.filter(e=>!insideCard(e)).map(e=>({label:e.textContent,rect:rect(e)})),
-                officialMarkLoaded:!!mark && mark.complete && mark.naturalWidth===128};
+                compactDotMeasured:!!dot && !!entry && rect(dot).width===10 && rect(dot).height===10 &&
+                    rect(entry).width===28 && rect(entry).height===28 && !entry.querySelector('img') && entry.children.length===1};
             """)
     }
 
@@ -248,5 +362,5 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { navigationError = error }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { navigationError = error }
-    private enum FixtureError: Error { case loadTimeout, snapshotUnavailable }
+    private enum FixtureError: Error { case loadTimeout, snapshotUnavailable, javaScript(String) }
 }

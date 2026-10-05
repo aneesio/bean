@@ -35,9 +35,12 @@ final class InlineHighlightService {
         var localAnalysis: ((String, [DictionaryTerm], Int, WritingDialect) -> IssueDetector.LocalAnalysis)?
         var present: (([HighlightOverlayController.Entry]) -> Void)?
         var selectedRange: (AXUIElement) -> NSRange? = { AccessibilityService.selectedRange(of: $0) }
-        var anchor: (AXUIElement) -> CGRect? = { TextRangeLocator.fieldRect(for: $0) ?? TextRangeLocator.caretRect(for: $0) }
+        var anchor: (AXUIElement) -> CGRect? = { TextRangeLocator.fieldRect(for: $0) }
         var presentState: ((NativeAssistantState) -> Void)?
         var canEditRanges: (AXUIElement) -> Bool = { AccessibilityService.isSelectedRangeSettable($0) }
+        var placementGeometry: (AXUIElement) -> FieldOverlayGeometry? = { AccessibilityService.fieldOverlayGeometry(for: $0) }
+        var presentPlacement: ((FieldOverlayGeometry?) -> Void)?
+        var monotonicTime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     }
 
     private var lastCallTime: Date?
@@ -76,6 +79,10 @@ final class InlineHighlightService {
     private var entries: [HighlightOverlayController.Entry] = []
     private var selectedID: UUID?
     private var renderedSourceAnchor: CGRect?
+    private var renderedPlacementGeometry: FieldOverlayGeometry?
+    private var placementCheckedAt: TimeInterval = 0
+    private var placementElement: AXUIElement?
+    private var placementPID: pid_t?
 
     init(settings: AppSettings, userContent: UserContentStore,
          history: OperationHistoryStore, usageLedger: UsageLedgerStore,
@@ -118,6 +125,8 @@ final class InlineHighlightService {
 
     private func clearPresentation() {
         overlay.hide(); entries = []; selectedID = nil; session = nil; renderedSourceAnchor = nil
+        renderedPlacementGeometry = nil; placementCheckedAt = 0
+        placementElement = nil; placementPID = nil
     }
 
     /// Keep the same small control present across typing revisions. Cards and
@@ -162,6 +171,9 @@ final class InlineHighlightService {
         renderOverlay()
     }
     var isShowingUI: Bool { overlay.isShowing }
+    /// Owning a review session also suppresses the legacy launcher when the
+    /// compact dot has intentionally been hidden for lack of safe space.
+    var ownsFocusedFieldSession: Bool { session != nil }
     var isApplyingCorrection: Bool { isApplying }
     var ownsUIInteraction: Bool { overlay.ownsKeyboardInteraction }
     var selectedIssueID: UUID? { selectedID }
@@ -195,10 +207,27 @@ final class InlineHighlightService {
             $0.issue.id != $1.issue.id || $0.rect != $1.rect
         }
         let sourceAnchor = analysisDependencies.anchor(session.element)
-        guard geometryChanged || sourceAnchor != renderedSourceAnchor else { return }
+        let previousPlacement = renderedPlacementGeometry
+        refreshPlacementGeometry(for: session, sourceAnchor: sourceAnchor)
+        let placementChanged = previousPlacement != renderedPlacementGeometry
+        guard geometryChanged || sourceAnchor != renderedSourceAnchor || placementChanged else { return }
         entries = updated
         if !entries.contains(where: { $0.issue.id == selectedID }) { selectedID = nil }
         renderOverlay()
+    }
+
+    private func refreshPlacementGeometry(for session: Session, sourceAnchor: CGRect?) {
+        let ownerChanged = (placementElement.map { !AccessibilityService.isSameElement($0, session.element) } ?? true)
+            || placementPID != session.app?.processIdentifier
+        if ownerChanged {
+            renderedPlacementGeometry = nil; placementCheckedAt = 0
+            placementElement = session.element; placementPID = session.app?.processIdentifier
+        }
+        if ownerChanged || analysisDependencies.monotonicTime() - placementCheckedAt >= 0.250
+            || sourceAnchor != renderedSourceAnchor {
+            renderedPlacementGeometry = analysisDependencies.placementGeometry(session.element)
+            placementCheckedAt = analysisDependencies.monotonicTime()
+        }
     }
 
     /// The technically-honest coverage classification for a field — drives both
@@ -637,6 +666,13 @@ final class InlineHighlightService {
         } ?? false)
         assistantState.canUndo = session.map { undoStore.isAvailable(for: $0.element, value: $0.value, app: $0.app) } ?? false
         analysisDependencies.presentState?(assistantState)
+        let sourceAnchor = session.flatMap { analysisDependencies.anchor($0.element) }
+        if analysisDependencies.present == nil || analysisDependencies.presentPlacement != nil {
+            if let session { refreshPlacementGeometry(for: session, sourceAnchor: sourceAnchor) }
+            else { renderedPlacementGeometry = nil }
+            analysisDependencies.presentPlacement?(renderedPlacementGeometry)
+        }
+        renderedSourceAnchor = sourceAnchor
         if let present = analysisDependencies.present {
             present(entries)
             return
@@ -647,9 +683,8 @@ final class InlineHighlightService {
         overlay.showExplanation = settings.inlineShowExplanation
         overlay.assistantState = assistantState
         overlay.showsAssistantControl = settings.bubbleEnabled || (!entries.isEmpty && entries.allSatisfy { $0.rect == nil })
-        let sourceAnchor = session.flatMap { analysisDependencies.anchor($0.element) }
-        renderedSourceAnchor = sourceAnchor
-        overlay.render(entries: entries, selectedID: selectedID, position: position, sourceAnchor: sourceAnchor)
+        overlay.render(entries: entries, selectedID: selectedID, position: position, sourceAnchor: sourceAnchor,
+                       placementGeometry: renderedPlacementGeometry)
     }
 
     private func undoLastCorrection() {

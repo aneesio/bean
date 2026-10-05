@@ -118,6 +118,70 @@ enum AccessibilityService {
         CFEqual(a, b)
     }
 
+    /// Read only geometry/roles around the captured editor. No document text,
+    /// labels or value attributes are requested. Opaque or excessively large
+    /// nearby branches fail closed rather than covering an unknown control.
+    @MainActor
+    static func fieldOverlayGeometry(for element: AXUIElement) -> FieldOverlayGeometry? {
+        let started = ProcessInfo.processInfo.systemUptime
+        let deadline = started + 0.030
+        let names = [kAXRoleAttribute as String, kAXPositionAttribute as String, kAXSizeAttribute as String]
+
+        func withinBudget() -> Bool { ProcessInfo.processInfo.systemUptime < deadline }
+        func prepare(_ node: AXUIElement) -> Bool {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { return false }
+            AXUIElementSetMessagingTimeout(node, Float(min(remaining, 0.005)))
+            return true
+        }
+        func attribute(_ node: AXUIElement, _ name: String) -> AXUIElement? {
+            guard prepare(node) else { return nil }
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var value: AnyObject?
+            guard AXUIElementCopyAttributeValue(node, name as CFString, &value) == .success,
+                  withinBudget(), let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+            return value as! AXUIElement
+        }
+        func geometry(_ node: AXUIElement) -> FieldOverlayGeometryCapture.NodeGeometry? {
+            guard prepare(node) else { return nil }
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var copied: CFArray?
+            guard AXUIElementCopyMultipleAttributeValues(node, names as CFArray,
+                AXCopyMultipleAttributeOptions(rawValue: 0), &copied) == .success,
+                withinBudget(), let values = copied as? [Any], values.count == names.count,
+                let role = values[0] as? String,
+                CFGetTypeID(values[1] as CFTypeRef) == AXValueGetTypeID(),
+                CFGetTypeID(values[2] as CFTypeRef) == AXValueGetTypeID() else { return nil }
+            var point = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(values[1] as! AXValue, .cgPoint, &point),
+                  AXValueGetValue(values[2] as! AXValue, .cgSize, &size),
+                  let primary = NSScreen.screens.first else { return nil }
+            let rect = CGRect(x: point.x, y: primary.frame.height - point.y - size.height,
+                              width: size.width, height: size.height)
+            guard OverlayGeometry.isFiniteRect(rect) else { return nil }
+            return .init(role: role, rect: rect)
+        }
+        func children(_ node: AXUIElement, limit: Int) -> [AXUIElement]? {
+            guard prepare(node) else { return nil }
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var count: CFIndex = 0
+            let error = AXUIElementGetAttributeValueCount(node, kAXChildrenAttribute as CFString, &count)
+            if error == .attributeUnsupported { return [] }
+            guard error == .success, count >= 0, count <= limit, withinBudget() else { return nil }
+            if count == 0 { return [] }
+            var copied: CFArray?
+            guard AXUIElementCopyAttributeValues(node, kAXChildrenAttribute as CFString, 0, count, &copied) == .success,
+                  withinBudget(), let values = copied as? [Any], values.count == count,
+                  values.allSatisfy({ CFGetTypeID($0 as CFTypeRef) == AXUIElementGetTypeID() }) else { return nil }
+            return values.map { $0 as! AXUIElement }
+        }
+        return FieldOverlayGeometryCapture.capture(element: element,
+            window: { attribute($0, kAXWindowAttribute as String) }, geometry: geometry,
+            parent: { attribute($0, kAXParentAttribute as String) }, children: children,
+            isSame: isSameElement, now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
+    }
+
     // MARK: - Reading
 
     /// Reads a string attribute from an element, or nil.

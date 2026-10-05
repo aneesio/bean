@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bean for the Web",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Bean inline proofreading for web text fields, with simple per-field and per-site controls.",
   "permissions": ["storage", "nativeMessaging", "scripting"],
   "host_permissions": ["http://*/*", "https://*/*"],

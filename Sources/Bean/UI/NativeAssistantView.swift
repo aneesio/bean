@@ -7,23 +7,30 @@ struct NativeAssistantBadgeView: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: 5) {
-                BeanMark(size: 19)
-                if !state.badgeText.isEmpty {
-                    Text(state.badgeText).font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                }
-            }
-            .padding(.horizontal, 9)
-            .frame(minWidth: 38, minHeight: 36)
+            NativeStatusDot(hasSuggestions: state.hasSuggestions)
+            .frame(width: OverlayGeometry.minimumMotorTarget, height: OverlayGeometry.minimumMotorTarget)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundColor(.primary)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
-        .help(state.title)
+        .help("Bean: \(state.title). Click for writing assistance.")
         .accessibilityLabel("Bean: \(state.title). Open writing assistant.")
         .accessibilityAction { onKeyboardOpen() }
         .accessibilityAction(named: Text("Review with keyboard"), onKeyboardOpen)
+    }
+}
+
+/// The visible status stays ten points; the surrounding clear motor target is
+/// positioned outside the editor and surrounding controls as one unit.
+struct NativeStatusDot: View {
+    let hasSuggestions: Bool
+    private let amber = Color.beanDynamic(light: BeanDesign.SRGB(217, 119, 6).nsColor,
+                                          dark: BeanDesign.SRGB(251, 191, 36).nsColor)
+    var body: some View {
+        Circle()
+            .fill(hasSuggestions ? amber : Color.clear)
+            .overlay(Circle().strokeBorder(hasSuggestions ? amber : Color.secondary, lineWidth: 1.5))
+            .frame(width: OverlayGeometry.statusDotDiameter, height: OverlayGeometry.statusDotDiameter)
+            .accessibilityHidden(true)
     }
 }
 

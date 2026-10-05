@@ -110,6 +110,36 @@ overlay._test.focusAfterKeyboardActivation({
 }, "[data-act='apply']");
 assert.equal(focusCount, 1, "a synchronous card transition restores keyboard focus");
 
+const geometryField={x:100,y:100,w:200,h:100},geometryViewport={x:0,y:0,w:400,h:400};
+const disjoint=(a,b)=>a.x+a.w<=b.x || b.x+b.w<=a.x || a.y+a.h<=b.y || b.y+b.h<=a.y;
+const normalized=value=>JSON.parse(JSON.stringify(value));
+assert.deepEqual(normalized(overlay._test.assistantPosition(geometryField,geometryViewport)),
+  {x:304,y:172,w:28,h:28});
+const crowdedControls=[{x:329,y:173,w:2,h:24},{x:272,y:204,w:28,h:28},{x:68,y:172,w:28,h:28}];
+const crowdedPosition=overlay._test.assistantPosition(geometryField,geometryViewport,crowdedControls);
+assert.deepEqual(normalized(crowdedPosition),{x:272,y:68,w:28,h:28},
+  "a thin control under the invisible hit target rejects the whole target, then other edges are tried");
+assert.equal(disjoint(crowdedPosition,geometryField),true);
+assert.equal(crowdedControls.every(control=>disjoint(crowdedPosition,control)),true);
+const firstEdges=[{x:304,y:172,w:28,h:28},{x:272,y:204,w:28,h:28},
+  {x:68,y:172,w:28,h:28},{x:272,y:68,w:28,h:28}];
+const slide=overlay._test.assistantPosition(geometryField,geometryViewport,firstEdges);
+assert.deepEqual(normalized(slide),{x:304,y:140,w:28,h:28},"a blocked corner can slide along its outside edge");
+assert.equal(disjoint(slide,geometryField),true,"slides never move the target inside the source");
+for(const unavailable of [null,{x:0,y:0,w:0,h:100},{x:0,y:0,w:NaN,h:100},
+  {x:0,y:500,w:100,h:100},{x:4,y:4,w:392,h:392}]) {
+  assert.equal(overlay._test.assistantPosition(unavailable,geometryViewport),null,
+    "unknown, offscreen, and viewport-filling fields have no forced inside fallback");
+}
+assert.equal(overlay._test.assistantPosition(geometryField,geometryViewport,[{x:0,y:0,w:NaN,h:1}]),null);
+assert.equal(overlay._test.assistantPosition(geometryField,geometryViewport,[],()=>false),null,
+  "unknown foreground content is occupied space");
+const bottomEdge=overlay._test.assistantPosition({x:100,y:220,w:296,h:176},geometryViewport);
+assert.deepEqual(normalized(bottomEdge),{x:68,y:368,w:28,h:28},"bottom/right viewport edges use an outside left position");
+assert.equal(disjoint(bottomEdge,{x:100,y:220,w:296,h:176}),true);
+assert.deepEqual(normalized(overlay._test.assistantPosition({x:550,y:700,w:200,h:100},
+  {x:500,y:600,w:400,h:400})),{x:754,y:772,w:28,h:28},"page scroll coordinates remain exact");
+
 // A small DOM implementation exercises the actual overlay tree, closed Shadow
 // root, node replacement, focus restoration, and keydown boundary listener. It
 // intentionally implements only the DOM standards exercised by these paths.
@@ -186,6 +216,18 @@ class DOMElement {
   contains(node) {
     return node === this || this.children.some((child) => child.contains(node));
   }
+  get parentElement() { return this.parentNode instanceof DOMElement ? this.parentNode : null; }
+  getBoundingClientRect() {
+    const x = this.bounds?.x ?? (parseFloat(this.style.left) || 0);
+    const y = this.bounds?.y ?? (parseFloat(this.style.top) || 0);
+    const width = this.bounds?.w ?? (this.className === "assistant" ? 28 : parseFloat(this.style.width) || this.offsetWidth);
+    const height = this.bounds?.h ?? (this.className === "assistant" ? 28 : parseFloat(this.style.height) || this.offsetHeight);
+    return {x,y,left:x,top:y,width,height,right:x+width,bottom:y+height};
+  }
+  matches() {
+    return ["BUTTON","INPUT","TEXTAREA","SELECT","LABEL","IFRAME","SUMMARY"].includes(this.tagName) ||
+      this.attributes.has("tabindex") || this.attributes.has("role");
+  }
   addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
@@ -254,6 +296,16 @@ function makeDOMDocument() {
     activeElement: null,
     lastShadow: null,
     lastShadowMode: null,
+    layoutControls: [],
+    layoutNodes: [],
+    querySelectorAll(selector) { return selector === "*" ? document.layoutNodes : document.layoutControls; },
+    elementsFromPoint(x,y) {
+      if (document.hitTest) return document.hitTest(x,y);
+      const hit = [...document.layoutControls].reverse().find(element => {
+        const r = element.getBoundingClientRect();return x>=r.left && x<r.right && y>=r.top && y<r.bottom;
+      });
+      return hit ? [hit,document.body] : [document.body];
+    },
     createElement(tagName) { return new DOMElement(tagName, document); }
   };
   document.body = new DOMElement("body", document);
@@ -378,7 +430,15 @@ const assistant = domDocument.lastShadow.querySelectorAll("button").find((button
   button.dataset.beanAssistant !== undefined);
 assert.ok(assistant, "a single field badge provides a predictable review entry point");
 assert.match(assistant.getAttribute("aria-label"), /3 writing suggestions/);
-assert.equal(assistant.style.top, "195px", "the badge sits outside the source text");
+assert.equal(assistant.style.left,"454px");
+assert.equal(assistant.style.top,"162px","the entire target sits beside the source text");
+assert.equal(assistant.getBoundingClientRect().width,28,"the quiet dot retains a useful hit target");
+assert.equal(assistant.children.length,1);
+assert.equal(assistant.children[0].className,"assistant-dot");
+assert.equal(assistant.children[0].getAttribute("aria-hidden"),"true");
+assert.equal(assistant.querySelectorAll("img").length,0,"the field indicator has no Bean logo or numeric pill");
+assert.equal(assistant.dataset.hasIssues,"true");
+assert.match(assistant.title,/3 writing suggestions/,"hover details retain the useful issue count");
 for (const listener of assistant.listeners.click) listener(fakeEvent({ detail:1 }));
 const assistantCard = domDocument.lastShadow.querySelector(".card");
 assert.equal(assistantCard.getAttribute("aria-label"),"Bean writing assistant");
@@ -391,6 +451,8 @@ domOverlay.renderAssistant(fieldRect, 0, "checking", {});
 assert.equal(domDocument.lastShadow.activeElement.dataset.beanAssistant, "",
   "status updates preserve focus on the field assistant");
 assert.match(domDocument.lastShadow.activeElement.getAttribute("aria-label"), /Checking the changed paragraph/);
+assert.equal(domDocument.lastShadow.activeElement,assistant,"passive status updates retain the semantic button");
+assert.equal(assistant.dataset.hasIssues,"false","no issues uses the neutral hollow dot");
 domOverlay.renderAssistant(fieldRect, 0, "local", {});
 assert.match(domDocument.lastShadow.activeElement.getAttribute("aria-label"), /Basic checks only/);
 const statusAssistant = domDocument.lastShadow.activeElement;
@@ -405,6 +467,55 @@ assert.equal(domDocument.lastShadow.querySelector(".assistant"), null);
 domOverlay.renderAssistant({ ...fieldRect, y:1000 }, 0, "local", {});
 assert.equal(domDocument.lastShadow.querySelector(".assistant"), null,
   "an off-screen editor never leaves a stray floating badge");
+
+// Actual production DOM obstacle probes: controls, labels, unknown wrappers,
+// and controls moving independently of the editor all invalidate a target.
+const placementEditor=domDocument.createElement("textarea");
+placementEditor.bounds={x:100,y:100,w:200,h:100};domDocument.body.appendChild(placementEditor);
+const controls=firstEdges.map((bounds,index)=>{
+  const button=domDocument.createElement(index===2 ? "label" : "button");
+  button.bounds=bounds;domDocument.body.appendChild(button);return button;
+});
+domDocument.layoutControls=[placementEditor];
+domOverlay.renderAssistant(geometryField,2,"nativeLocal",{}, {source:placementEditor});
+const unobstructed=domDocument.lastShadow.querySelector(".assistant");
+assert.equal(unobstructed.style.left,"304px");
+domDocument.layoutControls.push(...controls);
+assert.equal(domOverlay.refreshAssistantPlacement(),true);
+assert.deepEqual(normalized({x:parseFloat(unobstructed.style.left),y:parseFloat(unobstructed.style.top),w:28,h:28}),
+  {x:304,y:140,w:28,h:28},"Send/attachment/label movement repositions the existing target");
+assert.equal(domDocument.lastShadow.querySelector(".assistant"),unobstructed);
+const unfamiliarWrapper=domDocument.createElement("div");
+unfamiliarWrapper.bounds={x:310,y:145,w:1,h:1};
+domDocument.layoutNodes=[unfamiliarWrapper];
+assert.equal(domOverlay.refreshAssistantPlacement(),true);
+assert.notEqual(unobstructed.style.top,"140px",
+  "a thin non-semantic sibling between hit samples excludes the entire target");
+domDocument.layoutNodes=[];
+domDocument.hitTest=()=>[unfamiliarWrapper,domDocument.body];
+assert.equal(domOverlay.refreshAssistantPlacement(),false,"an unrelated event wrapper is not proven blank space");
+assert.equal(domDocument.lastShadow.querySelector(".assistant"),null);
+assert.equal(domOverlay.hasFieldPresentation(),false,"no dot or findings means no field ownership");
+domOverlay.render([issue],null,null,{});
+assert.equal(domOverlay.hasFieldPresentation(),true,"visible underlines remain owned when the dot must hide");
+domOverlay.clear();
+assert.equal(domOverlay.hasFieldPresentation(),false,"an unrelated browser toolbar is not field presentation");
+delete domDocument.hitTest;
+domDocument.layoutControls=[placementEditor];
+assert.equal(domOverlay.refreshAssistantPlacement(),true,"a later free slot can restore the dot without a draft reload");
+const restoredDot=domDocument.lastShadow.querySelector(".assistant");
+domDocument.hitTest=()=>[unfamiliarWrapper,domDocument.body];
+for(const listener of restoredDot.listeners.click) listener(fakeEvent({detail:1}));
+assert.equal(domDocument.lastShadow.querySelector(".card"),null,
+  "a newly obstructed target is rejected again at activation without opening stale actions");
+delete domDocument.hitTest;domDocument.layoutControls=[];domOverlay.clearAssistant();
+
+domContext.window.visualViewport={offsetLeft:80,offsetTop:90,width:200,height:180};
+assert.deepEqual(normalized(domOverlay._test.assistantViewport()),{x:80,y:90,w:200,h:180});
+domOverlay.renderAssistant({x:80,y:90,w:200,h:180},0,"nativeLocal",{});
+assert.equal(domDocument.lastShadow.querySelector(".assistant"),null,
+  "a keyboard/zoom-reduced visible viewport never clamps the hit target over its full-screen editor");
+delete domContext.window.visualViewport;
 
 // Production closed-shadow controls expose scope, deterministic Fix All,
 // dictionary persistence and cancellation through real keyboard buttons.

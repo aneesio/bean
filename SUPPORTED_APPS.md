@@ -1,6 +1,6 @@
 # Supported Apps and Surfaces
 
-Policy revision: **1.7.0 candidate, build 15 / extension 0.8.1, October 2, 2026**. Capability
+Policy revision: **1.7.0 candidate, build 16 / extension 0.8.2, October 5, 2026**. Capability
 routing is covered by `FieldCapabilityPolicyTests`; implementation checks are
 covered by focused-field, native-editing, issue-mapping, and geometry tests.
 These do not substitute for live compatibility checks in each application.
@@ -29,12 +29,28 @@ its completion cannot erase a newer correction’s history.
 | Apple Mail | Generic editable WebKit/native composer path; explicit marker-selected passage may use guarded paste | Underlines where exact geometry exists; field-side cards otherwise | Pre-candidate user confirmation of the manual action only. Candidate live corrections, rich formatting, attachments, and other composer variants remain unverified. |
 | Electron apps | Application-provided Accessibility tree, editable ancestors and guarded edits | Native positions where available; field-side cards otherwise | Candidate per-app composer behavior, including Slack and VS Code. |
 | Browser fields | Native capabilities or optional DOM extension; exact range edits | One native or extension assistant for the focused field | Candidate input, textarea, rich contenteditable and framework-controlled field journeys. |
-| Search/address and code-app fields | Eligible when the specific control is editable | Local checking; field-button visibility can be customized | Technical-token preservation and control boundaries. |
+| Search/address and code-app fields | Eligible when the specific control is editable | Local checking; status-dot visibility can be customized | Technical-token preservation and control boundaries. |
 
 An editor that exposes no readable text or usable editing control may need
 an integration with its editor framework or application. Recent typing evidence can support the existing
 Slack manual acquisition fallback; Bean does not silently scrape text from
 unreadable controls or report those as clean.
+
+## Field status dot
+
+Native and browser field controls use a 10-point status dot without a visible
+count. Gray hollow dots show no current suggestions; amber filled dots indicate
+suggestions. Tooltip/accessibility status and the clicked panel retain details;
+a neutral dot is not an assurance that the draft is error-free.
+
+The full 28-point pointer target must fit in verified clear space outside the
+editable area and within the source window/viewport. Neighboring controls and
+unknown occupied regions exclude positions. Missing full field/window geometry,
+unverifiable surrounding layout, or no safe candidate hides the dot; there is
+no inside-field, caret-only or guessed Slack click-position fallback. Local
+checks and underlines continue where supported, and explicit menu-bar/shortcut
+writing actions remain available. Hiding the dot must not revive a larger native
+launcher or produce duplicate native/browser assistance.
 
 ## Control exclusions
 

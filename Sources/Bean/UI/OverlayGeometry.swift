@@ -22,12 +22,22 @@ struct OverlayScreenArea: Equatable {
     }
 }
 
+/// A fresh, content-free view of the exact editor and its surrounding controls.
+/// A missing/incomplete snapshot cannot establish a safe pointer target.
+struct FieldOverlayGeometry: Equatable {
+    let fieldRect: CGRect
+    let windowRect: CGRect
+    let exclusionRects: [CGRect]
+    var validatedNeighborhood: CGRect { fieldRect.insetBy(dx: -36, dy: -36) }
+}
+
 enum OverlayGeometry {
     /// Bean's smallest pointer/keyboard target. The visible launcher and all
     /// compact overlay controls use this same value so their hit geometry never
     /// silently shrinks below the product's desktop accessibility floor.
     static let minimumMotorTarget: CGFloat = 28
     static let beanLauncherSize: CGFloat = minimumMotorTarget
+    static let statusDotDiameter: CGFloat = 10
     static let highlightInteractionHeight: CGFloat = 6
 
     /// Chooses the display containing the anchor. If the point lies in a gap or
@@ -132,24 +142,41 @@ enum OverlayGeometry {
         )
     }
 
-    /// Keep the live issue control beside the editor, outside the typing area
-    /// when space permits. Small/full-screen fields use a clamped corner.
-    static func issueTrayOrigin(anchoredTo fieldRect: CGRect?, panelSize: CGSize,
-                                in visibleFrame: CGRect, gap: CGFloat = 6) -> CGPoint {
-        guard let fieldRect else {
-            return topRightOrigin(panelSize: panelSize, in: visibleFrame)
+    /// Validate the entire intercepting panel, including its transparent edges.
+    /// Never move an automatic control into an editor to keep it visible.
+    static func isSafeFieldControlFrame(_ frame: CGRect, geometry: FieldOverlayGeometry,
+                                        in visibleFrame: CGRect, clearance: CGFloat = 2) -> Bool {
+        guard isFiniteRect(frame), isFiniteRect(geometry.fieldRect),
+              isFiniteRect(geometry.windowRect), isFiniteRect(visibleFrame),
+              geometry.windowRect.contains(frame), visibleFrame.contains(frame),
+              geometry.validatedNeighborhood.contains(frame),
+              !geometry.fieldRect.insetBy(dx: -clearance, dy: -clearance).intersects(frame),
+              geometry.exclusionRects.allSatisfy({ isFiniteRect($0) && !$0.insetBy(dx: -clearance, dy: -clearance).intersects(frame) }) else { return false }
+        return true
+    }
+
+    static func issueTrayOrigin(geometry: FieldOverlayGeometry?, panelSize: CGSize,
+                                in visibleFrame: CGRect, gap: CGFloat = 4) -> CGPoint? {
+        guard let geometry, panelSize.width >= minimumMotorTarget,
+              panelSize.height >= minimumMotorTarget else { return nil }
+        let field = geometry.fieldRect
+        let slides: [CGFloat] = [0, 32, 64, 96]
+        let candidates = slides.flatMap { slide -> [CGPoint] in
+            let verticalFits = slide == 0 || slide <= field.height - panelSize.height
+            let horizontalFits = slide == 0 || slide <= field.width - panelSize.width
+            return [
+                verticalFits ? CGPoint(x: field.maxX + gap, y: field.minY + slide) : nil,
+                horizontalFits ? CGPoint(x: field.maxX - panelSize.width - slide, y: field.minY - panelSize.height - gap) : nil,
+                verticalFits ? CGPoint(x: field.minX - panelSize.width - gap, y: field.minY + slide) : nil,
+                horizontalFits ? CGPoint(x: field.maxX - panelSize.width - slide, y: field.maxY + gap) : nil
+            ].compactMap { $0 }
         }
-        let field = fieldRect.standardized
-        let visible = visibleFrame.standardized
-        let proposed: CGPoint
-        if field.minY - panelSize.height - gap >= visible.minY + 8 {
-            proposed = CGPoint(x: field.maxX - panelSize.width, y: field.minY - panelSize.height - gap)
-        } else if field.maxX + gap + panelSize.width <= visible.maxX - 8 {
-            proposed = CGPoint(x: field.maxX + gap, y: field.minY)
-        } else {
-            proposed = CGPoint(x: field.maxX - panelSize.width - 8, y: field.minY + 8)
-        }
-        return clampedOrigin(proposed, panelSize: panelSize, in: visible, inset: 8)
+        return candidates.first { isSafeFieldControlFrame(CGRect(origin: $0, size: panelSize), geometry: geometry, in: visibleFrame) }
+    }
+
+    static func isFiniteRect(_ rect: CGRect) -> Bool {
+        !rect.isNull && !rect.isInfinite && rect.origin.x.isFinite && rect.origin.y.isFinite
+            && rect.width.isFinite && rect.height.isFinite && rect.width > 0 && rect.height > 0
     }
 
     /// Only the underline and a two-point overlap with the glyph box receive

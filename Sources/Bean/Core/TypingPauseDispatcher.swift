@@ -283,7 +283,7 @@ final class TypingPauseDispatcher {
         }
         inline.refreshVisibleTarget()
         passive.refreshVisibleTarget()
-        if inline.isShowingUI || passive.isShowingUI { bubble.hide() }
+        if inline.ownsFocusedFieldSession || inline.isShowingUI || passive.isShowingUI { bubble.hide() }
         else { bubble.refreshVisibleTarget() }
     }
 
@@ -313,11 +313,11 @@ final class TypingPauseDispatcher {
         guard gen == generation, settings.bubbleEnabled, !coordinatorIsBusy() else { return }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         // Bubble is lowest priority: yield to passive/inline if they're showing.
-        guard !passive.isShowingUI, !inline.isShowingUI else { return }
+        guard !passive.isShowingUI, !inline.isShowingUI, !inline.ownsFocusedFieldSession else { return }
         let app = NSWorkspace.shared.frontmostApplication
         guard !settings.isAssistancePaused(for: app?.bundleIdentifier) else { return }
         if browserExtensionOwnsField(app: app) { bubble.hide(); return }
-        bubble.evaluate(fallbackOrigin: ElectronTextFocusEvidence.validAnchor(for: app))
+        bubble.evaluate()
     }
 
     // MARK: - Typing-pause routing (passive / inline)

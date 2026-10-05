@@ -12,13 +12,13 @@ final class BeanBubbleController {
 
     private let bubbleSize = OverlayGeometry.beanLauncherSize
 
-    // Drag state. The bubble can be dragged off text that it covers; the offset
-    // (in AppKit screen coords, y-up) is owned by the service and reapplied to the
-    // anchor each time the bubble is shown for the same field.
+    // Legacy drag offsets remain usable only while the whole target has a
+    // freshly verified safe destination outside the editor and controls.
     private var bubbleBaseOrigin: NSPoint = .zero
     private var bubbleSavedOffset: CGSize = .zero
     private var onCommitOffset: ((CGSize) -> Void)?
     private var onResetOffset: (() -> Void)?
+    private var isSafeOrigin: ((CGPoint) -> Bool)?
 
     var isShowing: Bool { bubblePanel != nil || menuPanel != nil }
     var isMenuOpen: Bool { menuPanel != nil }
@@ -27,6 +27,7 @@ final class BeanBubbleController {
     // MARK: - Bubble
 
     func showBubble(at point: CGPoint, savedOffset: CGSize, openOnHover: Bool,
+                    isSafeOrigin: @escaping (CGPoint) -> Bool,
                     onOpen: @escaping (OverlayActivationIntent) -> Void,
                     onDismiss: @escaping () -> Void,
                     onCommitOffset: @escaping (CGSize) -> Void, onReset: @escaping () -> Void) {
@@ -35,6 +36,9 @@ final class BeanBubbleController {
         bubbleSavedOffset = savedOffset
         self.onCommitOffset = onCommitOffset
         self.onResetOffset = onReset
+        self.isSafeOrigin = isSafeOrigin
+        let origin = NSPoint(x: bubbleBaseOrigin.x + savedOffset.width, y: bubbleBaseOrigin.y + savedOffset.height)
+        guard isSafeOrigin(origin) else { return }
         let view = BeanBubbleView(
             openOnHover: openOnHover, onOpen: onOpen, onDismiss: onDismiss,
             onResetPosition: { [weak self] in self?.resetBubblePosition() },
@@ -43,8 +47,12 @@ final class BeanBubbleController {
         )
         let panel = makePanel(size: NSSize(width: bubbleSize, height: bubbleSize))
         panel.contentViewController = NSHostingController(rootView: view)
-        let origin = NSPoint(x: bubbleBaseOrigin.x + savedOffset.width, y: bubbleBaseOrigin.y + savedOffset.height)
-        panel.setFrameOrigin(clampedBubbleOrigin(origin))
+        // Attaching an NSHostingController can reset a borderless panel's
+        // initial frame; restore the actual validated motor target explicitly.
+        panel.setContentSize(NSSize(width: bubbleSize, height: bubbleSize))
+        panel.setAccessibilityTitle("Bean writing control")
+        panel.setAccessibilityIdentifier("com.bean.overlay.legacy-control")
+        panel.setFrameOrigin(origin)
         bubblePanel = panel
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             panel.alphaValue = 1
@@ -59,25 +67,21 @@ final class BeanBubbleController {
         }
     }
 
-    private func clampedBubbleOrigin(_ p: NSPoint) -> NSPoint {
-        let screens = OverlayScreenArea.current
-        let center = CGPoint(x: p.x + bubbleSize / 2, y: p.y + bubbleSize / 2)
-        guard let screen = OverlayGeometry.screen(containing: center, from: screens) else { return p }
-        return OverlayGeometry.clampedOrigin(
-            p,
-            panelSize: CGSize(width: bubbleSize, height: bubbleSize),
-            in: screen.visibleFrame,
-            inset: 2
-        )
-    }
-
     func moveBubble(to point: CGPoint) {
-        guard let bubblePanel, menuPanel == nil else { return }
+        guard let bubblePanel else { return }
         bubbleBaseOrigin = point
-        bubblePanel.setFrameOrigin(clampedBubbleOrigin(CGPoint(
+        var origin = CGPoint(
             x: point.x + bubbleSavedOffset.width,
             y: point.y + bubbleSavedOffset.height
-        )))
+        )
+        if isSafeOrigin?(origin) != true {
+            // A saved offset never overrides a newly occupied destination.
+            origin = point
+            bubbleSavedOffset = .zero
+            onResetOffset?()
+        }
+        guard isSafeOrigin?(origin) == true else { hide(); return }
+        bubblePanel.setFrameOrigin(origin)
     }
 
     // SwiftUI drag translation is y-DOWN; AppKit origin is y-UP → subtract height.
@@ -86,7 +90,8 @@ final class BeanBubbleController {
         if menuPanel != nil { hideMenu() } // never keep the menu open while dragging
         let origin = NSPoint(x: bubbleBaseOrigin.x + bubbleSavedOffset.width + t.width,
                              y: bubbleBaseOrigin.y + bubbleSavedOffset.height - t.height)
-        panel.setFrameOrigin(clampedBubbleOrigin(origin))
+        guard isSafeOrigin?(origin) == true else { hide(); return }
+        panel.setFrameOrigin(origin)
     }
 
     private func endDragBubble(
@@ -97,6 +102,7 @@ final class BeanBubbleController {
         // A press that didn't move past the threshold is a click → open the menu.
         guard moved, let panel = bubblePanel else { onOpen(.pointer); return }
         let final = panel.frame.origin
+        guard isSafeOrigin?(final) == true else { hide(); return }
         let offset = CGSize(width: final.x - bubbleBaseOrigin.x, height: final.y - bubbleBaseOrigin.y)
         bubbleSavedOffset = offset
         onCommitOffset?(offset)
@@ -104,7 +110,8 @@ final class BeanBubbleController {
 
     func resetBubblePosition() {
         bubbleSavedOffset = .zero
-        if let panel = bubblePanel { panel.setFrameOrigin(clampedBubbleOrigin(bubbleBaseOrigin)) }
+        guard isSafeOrigin?(bubbleBaseOrigin) == true else { hide(); return }
+        if let panel = bubblePanel { panel.setFrameOrigin(bubbleBaseOrigin) }
         onResetOffset?()
     }
 
@@ -170,6 +177,7 @@ final class BeanBubbleController {
 
     func hide() {
         bubblePanel?.orderOut(nil); bubblePanel = nil
+        isSafeOrigin = nil
         hideMenu()
     }
 
@@ -222,32 +230,24 @@ struct BeanBubbleView: View {
     var onResetPosition: () -> Void = {}
     var onDragChanged: (CGSize) -> Void = { _ in }
     var onDragEnded: (CGSize, Bool) -> Void = { _, _ in }
-    @State private var hovering = false
     @State private var dragging = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // Past this many points a press is a drag, not a click.
     private let dragThreshold: CGFloat = 4
 
     var body: some View {
-        BeanMark(size: OverlayGeometry.beanLauncherSize)
+        ZStack { NativeStatusDot(hasSuggestions: false) }
             .frame(
                 width: OverlayGeometry.beanLauncherSize,
                 height: OverlayGeometry.beanLauncherSize
             )
-            .opacity(hovering ? 1.0 : 0.82)
-            .scaleEffect(dragging ? 1.12 : (hovering ? 1.06 : 1.0))
-            .shadow(color: .black.opacity(0.22), radius: (hovering || dragging) ? 4 : 2, y: 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: dragging)
             .contentShape(Rectangle())
-            .help("Click Bean to choose an action — drag it if it covers your text")
+            .help("Bean: live checking unavailable here. Click for writing actions.")
             .onHover { h in
-                hovering = h
                 if h && openOnHover && !dragging { onOpen(.passiveHover) }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Open Bean")
+            .accessibilityLabel("Bean: live checking unavailable here. Open writing actions.")
             .accessibilityHint("Shows writing actions")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { onOpen(.explicit) }

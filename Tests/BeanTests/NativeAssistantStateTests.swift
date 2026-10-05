@@ -4,15 +4,15 @@ import XCTest
 final class NativeAssistantStateTests: XCTestCase {
     func testCheckingCleanAndUnavailableStatesCannotBeConfused() {
         var state = NativeAssistantState(phase: .checkingLocal)
-        XCTAssertEqual(state.badgeText, "…")
+        XCTAssertFalse(state.hasSuggestions)
         XCTAssertTrue(state.isBusy)
         state.phase = .complete
-        XCTAssertEqual(state.badgeText, "")
+        XCTAssertFalse(state.hasSuggestions)
         XCTAssertFalse(state.isBusy)
         XCTAssertTrue(state.title.contains("basic grammar"))
         XCTAssertTrue(state.detail.contains("do not mean the text is error-free"))
         state.phase = .unavailable("cannotReadText")
-        XCTAssertEqual(state.badgeText, "!")
+        XCTAssertFalse(state.hasSuggestions)
         XCTAssertTrue(state.detail.contains("does not expose readable text"))
         XCTAssertFalse(state.title.contains("No spelling"))
     }
@@ -22,7 +22,7 @@ final class NativeAssistantStateTests: XCTestCase {
         XCTAssertEqual(state.proofreadLabel, "Proofread selected text")
         XCTAssertEqual(state.rewriteLabel, "Rewrite selected text")
         XCTAssertEqual(state.title, "1 writing suggestion")
-        XCTAssertEqual(state.badgeText, "1")
+        XCTAssertTrue(state.hasSuggestions)
         state.issueCount = 3
         XCTAssertEqual(state.title, "3 writing suggestions")
     }
