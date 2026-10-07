@@ -8,6 +8,84 @@ import XCTest
 /// these renders do not certify a browser's keyboard/accessibility transport.
 @MainActor
 final class OwnedBrowserOverlayVisualTests: XCTestCase {
+    func testIssueDotHasDistinctRedAndExclamationInBothAppearancesAndTargetSizes() async throws {
+        for dark in [false, true] {
+            for compact in [false, true] {
+                let fixture = try OwnedBrowserOverlayFixture(size: NSSize(width: 800, height: 640), dark: dark)
+                defer { fixture.close() }
+                try await fixture.load()
+                let neutral = try await fixture.object("""
+                    let editor=document.getElementById('editor');
+                    if(\(compact ? "true" : "false")) {
+                        const input=document.createElement('input');input.id='editor';editor.replaceWith(input);editor=input;
+                        editor.style.cssText='position:fixed;left:32px;top:72px;width:280px;height:24px;box-sizing:border-box;padding:2px;border:1px solid #999;font:12px -apple-system,sans-serif';
+                    }
+                    editor.value='Short draft';editor.focus();
+                    const r=editor.getBoundingClientRect();
+                    window.__ownedDotRender=(count)=>BeanOverlay.renderAssistant({x:r.x,y:r.y,w:r.width,h:r.height},count,'nativeLocal',{}, {source:editor});
+                    window.__ownedDotMeasure=()=>{
+                        const root=window.__ownedBeanShadow,button=root.querySelector('.assistant'),dot=root.querySelector('.assistant-dot');
+                        const mark=dot.querySelector('.assistant-issue-mark'),d=dot.getBoundingClientRect(),m=mark.getBoundingClientRect(),b=button.getBoundingClientRect();
+                        const style=getComputedStyle(dot),stem=getComputedStyle(mark,'::before'),point=getComputedStyle(mark,'::after');
+                        const near=(actual,expected)=>Math.abs(actual-expected)<0.03;
+                        return {dark:matchMedia('(prefers-color-scheme:dark)').matches,
+                            sourceUntouched:document.activeElement===editor && editor.value==='Short draft',
+                            dot10:d.width===10 && d.height===10,targetSize:b.width,targetSquare:b.width===b.height,
+                            noLogoOrCount:button.children.length===1 && !button.querySelector('img') && button.textContent==='',
+                            background:style.backgroundColor,markHidden:mark.hidden,markDisplay:getComputedStyle(mark).display,
+                            markAriaHidden:mark.getAttribute('aria-hidden')==='true',label:button.getAttribute('aria-label'),
+                            markInside:m.left>=d.left && m.right<=d.right && m.top>=d.top && m.bottom<=d.bottom,
+                            markCentered:near(m.x+m.width/2,d.x+d.width/2) && near(m.y+m.height/2,d.y+d.height/2),
+                            markCenterOffset:{x:m.x+m.width/2-d.x-d.width/2,y:m.y+m.height/2-d.y-d.height/2},
+                            markSize:near(m.width,1.4) && near(m.height,5.4),
+                            stemSize:near(parseFloat(stem.width),1.4) && near(parseFloat(stem.height),3.2),
+                            pointSize:near(parseFloat(point.width),1.4) && near(parseFloat(point.height),1.4),
+                            markColor:stem.backgroundColor,pointColor:point.backgroundColor,
+                            buttonRetained:window.__ownedDotButton===undefined || window.__ownedDotButton===button};
+                    };
+                    window.__ownedDotRender(0);window.__ownedDotButton=window.__ownedBeanShadow.querySelector('.assistant');
+                    return window.__ownedDotMeasure();
+                    """)
+                XCTAssertEqual(neutral["dark"] as? Bool, dark)
+                XCTAssertEqual(neutral["background"] as? String, dark ? "rgb(224, 161, 94)" : "rgb(138, 76, 23)")
+                XCTAssertEqual(neutral["markHidden"] as? Bool, true)
+                XCTAssertEqual(neutral["markDisplay"] as? String, "none")
+                let name = "dot-contrast-\(compact ? "compact" : "regular")-\(dark ? "dark" : "light")"
+                if let directory = ProcessInfo.processInfo.environment["BEAN_BROWSER_QA_OUTPUT_DIRECTORY"] {
+                    try await fixture.snapshot(to: URL(fileURLWithPath: directory, isDirectory: true)
+                        .appendingPathComponent(name + "-neutral.png"))
+                }
+                let issue = try await fixture.object("""
+                    window.__ownedDotRender(2);return window.__ownedDotMeasure();
+                    """)
+                XCTAssertEqual(issue["background"] as? String, dark ? "rgb(255, 107, 107)" : "rgb(217, 45, 32)")
+                XCTAssertNotEqual(issue["background"] as? String, neutral["background"] as? String)
+                XCTAssertEqual(issue["markHidden"] as? Bool, false)
+                XCTAssertEqual(issue["markDisplay"] as? String, "block")
+                XCTAssertEqual(issue["markColor"] as? String, dark ? "rgb(36, 18, 15)" : "rgb(255, 255, 255)")
+                XCTAssertEqual(issue["pointColor"] as? String, issue["markColor"] as? String)
+                XCTAssertTrue((issue["label"] as? String ?? "").contains("2 writing suggestions"))
+                for key in ["sourceUntouched", "dot10", "targetSquare", "noLogoOrCount", "markAriaHidden",
+                            "markInside", "markCentered", "markSize", "stemSize", "pointSize", "buttonRetained"] {
+                    XCTAssertEqual(issue[key] as? Bool, true, "\(name): \(key) \(issue)")
+                }
+                XCTAssertEqual(issue["targetSize"] as? Int, compact ? 20 : 28)
+                XCTAssertEqual(neutral["targetSize"] as? Int, compact ? 20 : 28)
+                if let directory = ProcessInfo.processInfo.environment["BEAN_BROWSER_QA_OUTPUT_DIRECTORY"] {
+                    try await fixture.snapshot(to: URL(fileURLWithPath: directory, isDirectory: true)
+                        .appendingPathComponent(name + "-issues.png"))
+                }
+                let cleared = try await fixture.object("""
+                    window.__ownedDotRender(0);return window.__ownedDotMeasure();
+                    """)
+                XCTAssertEqual(cleared["background"] as? String, neutral["background"] as? String)
+                XCTAssertEqual(cleared["markHidden"] as? Bool, true)
+                XCTAssertEqual(cleared["buttonRetained"] as? Bool, true)
+                XCTAssertEqual(cleared["sourceUntouched"] as? Bool, true)
+            }
+        }
+    }
+
     func testProductionAssistantAndSuggestionCardsFitRealViewportAndExportSnapshots() async throws {
         let output = ProcessInfo.processInfo.environment["BEAN_BROWSER_QA_OUTPUT_DIRECTORY"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -191,12 +269,12 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                     e.style.left='1200px';BeanOverlay.refreshAssistantPlacement();const offscreenHidden=!root.querySelector('.assistant');
                     e.style.left='4px';const recovered=BeanOverlay.refreshAssistantPlacement();
                     return {shown,topRight,insideEditor:inside(b,r),paint10:d.width===10 && d.height===10,target28:b.width===28 && b.height===28,
-                        noLogoOrCount:button.children.length===1 && !button.querySelector('img'),amber:button.dataset.hasIssues==='true',
+                        noLogoOrCount:button.children.length===1 && !button.querySelector('img'),hasIssues:button.dataset.hasIssues==='true',
                         outsideControls:controls.every(control=>!overlap(b,control.getBoundingClientRect())),controlsUntouched,dotOwnsPixels,
                         hoverQuiet,clickOpens,thinExcluded,fillsViewportShown,offscreenHidden,recovered,
                         sourceUntouched:e.value==='Short draft' && e.selectionStart===4};
                     """)
-                for key in ["shown", "topRight", "insideEditor", "paint10", "target28", "noLogoOrCount", "amber",
+                for key in ["shown", "topRight", "insideEditor", "paint10", "target28", "noLogoOrCount", "hasIssues",
                             "outsideControls", "controlsUntouched", "dotOwnsPixels", "hoverQuiet", "clickOpens", "thinExcluded",
                             "fillsViewportShown", "offscreenHidden", "recovered", "sourceUntouched"] {
                     XCTAssertEqual(result[key] as? Bool, true, "\(name) \(dark): \(key) \(result)")

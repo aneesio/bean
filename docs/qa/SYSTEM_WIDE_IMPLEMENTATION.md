@@ -38,8 +38,8 @@ No personal writing or paid provider requests are needed for the automated
 work. Developer signing and notarization are deferred, so local candidates must
 remain truthfully labelled ad hoc and unnotarized.
 
-Latest build 18 combined checks: `scripts/run_all_tests.sh` passed 639 Swift
-test cases (631 passed, eight skipped), all 13 browser suites, standalone logic,
+Latest build 19 combined checks: `scripts/run_all_tests.sh` passed 641 Swift
+test cases (633 passed, eight skipped), all 13 browser suites, standalone logic,
 shell syntax, release metadata and repository audit. The skips are five
 unavailable own-process AX web-area fixtures, one SwiftUI descendant fixture
 whose plain Button baseline also lacks AX descendants, and two opt-in
@@ -170,3 +170,11 @@ text, but its app-scoped screenshot cannot certify another process's overlay
 position. Fixture closed; Deeper AI restored on; build 17 rollback preserved.
 Extension 0.8.4 manual reload/page refresh remains unconfirmed. No universal
 app support or installed Chrome bridge sign-off is claimed.
+
+
+Build 19 replaces the ambiguous amber issue dot with vivid red and an inside
+geometric exclamation on both native and browser controls. Normal brown,
+10-point paint, 28/20-point semantic targets and inside-field placement remain.
+Light/dark contrast, actual native pixels and real WebKit color/centering/state
+transition checks pass; independent source/visual review is complete. See the
+candidate QA record for package and activation evidence.

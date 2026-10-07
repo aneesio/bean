@@ -3,6 +3,16 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.7.0 build 19 — 2026-10-06 (local candidate)
+
+- Keep brand brown for the neutral field dot and use vivid red for possible
+  writing issues in the Mac app and extension 0.8.5.
+- Add a tiny contrasting exclamation mark inside the existing 10-point issue dot, so
+  status differs by shape as well as color in light, dark and browser forced-color
+  appearances.
+- Retain inside placement and the existing 28-point normal / 20-point compact
+  pointer targets; the stronger issue state does not cover additional editor space.
+
 ## 1.7.0 build 18 — 2026-10-05 (local candidate)
 
 - Move the brown/amber dot inside the editable text area, preferring its clear

@@ -455,6 +455,10 @@ assert.equal(assistant.getBoundingClientRect().width,28,"the quiet dot retains a
 assert.equal(assistant.children.length,1);
 assert.equal(assistant.children[0].className,"assistant-dot");
 assert.equal(assistant.children[0].getAttribute("aria-hidden"),"true");
+const assistantIssueMark=assistant.querySelector(".assistant-issue-mark");
+assert.ok(assistantIssueMark,"issues have an exclamation shape as well as a distinct color");
+assert.equal(assistantIssueMark.getAttribute("aria-hidden"),"true","the decorative mark does not duplicate the button's spoken status");
+assert.equal(assistantIssueMark.hidden,false);
 assert.equal(assistant.querySelectorAll("img").length,0,"the field indicator has no Bean logo or numeric pill");
 assert.equal(assistant.dataset.hasIssues,"true");
 assert.match(assistant.title,/3 writing suggestions/,"hover details retain the useful issue count");
@@ -472,7 +476,14 @@ assert.equal(domDocument.lastShadow.activeElement.dataset.beanAssistant, "",
 assert.match(domDocument.lastShadow.activeElement.getAttribute("aria-label"), /Checking the changed paragraph/);
 assert.equal(domDocument.lastShadow.activeElement,assistant,"passive status updates retain the semantic button");
 assert.equal(assistant.dataset.hasIssues,"false","no issues uses the brand brown dot");
+assert.equal(assistant.querySelector(".assistant-issue-mark"),assistantIssueMark,
+  "status changes retain the same decorative node and semantic button");
+assert.equal(assistantIssueMark.hidden,true,"checking without known issues clears the exclamation mark");
+domOverlay.renderAssistant(fieldRect,2,"local",{});
+assert.equal(domDocument.lastShadow.activeElement,assistant);
+assert.equal(assistantIssueMark.hidden,false,"new issues reveal the existing mark without changing focus");
 domOverlay.renderAssistant(fieldRect, 0, "local", {});
+assert.equal(assistantIssueMark.hidden,true,"a cleared issue state returns to the plain brown dot");
 assert.match(domDocument.lastShadow.activeElement.getAttribute("aria-label"), /Basic checks only/);
 const statusAssistant = domDocument.lastShadow.activeElement;
 for (const listener of statusAssistant.listeners.click) listener(fakeEvent({ detail:1 }));

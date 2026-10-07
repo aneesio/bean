@@ -679,3 +679,37 @@ reload/page refresh has been requested and is not yet confirmed at this record.
 The browser tool cannot navigate to extension settings. No installed Chrome
 bridge or universal custom-editor pass is inferred from the Node/WebKit gate.
 No paid QA action was invoked.
+
+
+## Build 19 distinct issue dot — October 6, 2026
+
+The user reports that brown and amber look too similar. Both native launchers
+and the browser assistant now retain the neutral brown and use vivid red for
+suggestions: `#D92D20` in light appearance, `#FF6B6B` in dark appearance. A small
+geometric exclamation inside the same 10-point dot supplies a shape cue. The
+white light-mode marker and dark `#24120F` dark-mode marker exceed 4.5:1 contrast
+against their dot backgrounds. Browser forced colors use Highlight and
+HighlightText. No count, larger pill, new placement rule or writing action is
+introduced; the inside placement and complete 28/20-point targets remain.
+
+Native pixel tests cover neutral/issues, both appearances and several counts.
+The new real WebKit case measures the exact colors, glyph dimensions, centered
+containment, normal/compact targets and issues-to-clear transition, retaining
+source text, focus and semantic control identity. Its first run found an actual
+subpixel centering error from absolute positioning within the dot border box.
+Flex centering repaired it; the strict <0.03-point centering assertion was
+retained. All seven owned browser overlay cases then passed.
+
+`scripts/run_all_tests.sh`: **PASS**, **641 Swift cases: 633 passed, eight baseline
+skips, zero failures**, all 13 browser suites, standalone logic, shell syntax,
+release metadata and repository audit. The existing skips retain their prior
+AX/service/opt-in reasons and are not counted as live compatibility passes.
+Final log: `/private/tmp/bean-build19-all.log`. Focused final browser log:
+`/private/tmp/bean-build19-browser-focused.log`.
+
+Production native light/dark and browser regular/compact light/dark issue
+snapshots were visually inspected in `build/qa-build19-native` and
+`build/qa-build19-browser`. Independent source and visual review found no
+remaining actionable issue. These owned renders certify this visual change,
+not third-party editor coverage or installed Chrome transport. Packaging and
+activation evidence will follow separately. No paid QA request was made.

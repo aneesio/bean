@@ -48,8 +48,8 @@ const minimumExtensionVersion = requiredMatch(nativeHost, /static let minimumExt
 const appProtocol = Number(requiredMatch(nativeHost, /static let protocolVersion = (\d+)/, "app protocol version"));
 
 assert.equal(appVersion, "1.7.0", "the in-development app release is 1.7.0");
-assert.equal(appBuild, "18", "the in-development app build is 18");
-assert.equal(manifest.version, "0.8.4", "the in-development extension release is 0.8.4");
+assert.equal(appBuild, "19", "the in-development app build is 19");
+assert.equal(manifest.version, "0.8.5", "the in-development extension release is 0.8.5");
 assert.equal(appFallback, appVersion, "the unbundled app fallback must match Info.plist");
 assert.equal(buildFallback, appBuild, "the unbundled build fallback must match Info.plist");
 assert.equal(extensionProtocol, appProtocol, "the app and extension must speak the same bridge protocol");

@@ -2,14 +2,16 @@
 
 This experimental Manifest V3 extension adds inline proofreading to supported
 web text fields. It is an unpacked developer beta, not a Chrome Web Store
-release.
+release. Current candidate: **0.8.5**, bundled with **Bean 1.7.0 (build 19)**.
 
 ## Defaults
 
 - Local writing help is enabled on ordinary websites after install.
 - Add websites to the blocked list when you do not want Bean there.
 - A single 10-pixel brown dot sits inside the active text area, preferring a
-  clear top-right corner; it turns amber when suggestions exist. Hover shows
+  clear top-right corner. With possible issues it becomes vivid red with a tiny
+  contrasting exclamation mark. The marker remains distinct in light/dark and forced
+  colors, so the state does not rely only on color. Hover shows
   status and click opens suggestions, **Proofread**, and **Rewrite**. Its target
   is 28 pixels in normal fields or 20 pixels in compact fields. Exposed text,
   caret and controls guide alternate inside placement; an unusable field can

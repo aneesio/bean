@@ -1,14 +1,16 @@
 # Bean 1.7.0 — public beta candidate
 
-Build **18**, with Chromium extension **0.8.4**. This candidate focuses on writing
+Build **19**, with Chromium extension **0.8.5**. This candidate focuses on writing
 in other apps; ordinary launch and completed setup return to the menu-bar
 experience.
 
 ## What changed
 
 - Field controls are now tiny status dots without a pill, logo or visible count.
-  Brand-brown dots indicate no current suggestions; amber filled dots indicate
-  suggestions. Hover shows status and click opens the review/actions panel.
+  Brand-brown dots indicate no current suggestions. Vivid red dots with a tiny
+  contrasting exclamation mark indicate possible issues in the Mac app and browser.
+  The contrasting marker distinguishes the state beyond color in light/dark
+  appearances and browser forced colors. Hover shows status and click opens the review/actions panel.
 - Place the dot inside the exact text area, preferring a clear top-right corner.
   Normal fields keep a 28-point pointer target; compact fields use 20 points,
   with the same 10-point dot. Text, caret and exposed control geometry guide

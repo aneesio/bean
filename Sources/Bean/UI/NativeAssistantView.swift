@@ -24,13 +24,19 @@ struct NativeAssistantBadgeView: View {
 /// positioned inside the editor, clear of known text and controls as one unit.
 struct NativeStatusDot: View {
     let hasSuggestions: Bool
-    private let amber = Color.beanDynamic(light: BeanDesign.SRGB(217, 119, 6).nsColor,
-                                          dark: BeanDesign.SRGB(251, 191, 36).nsColor)
     var body: some View {
-        Circle()
-            .fill(hasSuggestions ? amber : BeanDesign.accent)
-            .frame(width: OverlayGeometry.statusDotDiameter, height: OverlayGeometry.statusDotDiameter)
-            .accessibilityHidden(true)
+        ZStack {
+            Circle().fill(hasSuggestions ? BeanDesign.issueDot : BeanDesign.accent)
+            if hasSuggestions {
+                VStack(spacing: 0.8) {
+                    RoundedRectangle(cornerRadius: 0.7).frame(width: 1.4, height: 3.2)
+                    Circle().frame(width: 1.4, height: 1.4)
+                }
+                .foregroundColor(BeanDesign.issueDotMark)
+            }
+        }
+        .frame(width: OverlayGeometry.statusDotDiameter, height: OverlayGeometry.statusDotDiameter)
+        .accessibilityHidden(true)
     }
 }
 

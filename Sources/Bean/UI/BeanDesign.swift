@@ -50,6 +50,11 @@ enum BeanDesign {
         // Interactive/text accents meet WCAG AA against their intended surface.
         static let interactiveAccentLight = SRGB(138, 76, 23)
         static let interactiveAccentDark = SRGB(224, 161, 94)
+        // A distinct issue hue and geometric cue distinguish the tiny field dot
+        // from its neutral brown state in either appearance.
+        static let issueDotLight = SRGB(217, 45, 32)
+        static let issueDotDark = SRGB(255, 107, 107)
+        static let issueDotMarkDark = SRGB(36, 18, 15)
         static let secondaryTextLight = SRGB(70, 70, 70)
         static let secondaryTextDark = SRGB(199, 199, 199)
 
@@ -89,6 +94,12 @@ enum BeanDesign {
     static let accent = Color.beanDynamic(
         light: Palette.interactiveAccentLight.nsColor,
         dark: Palette.interactiveAccentDark.nsColor
+    )
+    static let issueDot = Color.beanDynamic(
+        light: Palette.issueDotLight.nsColor, dark: Palette.issueDotDark.nsColor
+    )
+    static let issueDotMark = Color.beanDynamic(
+        light: NSColor.white, dark: Palette.issueDotMarkDark.nsColor
     )
     /// Lighter caramel for artwork and backgrounds; never use for small text.
     static let decorativeAccent = Color.beanDynamic(

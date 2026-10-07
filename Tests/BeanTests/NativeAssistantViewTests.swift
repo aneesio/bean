@@ -55,34 +55,52 @@ final class NativeAssistantViewTests: XCTestCase {
 
     func testCompactDotAndLegacyLauncherUseFixedTargetWithoutCountGrowth() async throws {
         _ = NSApplication.shared
-        for count in [0, 1, 3, 99] {
-            let state = NativeAssistantState(phase: .complete, issueCount: count)
-            let root = NativeAssistantBadgeView(state: state, onOpen: {}, onKeyboardOpen: {})
-                .background(Color.white)
-                .environment(\.colorScheme, .light)
-            let view = NSHostingView(rootView: root)
-            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 28, height: 28),
-                styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            defer { window.close() }
-            window.appearance = NSAppearance(named: .aqua)
-            window.contentView = view
-            XCTAssertEqual(view.fittingSize.width, 28, accuracy: 0.01)
-            XCTAssertEqual(view.fittingSize.height, 28, accuracy: 0.01)
-            view.layoutSubtreeIfNeeded()
-            try await Task.sleep(nanoseconds: 50_000_000)
-            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            let center = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
-            if count > 0 {
-                XCTAssertGreaterThan(center.redComponent, center.blueComponent + 0.2, "Suggestions fill the dot amber")
-            } else {
-                // cacheDisplay uses the current display's ColorSync profile.
-                // Assert visible brown paint, rather than monitor-specific RGB.
-                XCTAssertGreaterThan(center.redComponent, center.greenComponent + 0.15)
-                XCTAssertGreaterThan(center.greenComponent, center.blueComponent + 0.10)
-                XCTAssertLessThan(center.redComponent, 0.75,
-                    "The default dot is filled brown, distinct from amber and a gray/empty ring")
+        for scheme in [ColorScheme.light, .dark] {
+            for count in [0, 1, 3, 99] {
+                let state = NativeAssistantState(phase: .complete, issueCount: count)
+                let root = NativeAssistantBadgeView(state: state, onOpen: {}, onKeyboardOpen: {})
+                    .background(scheme == .dark ? Color.black : Color.white)
+                    .environment(\.colorScheme, scheme)
+                let view = NSHostingView(rootView: root)
+                let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 28, height: 28),
+                    styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                window.contentView = view
+                XCTAssertEqual(view.fittingSize.width, 28, accuracy: 0.01)
+                XCTAssertEqual(view.fittingSize.height, 28, accuracy: 0.01)
+                view.layoutSubtreeIfNeeded()
+                try await Task.sleep(nanoseconds: 50_000_000)
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let center = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+                if count > 0 {
+                    let scale = CGFloat(bitmap.pixelsWide) / 28
+                    let paint = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2 - Int(3 * scale),
+                        y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+                    XCTAssertGreaterThan(paint.redComponent, paint.greenComponent + 0.25, "Issues use a distinct red hue")
+                    XCTAssertGreaterThan(paint.redComponent, paint.blueComponent + 0.25)
+                    var visibleMark = false
+                    for x in (bitmap.pixelsWide / 2 - Int(scale))...(bitmap.pixelsWide / 2 + Int(scale)) {
+                        for y in (bitmap.pixelsHigh / 2 - Int(3 * scale))...(bitmap.pixelsHigh / 2 + Int(3 * scale)) {
+                            guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                            visibleMark = visibleMark || (scheme == .dark
+                                ? pixel.redComponent < 0.30 && pixel.greenComponent < 0.20
+                                : pixel.greenComponent > 0.80 && pixel.blueComponent > 0.80)
+                        }
+                    }
+                    XCTAssertTrue(visibleMark, "The issue state retains a contrasting exclamation inside its existing paint bounds")
+                } else {
+                    // cacheDisplay uses the current display's ColorSync profile.
+                    // Assert visible brown paint, rather than monitor-specific RGB.
+                    XCTAssertGreaterThan(center.redComponent, center.greenComponent + 0.15)
+                    XCTAssertGreaterThan(center.greenComponent, center.blueComponent + 0.10)
+                    if scheme == .light {
+                        XCTAssertLessThan(center.redComponent, 0.75,
+                            "The default dot remains filled brown")
+                    }
+                }
             }
         }
         let legacy = NSHostingView(rootView: BeanBubbleView(openOnHover: false, onOpen: { _ in }, onDismiss: {}))

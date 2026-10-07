@@ -57,7 +57,7 @@
     const style = document.createElement("style");
     style.textContent = `
       :host { color-scheme:light dark; --bean-accent:${ACCENT}; --bean-ink:#252321;
-              --bean-muted:#66615c; --bean-issue:#D97706; --bean-surface:rgba(255,253,250,.98); --bean-line:#d8d1c9; }
+              --bean-muted:#66615c; --bean-issue:#D92D20; --bean-issue-mark:#fff; --bean-surface:rgba(255,253,250,.98); --bean-line:#d8d1c9; }
       * { box-sizing:border-box; }
       .layer { position:absolute; top:0; left:0; pointer-events:none; }
       button { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
@@ -96,9 +96,15 @@
                    width:28px; height:28px; padding:0; pointer-events:auto; cursor:pointer;
                    appearance:none; border:0; border-radius:0; background:transparent; color:var(--bean-accent); }
       .assistant::before { content:""; position:absolute; inset:0; border-radius:50%; pointer-events:none; }
-      .assistant-dot { display:block; width:10px; height:10px; flex:none; border:1.5px solid currentColor;
+      .assistant-dot { display:flex; align-items:center; justify-content:center; width:10px; height:10px; flex:none; border:1.5px solid currentColor;
                        border-radius:50%; background:currentColor; pointer-events:none; }
       .assistant[data-has-issues="true"] .assistant-dot { border-color:var(--bean-issue); background:var(--bean-issue); }
+      .assistant-issue-mark { display:block; position:relative; width:1.4px; height:5.4px; flex:none; pointer-events:none; }
+      .assistant-issue-mark[hidden] { display:none; }
+      .assistant-issue-mark::before,.assistant-issue-mark::after { content:""; position:absolute; left:0; width:1.4px;
+                                                                background:var(--bean-issue-mark); border-radius:.7px; }
+      .assistant-issue-mark::before { top:0; height:3.2px; }
+      .assistant-issue-mark::after { bottom:0; height:1.4px; }
       .assistant:hover::before { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .source { font-size:10px; color:var(--bean-muted); margin:0 0 5px; }
       .pico img { display:block; width:24px; height:24px; border-radius:7px; }
@@ -138,13 +144,14 @@
       @media (max-width:620px) { .compare { grid-template-columns:1fr; } .compare pre { height:100px; } }
       @media (prefers-color-scheme:dark) {
         :host { --bean-accent:${DARK_ACCENT}; --bean-ink:#f2efeb; --bean-muted:#c4bdb5;
-                --bean-issue:#FBBF24; --bean-surface:rgba(41,38,34,.98); --bean-line:#59514a; }
+                --bean-issue:#FF6B6B; --bean-issue-mark:#24120F; --bean-surface:rgba(41,38,34,.98); --bean-line:#59514a; }
         button.primary { color:#21160d; }
       }
       @media (prefers-reduced-motion:reduce) { .pico:hover { transform:none; } * { transition:none !important; } }
       @media (forced-colors:active) { .card,.pico,.toast,button.b,.overflow-menu { border:1px solid CanvasText; }
                                      .assistant-dot { border-color:ButtonText; }
                                      .assistant[data-has-issues="true"] .assistant-dot { border-color:Highlight; background:Highlight; }
+                                     .assistant-issue-mark::before,.assistant-issue-mark::after { background:HighlightText; }
                                      .ul { border-bottom:3px solid LinkText; } }
     `;
     underlineLayer = document.createElement("div");
@@ -969,6 +976,8 @@
     button.type = "button";button.className = "assistant";
     button.dataset.bean = "overlay";button.dataset.beanAssistant = "";
     const dot = document.createElement("span");dot.className = "assistant-dot";
+    const issueMark = document.createElement("span");issueMark.className = "assistant-issue-mark";issueMark.hidden = true;
+    issueMark.setAttribute("aria-hidden","true");dot.appendChild(issueMark);
     dot.setAttribute("aria-hidden","true");button.appendChild(dot);
     let lastPointerCheck = 0;
     button.addEventListener("pointerenter",() => {lastPointerCheck = Date.now();refreshAssistantPlacement();});
@@ -1020,6 +1029,7 @@
     assistantEl.setAttribute("aria-label",`Bean: ${description}. Open writing suggestions.`);
     assistantEl.title = `Bean: ${description}`;
     assistantEl.dataset.hasIssues = String(current.count > 0);
+    assistantEl.querySelector(".assistant-issue-mark").hidden = !(current.count > 0);
     Object.assign(assistantEl.style,{left:`${position.x}px`,top:`${position.y}px`,width:`${position.w}px`,height:`${position.h}px`});
     if (assistantCardState && assistantCardEl) assistantCardState.refresh(current.rect,current.status,current.count);
     return true;
