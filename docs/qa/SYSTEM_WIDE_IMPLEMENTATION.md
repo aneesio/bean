@@ -186,3 +186,10 @@ architecture sections and ZIP/DMG integrity match. Build 18 rollback is retained
 Actual Settings shows 1.7.0 (19) with writing/shortcut/login preferences intact.
 Touch ID/refresh of the existing Accessibility grant and manual Chrome extension
 0.8.5 reload remain pending; see the candidate QA record for exact evidence.
+
+
+Build 19 activation follow-up: the user completed the existing grant refresh
+and Chrome 0.8.5/page reload. System Settings confirms Bean enabled; actual
+General reports Accessibility ready. Settings is closed and the floating
+writing control is present. Chrome activation is user-reported; no universal
+editor or installed-bridge certification is inferred.

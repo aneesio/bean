@@ -748,3 +748,13 @@ asked to authenticate and refresh the same entry. Manual extension 0.8.5
 reload/page refresh is also requested. Both activation steps are pending at
 this record. No installed Chrome bridge or live cross-process visual pass is
 inferred from the owned render checks.
+
+
+Activation follow-up: the user reports completing Touch ID, refreshing Bean's
+Accessibility entry, reloading extension 0.8.5 and refreshing pages. The existing
+System Settings entry is enabled and actual build 19 General reports
+**Accessibility is ready**, with AI Proofread/⌘⇧G and login unchanged. Settings
+was closed; Bean exposes its semantic floating writing control again. The
+user-reported Chrome activation is distinct from an independently observed
+installed browser bridge test. This visual change's native/browser owned-render
+and source/artifact checks are complete.
