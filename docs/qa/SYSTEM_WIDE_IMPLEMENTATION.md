@@ -178,3 +178,11 @@ geometric exclamation on both native and browser controls. Normal brown,
 Light/dark contrast, actual native pixels and real WebKit color/centering/state
 transition checks pass; independent source/visual review is complete. See the
 candidate QA record for package and activation evidence.
+
+
+Build 19 source `3d86bd8` is packaged and installed at the stable application
+path; all complete bundle trees, current extension/docs, signatures, universal
+architecture sections and ZIP/DMG integrity match. Build 18 rollback is retained.
+Actual Settings shows 1.7.0 (19) with writing/shortcut/login preferences intact.
+Touch ID/refresh of the existing Accessibility grant and manual Chrome extension
+0.8.5 reload remain pending; see the candidate QA record for exact evidence.

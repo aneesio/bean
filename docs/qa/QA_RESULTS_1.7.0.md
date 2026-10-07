@@ -713,3 +713,38 @@ snapshots were visually inspected in `build/qa-build19-native` and
 remaining actionable issue. These owned renders certify this visual change,
 not third-party editor coverage or installed Chrome transport. Packaging and
 activation evidence will follow separately. No paid QA request was made.
+
+
+Build 19 source **`3d86bd8`** is packaged and installed at
+`/Applications/Bean.app`. Strict signatures, universal architectures, artifact
+checksums, ZIP extraction and read-only mounted DMG checks pass. All 45 bundle
+files match assembled, staged, extracted, mounted and installed bundles. All
+30 extension files and eight public documents match source exactly, including
+the copies bundled as app resources. The verification mount was detached.
+Independent native inspection matches all 72 file-backed product sections:
+
+- arm64 UUID `F08A837D-3E99-342C-9432-EAEFC41A8A1D`, 37 sections.
+- x86_64 UUID `C7ABD6D7-E17B-3068-B169-E147FA319FF9`, 35 sections.
+- Executable SHA-256: `77b21cd22bf69b09e5d52f6beed8e48bfa50514980d4cd3dab4316090089df18`.
+- ZIP SHA-256: `9c3a3456830a4a2c97398ed75e9ba6c5ae77e8fdddaa961b4a406537af3f2b65`.
+- DMG SHA-256: `f809dc7f951d6fb4143ef92ed4d2ed1995782e599a8f384d0c1892d00ecf4a3a`.
+
+Logs: `/private/tmp/bean-build19-package.log`,
+`/private/tmp/bean-build19-artifact-verify.log`,
+`/private/tmp/bean-build19-browser-stage-audit.json`,
+`/private/tmp/bean-build19-install.log`. ZIP verification tree:
+`/var/folders/mt/ywk26cl921l2mt__0nw71jv00000gn/T/bean-build19-artifact-verify-lipl4dxf`.
+Build 18 rollback is retained at
+`build/installed-backups/installed.eD7eMj/Bean.app` and all 45 files match its
+previous release bundle. Bean quit normally and process absence was verified
+before installation. No user settings, draft or clipboard contents were read
+or changed.
+
+Actual General shows **1.7.0 (19)**. Live suggestions, Deeper AI, Bean dot,
+login and AI Proofread/⌘⇧G preferences remain intact. General reports stale
+Accessibility after the ad hoc signature changed. The existing System Settings
+Bean entry is on; refreshing it presents a Touch ID sheet. The user has been
+asked to authenticate and refresh the same entry. Manual extension 0.8.5
+reload/page refresh is also requested. Both activation steps are pending at
+this record. No installed Chrome bridge or live cross-process visual pass is
+inferred from the owned render checks.
