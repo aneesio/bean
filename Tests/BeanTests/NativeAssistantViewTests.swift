@@ -314,7 +314,11 @@ final class NativeAssistantViewTests: XCTestCase {
 
     private var fixturePlacement: FieldOverlayGeometry {
         let visible = NSScreen.screens.first?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        return FieldOverlayGeometry(fieldRect: CGRect(x: visible.midX - 150, y: visible.midY - 50, width: 300, height: 100),
+        // A screen with an odd visible height has a half-point midpoint. Keep
+        // the synthetic editor on whole pixels on both 1x and 2x displays so
+        // AppKit's window alignment does not alter the exact inset assertions.
+        return FieldOverlayGeometry(fieldRect: CGRect(x: (visible.midX - 150).rounded(.down),
+            y: (visible.midY - 50).rounded(.down), width: 300, height: 100),
             windowRect: visible.insetBy(dx: 8, dy: 8), exclusionRects: [])
     }
 

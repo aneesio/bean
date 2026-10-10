@@ -424,11 +424,13 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
     private let source: String
     private let mappingSource: String
     private let iconDataURL: String
+    private let viewportSize: NSSize
     private var loaded = false
     private var navigationError: Error?
 
     init(size: NSSize, dark: Bool) throws {
         _ = NSApplication.shared
+        viewportSize = size
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         webView = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: configuration)
@@ -439,6 +441,8 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
         window.appearance = appearance
         webView.appearance = appearance
         window.contentView = webView
+        window.setContentSize(size)
+        webView.setFrameSize(size)
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         source = try String(contentsOf: root.appendingPathComponent("BrowserExtension/src/overlay.js"), encoding: .utf8)
@@ -471,11 +475,50 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
                     """)
                 _ = try await webView.evaluateJavaScript(mappingSource)
                 _ = try await webView.evaluateJavaScript(source)
+                try await prepareLayout()
                 return
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw FixtureError.loadTimeout
+    }
+
+    private func prepareLayout() async throws {
+        // didFinish marks navigation completion, not WebKit's first font/layout
+        // work. On older/slower runners that work can consume the production
+        // placement deadline before a shadow host exists. Establish a usable
+        // viewport with the real renderer before each scenario starts. Keep
+        // its clock, deadline, hit testing and exclusion checks unmodified.
+        webView.layoutSubtreeIfNeeded()
+        var last: [String: Any] = [:]
+        for attempt in 0..<40 {
+            last = try await object("""
+                const editor=document.getElementById('editor'),previousFocus=document.activeElement;
+                editor.focus({preventScroll:true});
+                const r=editor.getBoundingClientRect(),fontStatus=document.fonts ? document.fonts.status : 'loaded';
+                const hit=document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).includes(editor);
+                const viewportReady=Math.abs(innerWidth-\(viewportSize.width))<0.5 && Math.abs(innerHeight-\(viewportSize.height))<0.5;
+                let placed=false,duration=0;
+                if(viewportReady && fontStatus==='loaded' && hit && r.width>0 && r.height>0) {
+                    const started=performance.now();
+                    placed=BeanOverlay.renderAssistant({x:r.x,y:r.y,w:r.width,h:r.height},0,'nativeLocal',{}, {source:editor});
+                    duration=performance.now()-started;
+                    BeanOverlay.clearAssistant();
+                }
+                if(previousFocus!==editor) {editor.blur();if(previousFocus && previousFocus.focus)previousFocus.focus({preventScroll:true});}
+                return {placed,viewportReady,viewport:{width:innerWidth,height:innerHeight},
+                    visualViewport:window.visualViewport ? {width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale} : null,
+                    editor:{x:r.x,y:r.y,width:r.width,height:r.height},fontStatus,hit,duration};
+                """)
+            if last["placed"] as? Bool == true {
+                if attempt > 0 { print("OWNED_BROWSER_LAYOUT_READY attempts=\(attempt + 1) \(last)") }
+                return
+            }
+            if attempt == 0 { print("OWNED_BROWSER_LAYOUT_PENDING \(last)") }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTFail("Owned overlay fixture could not establish a rendered viewport: \(last)")
+        throw FixtureError.layoutUnavailable(String(describing: last))
     }
 
     func reinjectOverlay() async throws {
@@ -557,5 +600,5 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { navigationError = error }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { navigationError = error }
-    private enum FixtureError: Error { case loadTimeout, snapshotUnavailable, javaScript(String), snapshotStage(String, String) }
+    private enum FixtureError: Error { case loadTimeout, layoutUnavailable(String), snapshotUnavailable, javaScript(String), snapshotStage(String, String) }
 }
