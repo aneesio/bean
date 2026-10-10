@@ -28,7 +28,8 @@ function harness({host="mail.example.com",protocol="https:",frame=false} = {}) {
   assert.equal(lease.type,"fieldOwnership"); assert.equal(lease.ownership.active,true);
   assert.deepEqual(Object.keys(lease).sort(),["ownership","type"]);
   assert.deepEqual(Object.keys(lease.ownership).sort(),["active","fieldToken"]);
-  assert.equal(JSON.stringify(lease).includes("example.com"),false,"hostname never leaves the worker policy boundary");
+  // Check serialized payload privacy, not URL trust.
+  assert.doesNotMatch(JSON.stringify(lease), /example[.]com/, "hostname never leaves the worker policy boundary");
   assert.equal(h.events.input,undefined,"disabled websites observe no writing events");
   assert.equal(h.challenge(lease.ownership.fieldToken).ok,true);
   assert.equal(h.challenge(lease.ownership.fieldToken,"page-spoofer").ok,false);

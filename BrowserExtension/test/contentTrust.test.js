@@ -1459,7 +1459,8 @@ async function run(scenario = "full") {
   for(const message of metricMessages) {
     assert.deepEqual(Object.keys(message.sample).sort(),["elapsedMilliseconds","inputLength","issueCount","kind","outcome"]);
     assert.equal(Number.isInteger(message.sample.elapsedMilliseconds),true);
-    assert.equal(JSON.stringify(message).includes("example.com"),false);
+    // Check serialized diagnostics privacy, not URL trust.
+    assert.doesNotMatch(JSON.stringify(message), /example[.]com/);
   }
   assert.ok(ownershipMessages.some((message) => message.ownership.active === true));
   document.visibilityState = "hidden";

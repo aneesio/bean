@@ -899,7 +899,8 @@ for (const [nativeReply, expectedCode] of [
   const ownership = harness.send({type:"fieldOwnership",ownership:{fieldToken:"field-a",active:true}});
   assert.equal(harness.nativeCalls[3].message.type,"fieldOwnership");
   assert.equal("text" in harness.nativeCalls[3].message,false);
-  assert.equal(JSON.stringify(harness.nativeCalls[3].message).includes("example.com"),false);
+  // Check serialized payload privacy, not URL trust.
+  assert.doesNotMatch(JSON.stringify(harness.nativeCalls[3].message), /example[.]com/);
   harness.respond(3,{id:harness.nativeCalls[3].message.id,ok:true,ownershipAccepted:true});
   harness.respond(2,{id:"fast-local",ok:true,issues:[],localSpellingAvailable:true});
   assert.equal(local[0].ok,true);
@@ -1073,7 +1074,8 @@ for (const text of ["two words","private@example.com","word!","a".repeat(97)]) {
   const harness=makeHarness({blockedSites:["example.com"]});
   const lease=harness.send({type:"fieldOwnership",ownership:{fieldToken:"disabled-site",active:true}});
   assert.equal(harness.nativeCalls[0].message.type,"fieldOwnership");
-  assert.equal(JSON.stringify(harness.nativeCalls[0].message).includes("example.com"),false);
+  // Check serialized payload privacy, not URL trust.
+  assert.doesNotMatch(JSON.stringify(harness.nativeCalls[0].message), /example[.]com/);
   harness.respond(0,{id:harness.nativeCalls[0].message.id,ok:true,ownershipAccepted:true});
   assert.equal(lease[0].ok,true);
   const text=harness.send(textMessage("disabled-no-text",{type:"localCheck"}));
@@ -1090,7 +1092,8 @@ for (const text of ["two words","private@example.com","word!","a".repeat(97)]) {
   assert.equal(metrics.sampleCount,500);assert.equal(metrics.persisted,false);
   const feedback=metrics.measurements.find((m) => m.kind === "typingPauseToFeedback");
   assert.equal(feedback.count,500);assert.equal(feedback.p95Milliseconds,570);
-  assert.equal(JSON.stringify(metrics).includes("example.com"),false);
+  // Check serialized diagnostics privacy, not URL trust.
+  assert.doesNotMatch(JSON.stringify(metrics), /example[.]com/);
   assert.equal(harness.storage.assistanceMetrics,undefined,"no diagnostic sample is persisted");
   assert.equal(harness.send({type:"getAssistanceMetrics"})[0].errorCode,"unauthorizedSender");
   for(const invalid of [{...sample,text:"writing"},{...sample,outcome:"private-word"},{...sample,kind:"example.com"},
