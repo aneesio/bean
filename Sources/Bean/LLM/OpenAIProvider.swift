@@ -3,38 +3,10 @@ import Foundation
 // OpenAI Chat Completions implementation.
 // Endpoint: POST https://api.openai.com/v1/chat/completions
 struct OpenAIProvider: LLMProvider {
-    private let endpoint = URL(string: "https://api.openai.com/v1/chat/completions")!
+    private static let endpoint = URL(string: "https://api.openai.com/v1/chat/completions")!
 
     func complete(_ request: LLMRequest) async throws -> LLMCompletion {
-        guard !request.apiKey.isEmpty else { throw LLMError.missingAPIKey }
-
-        var urlRequest = URLRequest(url: endpoint)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("Bearer \(request.apiKey)", forHTTPHeaderField: "Authorization")
-
-        // Trusted instructions go in the system message; the user's (untrusted,
-        // delimited) content goes in the user message. Never merge them.
-        var body: [String: Any] = [
-            "model": request.model,
-            "messages": [
-                ["role": "system", "content": request.systemPrompt],
-                ["role": "user", "content": request.userText]
-            ]
-        ]
-        if Self.usesModernCompletionLimit(request.model) {
-            body["max_completion_tokens"] = request.maxOutputTokens
-            // GPT-5 family models reject arbitrary temperature values. Minimal
-            // reasoning and low verbosity fit Bean's short transformation task.
-            if request.model.lowercased().hasPrefix("gpt-5") {
-                body["reasoning_effort"] = "minimal"
-                body["verbosity"] = "low"
-            }
-        } else {
-            body["max_tokens"] = request.maxOutputTokens
-            body["temperature"] = 0
-        }
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let urlRequest = try Self.buildRequest(request)
 
         let session = makeSession(timeout: request.timeout)
         let data: Data
@@ -58,6 +30,46 @@ struct OpenAIProvider: LLMProvider {
         let trimmed = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw LLMError.emptyResponse }
         return completion
+    }
+
+    /// Uses the selected model's documented parameters rather than inferring
+    /// capabilities from a family prefix, which can change between versions.
+    static func buildRequest(_ request: LLMRequest) throws -> URLRequest {
+        guard !request.apiKey.isEmpty else { throw LLMError.missingAPIKey }
+
+        var urlRequest = URLRequest(url: endpoint)
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = request.timeout
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("Bearer \(request.apiKey)", forHTTPHeaderField: "Authorization")
+
+        // Trusted instructions go in the system message; the user's (untrusted,
+        // delimited) content goes in the user message. Never merge them.
+        var body: [String: Any] = [
+            "model": request.model,
+            "messages": [
+                ["role": "system", "content": request.systemPrompt],
+                ["role": "user", "content": request.userText]
+            ]
+        ]
+        let options = ProviderKind.openai.modelDefinition(for: request.model)?.requestOptions
+        // Legacy saved IDs retain a bounded request without speculative sampling
+        // or reasoning settings. The replacement for deprecated max_tokens also
+        // supports standard chat models and is required by reasoning models.
+        let usesCompletionTokenLimit = options?.openAIUsesCompletionTokenLimit ?? true
+        let tokenLimitKey = usesCompletionTokenLimit ? "max_completion_tokens" : "max_tokens"
+        body[tokenLimitKey] = request.maxOutputTokens
+        if let temperature = options?.temperature {
+            body["temperature"] = temperature
+        }
+        if let effort = options?.openAIReasoningEffort {
+            body["reasoning_effort"] = effort
+        }
+        if let verbosity = options?.openAIVerbosity {
+            body["verbosity"] = verbosity
+        }
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return urlRequest
     }
 
     static func parseCompletion(data: Data, request: LLMRequest) throws -> LLMCompletion {
@@ -88,11 +100,5 @@ struct OpenAIProvider: LLMProvider {
             return message
         }
         return String(data: data, encoding: .utf8) ?? "Unknown error"
-    }
-
-    private static func usesModernCompletionLimit(_ model: String) -> Bool {
-        let lower = model.lowercased()
-        return lower.hasPrefix("gpt-5")
-            || lower.hasPrefix("o1") || lower.hasPrefix("o3") || lower.hasPrefix("o4")
     }
 }

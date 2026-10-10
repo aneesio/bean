@@ -36,8 +36,8 @@ struct WritingWorkspaceView: View {
             footer
         }
         .frame(minWidth: 860, minHeight: 600)
-        .background(BeanDesign.warmBackground)
-        .tint(BeanDesign.accent)
+        .background(BeanDesign.brandBackground)
+        .beanActionButtons()
         .onReceive(userContent.$dictionary) { _ in model.checkLocally() }
         .alert("Replace this draft with the example?", isPresented: $showsSampleConfirmation) {
             Button("Use Example") { loadSample() }
@@ -91,10 +91,10 @@ struct WritingWorkspaceView: View {
                     ClipboardService.writeString(model.text)
                     model.showNotice("Draft copied.")
                 } label: { Label("Copy", systemImage: "doc.on.doc") }
-                    .buttonStyle(.borderless)
+                    .beanButton(.secondary)
                     .disabled(model.text.isEmpty)
                 Button("Undo Suggestion") { model.undoSuggestion() }
-                    .buttonStyle(.borderless)
+                    .beanButton(.secondary)
                     .disabled(!model.canUndoSuggestion)
             }
             .padding(.horizontal, 22)
@@ -121,7 +121,7 @@ struct WritingWorkspaceView: View {
                             .foregroundColor(.secondary)
                             .allowsHitTesting(false)
                         Button("Try an example") { loadSample() }
-                            .buttonStyle(.bordered)
+                            .beanButton(.secondary)
                     }
                     .padding(36)
                 }
@@ -246,9 +246,9 @@ struct WritingWorkspaceView: View {
                     .foregroundColor(.secondary)
                 HStack {
                     Button("Accept") { model.accept(issue) }
-                        .buttonStyle(.borderedProminent)
+                        .beanButton(.primary)
                     Button("Dismiss") { model.dismiss(issue) }
-                        .buttonStyle(.borderless)
+                        .beanButton(.secondary)
                     Spacer()
                     if issue.type == .spelling {
                         Button { addToDictionary(issue) } label: { Image(systemName: "book.closed") }
@@ -282,7 +282,7 @@ struct WritingWorkspaceView: View {
             Button { reviewWithAI() } label: {
                 Label("Review with AI", systemImage: "sparkles").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .beanButton(.primary)
             .controlSize(.large)
             .disabled(model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Text("Sends this draft to your AI provider when you click. Provider charges may apply.")
@@ -292,7 +292,7 @@ struct WritingWorkspaceView: View {
             Button { onSettings(.provider) } label: {
                 Label("Connect AI for deeper feedback", systemImage: "sparkles")
             }
-            .buttonStyle(.bordered)
+            .beanButton(.secondary)
             Text("Optional. Local suggestions are free and work without an API key.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
@@ -357,13 +357,13 @@ struct WritingWorkspaceView: View {
             }
             HStack {
                 Button("Apply to Draft") { model.applyPreview() }
-                    .buttonStyle(.borderedProminent)
+                    .beanButton(.primary)
                     .disabled(!model.canApplyPreview)
                 Button("Copy") {
                     ClipboardService.writeString(preview.text)
                     model.showNotice("Rewrite copied.")
                 }
-                .buttonStyle(.bordered)
+                .beanButton(.secondary)
             }
             DisclosureGroup("Compare original") {
                 Text(preview.request.text).font(.system(size: 13)).foregroundColor(.secondary).textSelection(.enabled).padding(.top, 8)

@@ -25,8 +25,9 @@ const paragraphTargetSource = source.slice(
 assert.ok(paragraphTargetSource.includes("!ceBlockReplaceable(block)"),
   "contenteditable eligibility is rechecked at the replacement boundary");
 
-async function run() {
+async function run(scenario = "full") {
   const documentListeners = {};
+  const windowListeners = {};
   const elementListeners = {};
   const timers = new Map();
   const bridgeMessages = [];
@@ -60,6 +61,8 @@ async function run() {
   let appAssistancePaused=false;
   let fieldPresent = true;
   let assistantPlacementVisible=true,overlayPresentationVisible=false,geometryRefreshes=0;
+  let assistantIsShown=false,ownershipThrows=false;
+  let runtimeMessageCount=0;
   const geometryMutationObservers=[],geometryResizeObservers=[];
   class GeometryMutationObserver {
     constructor(callback) {this.callback=callback;this.disconnected=false;geometryMutationObservers.push(this);}
@@ -156,7 +159,7 @@ async function run() {
     scrollX: 0,
     scrollY: 0,
     getSelection:() => null,
-    addEventListener: () => {}
+    addEventListener: (name,listener) => {windowListeners[name]=listener;}
   };
   const chrome = {
     storage: {
@@ -190,12 +193,16 @@ async function run() {
       id: "bean-extension-id",
       onMessage: { addListener: (listener) => { runtimeMessageListener = listener; } },
       sendMessage: (message, callback) => {
+        runtimeMessageCount++;
         if (message.type === "recordAssistanceMetric") {metricMessages.push(message);callback({ok:true});return;}
         if (message.type === "fieldOwnership") {
-          ownershipMessages.push(message); callback({ok:true,ownershipAccepted:true}); return;
+          ownershipMessages.push(message);
+          if (ownershipThrows) throw new Error("Extension context invalidated.");
+          callback(scenario === "offline" ? {ok:false,errorCode:"notInstalled"} : {ok:true,ownershipAccepted:true}); return;
         }
         if (message.type === "getStatus" && message.purpose === "localCheck") {
           localBridgeMessages.push(message);
+          if (scenario === "offline") {callback({ok:false,errorCode:"notInstalled"});return;}
           callback({ok:true,bridgeAvailable:true,protocolVersion:1,compatible:true,localCheckAvailable:localCheckAvailable && !appAssistancePaused,learnWordAvailable,appAssistancePaused}); return;
         }
         if (message.type === "localCheck") {
@@ -342,11 +349,12 @@ async function run() {
     clear: () => { paragraphBusy = false; renderedEntries = []; },
     clearUndo: () => {},
     renderAssistant: (rect, count, status, handlers, options) => {
+      assistantIsShown=assistantPlacementVisible;
       assistantCalls.push({rect,count,status,handlers,options});return assistantPlacementVisible;
     },
     refreshAssistantPlacement:()=>{geometryRefreshes++;return assistantPlacementVisible;},
     hasFieldPresentation:()=>overlayPresentationVisible || renderedEntries.some(entry=>entry.rects.length>0) || paragraphBusy,
-    clearAssistant: () => {},
+    clearAssistant: () => {assistantIsShown=false;},
     render: (entries, _selected, _position, handlers) => {
       renderedEntries = entries;
       renderHandlers = handlers;
@@ -450,6 +458,41 @@ async function run() {
   assert.equal(geometryObserver.target,document.body);
   assert.equal(geometryObserver.options.subtree,true);
   assert.equal(geometryResizeObservers.at(-1).targets.includes(field),true);
+  if (scenario === "offline") {
+    assert.equal(assistantIsShown,true,"a valid extension keeps its offline local dot when no native host is installed");
+    assert.equal(typeof elementListeners.input,"function");
+    field.value="changed local draft";
+    elementListeners.input({isTrusted:false,isComposing:false});runTimers();await settle();
+    assert.equal(localChecks.at(-1),field.value,"native host absence does not disable offline local checks");
+    assert.equal(assistantIsShown,true);
+    return;
+  }
+  if (scenario === "invalidated-renewal" || scenario === "invalidated-release") {
+    assert.equal(assistantIsShown,true);
+    assert.equal(ownershipMessages.at(-1).ownership.active,true,"an ownership lease was acknowledged before invalidation");
+    const sendsBeforeInvalidation=ownershipMessages.length;
+    ownershipThrows=true;
+    windowListeners[scenario === "invalidated-renewal" ? "focus" : "blur"]();
+    assert.equal(ownershipMessages.length,sendsBeforeInvalidation+1,
+      "runtime failure must not recursively attempt to release through the dead context");
+    assert.equal(assistantIsShown,false,"invalidated extension UI clears before the native lease expires");
+    assert.equal(typeof elementListeners.input,"undefined");
+    assert.equal(renderedEntries.length,0);
+    assert.equal(geometryMutationObservers.at(-1).disconnected,true);
+    assert.equal(geometryResizeObservers.at(-1).disconnected,true);
+    const rendersAfterInvalidation=assistantCalls.length,messagesAfterInvalidation=runtimeMessageCount;
+    for(let i=0;i<3;i++) {
+      windowListeners.focus();
+      documentListeners.focusin({target:field,composedPath:()=>[field]});
+      document.visibilityState="visible";documentListeners.visibilitychange();
+      storageChangedListener({},"local");
+      runTimers();await settle();
+    }
+    assert.equal(assistantCalls.length,rendersAfterInvalidation,"focus, visibility, settings, and stale timers cannot revive the dot");
+    assert.equal(runtimeMessageCount,messagesAfterInvalidation,"invalidated ownership cannot start a heartbeat loop");
+    assert.equal(assistantIsShown,false);
+    return;
+  }
   const refreshGeometry=()=>{
     geometryMutationObservers.at(-1).callback([{type:"attributes",target:{}}]);
     const callback=timers.get(timerID);assert.ok(callback);timers.delete(timerID);callback();
@@ -1463,4 +1506,7 @@ async function run() {
     "no page text or status request is sent while the blocklist is unavailable");
 }
 
-run().then(() => console.log("Browser extension content trust tests passed"));
+(async () => {
+  for (const scenario of ["full","offline","invalidated-renewal","invalidated-release"]) await run(scenario);
+  console.log("Browser extension content trust tests passed");
+})();

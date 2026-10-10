@@ -22,6 +22,7 @@ struct ShortcutRecorderButton: View {
             Text(isRecording ? "Press new shortcut… (⎋ to cancel)" : "Record Shortcut")
                 .frame(minWidth: 180)
         }
+        .beanButton(.secondary)
         .onDisappear(perform: stopRecording)
     }
 

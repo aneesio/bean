@@ -13,12 +13,10 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.7.0</string>
+    <string>1.7.1</string>
     <key>CFBundleVersion</key>
-    <string>19</string>
-    <!-- App icon. The build script copies Resources/Icons/AppIcon.icns into the
-         bundle when present; until a real icon is added this key simply points
-         at a file that may not exist yet (harmless for a menu-bar app). -->
+    <string>21</string>
+    <!-- The build bundles every macOS icon size from the editable green Bean SVG. -->
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIconName</key>

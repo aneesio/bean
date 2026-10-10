@@ -100,7 +100,11 @@ struct UsageSummary: Equatable {
 /// Provider pricing used only for an explicitly labelled estimate. Unknown or
 /// custom models are excluded instead of pretending their cost is known.
 enum UsageCostEstimator {
-    static let pricingSnapshot = "August 21, 2026"
+    // Standard text-token prices, verified against the providers' model pages:
+    // https://developers.openai.com/api/docs/models/gpt-5-nano
+    // https://developers.openai.com/api/docs/models/gpt-4.1-nano
+    // https://platform.claude.com/docs/en/about-claude/pricing
+    static let pricingSnapshot = "October 8, 2026"
 
     static func rates(provider: String, model: String) -> (input: Double, output: Double)? {
         let lower = model.lowercased()
@@ -111,6 +115,14 @@ enum UsageCostEstimator {
         if provider == ProviderKind.anthropic.rawValue,
            lower == "claude-haiku-4-5" || lower.hasPrefix("claude-haiku-4-5-") {
             return (1.00, 5.00)
+        }
+        if provider == ProviderKind.anthropic.rawValue, lower == "claude-haiku-5-5" {
+            // Haiku 5.5's higher tier starts above 100,000 prompt tokens per
+            // request. Bean sends only text, caps the complete prompt at 64 KiB
+            // (EngineConfig.maxProviderRequestInputUTF8Bytes), and sends no
+            // tools or conversation history, so each call uses the lower tier.
+            // Daily token aggregates must not be treated as one large prompt.
+            return (0.10, 0.50)
         }
         return nil
     }

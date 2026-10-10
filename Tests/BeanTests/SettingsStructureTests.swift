@@ -39,7 +39,7 @@ final class SettingsStructureTests: XCTestCase {
 
         XCTAssertFalse(source.contains("List(selection: sidebarSelection)"))
         XCTAssertTrue(source.contains("navigation.selection = category"))
-        XCTAssertTrue(source.contains("BeanDesign.accent.opacity(0.18)"))
+        XCTAssertTrue(source.contains("BeanDesign.selectionBackground"))
         XCTAssertTrue(source.contains("category == navigation.selection ? .isSelected : []"))
     }
 

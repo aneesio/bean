@@ -132,7 +132,7 @@ struct SuggestionPopoverView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(BeanDesign.Spacing.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).fill(BeanDesign.warmBackground))
+                .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.sm).fill(BeanDesign.brandBackground))
 
             HStack {
                 Button("Dismiss") { onIgnore() }.controlSize(.small)
@@ -140,14 +140,14 @@ struct SuggestionPopoverView: View {
                 Button("Copy") { onCopy() }.controlSize(.small)
                 if !showApply { Button("Review") { onPreview() }.controlSize(.small) }
                 if showApply {
-                    Button("Accept") { onApply() }.controlSize(.small).buttonStyle(.borderedProminent)
+                    Button("Accept") { onApply() }.controlSize(.small).beanButton(.primary)
                         .keyboardShortcut(.defaultAction)
                 }
             }
         }
         .padding(BeanDesign.Spacing.md)
         .frame(width: 320)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .onExitCommand(perform: onIgnore)
         .background(
             RoundedRectangle(cornerRadius: BeanDesign.Radius.card)

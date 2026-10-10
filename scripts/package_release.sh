@@ -30,7 +30,9 @@ if [[ ! "$BUILD" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-if [[ -n "${GITHUB_REF_NAME:-}" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+# Branch/PR CI also exercises packaging. Only a release tag (or an explicitly
+# supplied ref without a type) must match the app version.
+if [[ "${GITHUB_REF_TYPE:-}" != "branch" && -n "${GITHUB_REF_NAME:-}" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
     echo "error: tag $GITHUB_REF_NAME does not match Info.plist version v$VERSION." >&2
     exit 1
 fi

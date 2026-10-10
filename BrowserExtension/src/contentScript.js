@@ -44,6 +44,7 @@
   let ownershipHeartbeat = null;
   let ownershipSupported = false;
   let ownershipRequestSequence = 0;
+  let runtimeInvalidated = false;
   let keyboardBridgeEl = null, keyboardBridgeResumeTimer = null;
   let lastBridgeAt = 0;
   let pauseExpiryTimer = null;
@@ -87,11 +88,12 @@
     return currentHost === blockedHost || currentHost.endsWith("." + blockedHost);
   }
   function siteAllowed() {
-    return state.settingsAvailable
+    return !runtimeInvalidated && state.settingsAvailable
       && !BeanSitePolicy.until(state.pausedSites, host())
       && !state.blockedSites.some((blockedHost) => hostIsBlocked(host(), blockedHost));
   }
   function loadSettings(cb) {
+    if (runtimeInvalidated) return;
     chrome.storage.local.get(["blockedSites", "pausedSites"], (s) => {
       const readError = chrome.runtime.lastError;
       const rawSites = s && s.blockedSites;
@@ -114,6 +116,7 @@
   function schedulePauseExpiry() {
     if (pauseExpiryTimer) clearTimeout(pauseExpiryTimer);
     pauseExpiryTimer = null;
+    if (runtimeInvalidated) return;
     const until = BeanSitePolicy.until(state.pausedSites,host());
     if (until) pauseExpiryTimer = setTimeout(() => loadSettings(() => {
       if (siteAllowed()) activateInitiallyFocusedField(); else { teardown(); syncPausedOwnership(); }
@@ -597,12 +600,23 @@
   }
 
   function suppressionNeeded() {
-    return state.settingsAvailable && (!!BeanSitePolicy.until(state.pausedSites,host()) ||
+    return !runtimeInvalidated && state.settingsAvailable && (!!BeanSitePolicy.until(state.pausedSites,host()) ||
       state.blockedSites.some((blockedHost) => hostIsBlocked(host(),blockedHost)));
   }
 
+  function invalidateRuntime() {
+    if (runtimeInvalidated) return;
+    // An invalidated extension can leave its DOM behind after reload. Stop
+    // presenting before the native ownership lease expires. Set this first:
+    // teardown releases the token and must not send through the dead runtime
+    // again or allow a later focus/settings callback to revive the old dot.
+    runtimeInvalidated = true;
+    if (pauseExpiryTimer) { clearTimeout(pauseExpiryTimer); pauseExpiryTimer = null; }
+    teardown();
+  }
+
   function sendOwnership(active, token = state.fieldToken) {
-    if (!token) return;
+    if (!token || runtimeInvalidated) return;
     const sequence = ++ownershipRequestSequence;
     try {
       chrome.runtime.sendMessage({type:"fieldOwnership",ownership:{fieldToken:token,active}},(response) => {
@@ -617,7 +631,11 @@
           teardown();
         }
       });
-    } catch (_error) {}
+    } catch (_error) {
+      // Missing/offline native hosts report through the callback; a synchronous
+      // runtime failure means this injected context can no longer coordinate.
+      invalidateRuntime();
+    }
   }
 
   function renewOwnership() {
@@ -625,7 +643,7 @@
     if (!ownsFocusedField()) { releaseOwnership(); return; }
     if (!state.fieldToken) state.fieldToken = uuid();
     sendOwnership(true);
-    ownershipHeartbeat = setTimeout(renewOwnership,1500);
+    if (state.fieldToken && !runtimeInvalidated) ownershipHeartbeat = setTimeout(renewOwnership,1500);
   }
 
   function releaseOwnership() {
@@ -764,7 +782,7 @@
   }
 
   function setActive(el) {
-    if (state.disabledFields.has(el)) return;
+    if (runtimeInvalidated || state.disabledFields.has(el)) return;
     if (state.active === el) return;
     teardown();
     state.disabledControlTarget = null;
@@ -1390,6 +1408,7 @@
   }
 
   function renderOverlay() {
+    if (runtimeInvalidated) return;
     BeanOverlay.render(state.entries, state.selectedId, position(), {
       onActivate: (id) => {
         // Never open a card (and offer Apply) for an unverifiable range.
@@ -1484,7 +1503,7 @@
 
   function renderAssistant() {
     const el = state.active;
-    if (!el || !BeanOverlay || typeof BeanOverlay.renderAssistant !== "function") return;
+    if (runtimeInvalidated || !el || !BeanOverlay || typeof BeanOverlay.renderAssistant !== "function") return;
     const shown = BeanOverlay.renderAssistant(fieldRect(el), state.entries.length, state.checkStatus, {
       onReview: () => {
         const first = state.entries[0];

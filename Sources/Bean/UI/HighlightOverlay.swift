@@ -415,7 +415,7 @@ private final class HighlightHitView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        // Subtle warm dashed underline near the bottom of the range.
+        // Subtle red dashed underline near the bottom of the range.
         let color = NSColor(BeanDesign.danger).withAlphaComponent(0.95)
         color.setStroke()
         let path = NSBezierPath()
@@ -546,13 +546,13 @@ struct CorrectionCardView: View {
                         .contentShape(Rectangle())
                 }
                 .controlSize(.small)
-                .buttonStyle(.borderedProminent)
+                .beanButton(.primary)
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(BeanDesign.Spacing.md)
         .frame(width: 300)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.card).fill(.regularMaterial)
             .shadow(color: .black.opacity(0.18), radius: 10, y: 4))
         .onExitCommand { model.onClose() }

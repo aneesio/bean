@@ -42,28 +42,44 @@ enum BeanDesign {
         static let lightSurface = SRGB(255, 255, 255)
         static let darkSurface = SRGB(30, 30, 30)
 
-        // Caramel remains part of the brand, but the lighter value is reserved
-        // for illustration and non-text decoration.
-        static let decorativeAccentLight = SRGB(194, 130, 69)
-        static let decorativeAccentDark = SRGB(224, 161, 94)
+        // Fresh green for illustration and non-text decoration; the darker
+        // interactive value carries controls and text in light appearance.
+        static let decorativeAccentLight = SRGB(88, 174, 113)
+        static let decorativeAccentDark = SRGB(164, 228, 188)
 
         // Interactive/text accents meet WCAG AA against their intended surface.
-        static let interactiveAccentLight = SRGB(138, 76, 23)
-        static let interactiveAccentDark = SRGB(224, 161, 94)
+        static let interactiveAccentLight = SRGB(35, 122, 72)
+        static let interactiveAccentDark = SRGB(129, 220, 165)
+        static let brandBackgroundLight = SRGB(230, 243, 233)
+        static let brandBackgroundDark = SRGB(25, 35, 29)
+        static let cardBackgroundDark = SRGB(40, 45, 42)
+        // Opaque fills keep accent text readable regardless of the surface
+        // beneath selected or hovered rows.
+        static let selectionBackgroundLight = brandBackgroundLight
+        static let selectionBackgroundDark = SRGB(36, 61, 45)
+        static let subtleBorderLight = SRGB(200, 216, 205)
+        static let subtleBorderDark = SRGB(70, 89, 75)
+        static let strongBorderLight = SRGB(101, 124, 109)
+        static let strongBorderDark = SRGB(143, 166, 150)
         // A distinct issue hue and geometric cue distinguish the tiny field dot
-        // from its neutral brown state in either appearance.
+        // from its idle green state in either appearance.
         static let issueDotLight = SRGB(217, 45, 32)
         static let issueDotDark = SRGB(255, 107, 107)
-        static let issueDotMarkDark = SRGB(36, 18, 15)
+        static let issueDotMarkDark = SRGB(25, 25, 25)
         static let secondaryTextLight = SRGB(70, 70, 70)
         static let secondaryTextDark = SRGB(199, 199, 199)
 
         static let successLight = SRGB(30, 107, 58)
         static let successDark = SRGB(109, 213, 140)
-        static let warningLight = SRGB(138, 79, 0)
-        static let warningDark = SRGB(241, 179, 91)
-        static let dangerLight = SRGB(161, 38, 34)
-        static let dangerDark = SRGB(255, 138, 128)
+        // Warning copy and its triangle retain meaning within the green brand.
+        static let warningLight = interactiveAccentLight
+        static let warningDark = interactiveAccentDark
+        static let warningBackgroundLight = selectionBackgroundLight
+        static let warningBackgroundDark = selectionBackgroundDark
+        static let dangerLight = SRGB(180, 35, 53)
+        static let dangerDark = SRGB(255, 138, 148)
+        static let dangerBackgroundLight = SRGB(252, 236, 239)
+        static let dangerBackgroundDark = SRGB(68, 36, 45)
         static let infoLight = SRGB(26, 95, 158)
         static let infoDark = SRGB(117, 183, 242)
     }
@@ -88,6 +104,8 @@ enum BeanDesign {
     // MARK: - Interaction
     static let minimumTargetSize: CGFloat = 28
     static let comfortableTargetSize: CGFloat = 32
+    @available(macOS 14, *)
+    static let actionButtonBorderShape = ButtonBorderShape.capsule
 
     // MARK: - Semantic colors
     /// Contrast-safe brand color for controls, links, selection, and text.
@@ -101,31 +119,36 @@ enum BeanDesign {
     static let issueDotMark = Color.beanDynamic(
         light: NSColor.white, dark: Palette.issueDotMarkDark.nsColor
     )
-    /// Lighter caramel for artwork and backgrounds; never use for small text.
+    /// Lighter green for artwork and backgrounds; never use for small text.
     static let decorativeAccent = Color.beanDynamic(
         light: Palette.decorativeAccentLight.nsColor,
         dark: Palette.decorativeAccentDark.nsColor
     )
-    /// Subtle warm background for hero/onboarding surfaces.
-    static let warmBackground = Color.beanDynamic(
-        light: NSColor(srgbRed: 0.98, green: 0.972, blue: 0.957, alpha: 1),
-        dark:  NSColor(srgbRed: 0.11, green: 0.105, blue: 0.10, alpha: 1)
+    /// Pale green in light appearance and subdued forest in dark appearance.
+    static let brandBackground = Color.beanDynamic(
+        light: Palette.brandBackgroundLight.nsColor,
+        dark: Palette.brandBackgroundDark.nsColor
+    )
+    /// Contrast-safe fill for selected rows, hover states, and brand pills.
+    static let selectionBackground = Color.beanDynamic(
+        light: Palette.selectionBackgroundLight.nsColor,
+        dark: Palette.selectionBackgroundDark.nsColor
     )
     static let cardBackground = Color.beanDynamic(
         light: NSColor.white,
-        dark:  NSColor(white: 0.165, alpha: 1)
+        dark: Palette.cardBackgroundDark.nsColor
     )
     static let secondaryText = Color.beanDynamic(
         light: Palette.secondaryTextLight.nsColor,
         dark: Palette.secondaryTextDark.nsColor
     )
     static let subtleBorder = Color.beanDynamic(
-        light: NSColor(srgbRed: 0.80, green: 0.77, blue: 0.73, alpha: 1),
-        dark: NSColor(srgbRed: 0.33, green: 0.31, blue: 0.29, alpha: 1)
+        light: Palette.subtleBorderLight.nsColor,
+        dark: Palette.subtleBorderDark.nsColor
     )
     static let strongBorder = Color.beanDynamic(
-        light: NSColor(srgbRed: 0.55, green: 0.50, blue: 0.45, alpha: 1),
-        dark: NSColor(srgbRed: 0.55, green: 0.52, blue: 0.48, alpha: 1)
+        light: Palette.strongBorderLight.nsColor,
+        dark: Palette.strongBorderDark.nsColor
     )
 
     static let success = Color.beanDynamic(
@@ -136,9 +159,17 @@ enum BeanDesign {
         light: Palette.warningLight.nsColor,
         dark: Palette.warningDark.nsColor
     )
+    static let warningBackground = Color.beanDynamic(
+        light: Palette.warningBackgroundLight.nsColor,
+        dark: Palette.warningBackgroundDark.nsColor
+    )
     static let danger = Color.beanDynamic(
         light: Palette.dangerLight.nsColor,
         dark: Palette.dangerDark.nsColor
+    )
+    static let dangerBackground = Color.beanDynamic(
+        light: Palette.dangerBackgroundLight.nsColor,
+        dark: Palette.dangerBackgroundDark.nsColor
     )
     static let info = Color.beanDynamic(
         light: Palette.infoLight.nsColor,

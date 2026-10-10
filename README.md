@@ -8,13 +8,13 @@ service.
 > **Public beta.** Replacement and UI behavior depend on what each macOS app
 > exposes through Accessibility. Review important text before sending it.
 >
-> Current release contract: Bean **1.7.0 (build 19)** with Bean for the Web
-> **0.8.5**.
+> Current release contract: Bean **1.7.1 (build 21)** with Bean for the Web
+> **0.8.7**.
 
 ## What works today
 
 - Checks spelling, basic grammar, and spacing while you type in editable macOS fields.
-  Local live assistance and the Bean dot are on by default. The dot is brand brown
+  Local live assistance and the Bean dot are on by default. The dot is Bean green
   when there are no current suggestions. A vivid red dot with a tiny contrasting
   exclamation mark indicates possible issues, so the states differ by color and shape.
   It sits inside a clear corner of the text area, usually at the top right.
@@ -54,6 +54,9 @@ app-specific limits.
 Bean itself is free. Your selected AI provider may charge for API usage. OpenAI
 `gpt-5-nano` and Anthropic `claude-haiku-4-5` are the current defaults; model
 availability and provider pricing can change independently of Bean.
+Choose a model from the provider-specific dropdown in Settings → AI & Usage.
+Claude Haiku 5.5 is supported, and Bean applies compatible request settings
+for each listed model. Previously saved model IDs remain available on upgrade.
 
 ## Install
 
@@ -90,12 +93,12 @@ builds.
 
 Checksum verification is an optional advanced safety check, not part of the
 normal Finder-only install. Download the release's `.sha256` file beside the DMG,
-then, for example, run the following for version 1.7.0, build 19 and compare the printed
+then, for example, run the following for version 1.7.1, build 21 and compare the printed
 value with the `.dmg` line in that file:
 
 ```bash
 cd ~/Downloads
-shasum -a 256 Bean-1.7.0-build19-unnotarized.dmg
+shasum -a 256 Bean-1.7.1-build21-unnotarized.dmg
 ```
 
 Developer ID-signed and notarized artifacts, if introduced later, will omit the
@@ -169,9 +172,11 @@ automatic cap. Automatic browser issue checks and the paragraph **Fix Paragraph*
 path use that cap and require the browser-AI opt-in. Local Quick Check never
 calls a provider.
 
-The built-in estimate uses public standard list prices captured August 21,
+The built-in estimate uses public standard list prices captured October 8,
 2026: [OpenAI gpt-5-nano](https://openai.com/index/introducing-gpt-5-for-developers/)
-and [Anthropic Claude Haiku 4.5](https://platform.claude.com/docs/en/about-claude/pricing).
+and [Anthropic Claude Haiku 4.5 and 5.5](https://platform.claude.com/docs/en/about-claude/pricing).
+Haiku 5.5 estimates use its short-prompt tier because Bean caps individual prompts
+below the tier boundary.
 It is not a bill: caching, tiers, taxes, custom models, and later price changes
 can differ.
 
@@ -185,7 +190,7 @@ steps, detects its ID, and installs or repairs the local bridge without Terminal
 Local checks work across ordinary websites by default; users can disable Bean
 for the current field or block a website from the correction UI. See
 [BrowserExtension/README.md](BrowserExtension/README.md). Slack web and other
-framework-based rich editors remain unverified on this candidate. Bean evaluates
+framework-based rich editors remain unverified on this release. Bean evaluates
 their editing capabilities and declines changes when it cannot verify a safe
 text range.
 

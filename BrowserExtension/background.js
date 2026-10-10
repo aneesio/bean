@@ -183,14 +183,66 @@ function preservesLegacyAIOptOut(settings) {
     || settings.enabled === false);
 }
 
+// Dynamic registration applies to future documents. An extension update also
+// refreshes already-open pages in place, preserving their drafts and selection.
+// A probe binds the later file injection to one document, so navigation cannot
+// transfer an old page's policy decision to its replacement.
+function refreshExistingDocuments() {
+  if (!chrome.tabs || typeof chrome.tabs.query !== "function" ||
+      !chrome.scripting || typeof chrome.scripting.executeScript !== "function") return;
+  chrome.tabs.query({url:["http://*/*","https://*/*"]}, (tabs) => {
+    if (chrome.runtime.lastError || !Array.isArray(tabs)) return;
+    for (const tab of tabs) {
+      if (!Number.isInteger(tab.id) || tab.discarded || tab.status !== "complete") continue;
+      chrome.scripting.executeScript({target:{tabId:tab.id,frameIds:[0]},func:prepareExistingDocument}, (results) => {
+        if (chrome.runtime.lastError || !Array.isArray(results)) return;
+        const frame = results.find((result) => result.frameId === 0);
+        const host = frame && frame.result && normalizeHost(frame.result.host);
+        if (!host || typeof frame.documentId !== "string" || !frame.documentId) return;
+        readLocalPolicy((policy) => {
+          if (!policy.ok || policy.revision !== localPolicyRevision ||
+              blocklistMutationRunning || blocklistMutationQueue.length ||
+              sitePauseMutationRunning || sitePauseMutationQueue.length) return;
+          const blocked = policy.blockedSites.some((blockedHost) => hostIsBlocked(host,blockedHost));
+          // Paused sites use the normal script's content-free pause handling;
+          // blocked sites receive only the no-writing native suppression guard.
+          const files = blocked ? ["src/sitePolicy.js","src/ownershipGuard.js"] : SCRIPT_FILES;
+          chrome.scripting.executeScript({target:{tabId:tab.id,documentIds:[frame.documentId]},files}, () => {
+            // A closing/navigating tab or revoked host grant is a harmless skip.
+            void chrome.runtime.lastError;
+          });
+        });
+      });
+    }
+  });
+}
+
+function prepareExistingDocument() {
+  if (!/^https?:$/.test(location.protocol) || window.top !== window ||
+      window.__beanInlineContentScriptLoaded || window.__beanOwnershipGuardLoaded) return null;
+  // The local QA page intentionally owns its mock overlay in the main world.
+  if (["localhost","127.0.0.1","[::1]"].includes(location.hostname) &&
+      /\/test\/fixtures\/editor\.html$/.test(location.pathname) &&
+      document.documentElement?.dataset.beanQaMode === "mock") return null;
+  // Old invalidated worlds cannot receive a shutdown message. Retire only
+  // their marked presentation nodes; no editor text/focus/selection is touched.
+  for (const node of document.querySelectorAll(
+    "#bean-inline-host[data-bean-overlay][data-bean='overlay'],[data-bean-keyboard-bridge][data-bean='overlay']"
+  )) node.remove();
+  return {host:location.hostname};
+}
+
 chrome.runtime.onInstalled.addListener(() => {
+  const refreshAfterRegistration = () => syncRegisteredContentScript((result) => {
+    if (result.ok) refreshExistingDocuments();
+  });
   chrome.storage.local.get(
     ["blockedSites", "enabled", "useBridge", "legacyAIOptOut", "settingsSchemaVersion"],
     (settings) => {
       const readError = chrome.runtime.lastError;
       if (readError || !settings) {
         // Never mutate privacy choices from an incomplete settings read.
-        syncRegisteredContentScript();
+        refreshAfterRegistration();
         return;
       }
       const update = {};
@@ -212,7 +264,7 @@ chrome.runtime.onInstalled.addListener(() => {
       if (legacyOptOut && settings.legacyAIOptOut !== true) {
         update.legacyAIOptOut = true;
       }
-      const finish = () => syncRegisteredContentScript();
+      const finish = refreshAfterRegistration;
       const removeLegacyControls = (done) => {
         const keys = ["enabled", "useBridge"].filter((key) =>
           Object.prototype.hasOwnProperty.call(settings, key));

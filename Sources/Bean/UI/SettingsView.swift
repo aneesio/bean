@@ -101,7 +101,7 @@ struct SettingsView: View {
                 .navigationTitle(navigation.selection.rawValue)
         }
         .frame(minWidth: 820, minHeight: 600)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .onAppear {
             automaticSpentToday = automaticCallBudget.automaticCallsToday()
             history.refresh()
@@ -156,7 +156,7 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: BeanDesign.Radius.sm, style: .continuous)
                 .fill(
                     category == navigation.selection
-                        ? BeanDesign.accent.opacity(0.18)
+                        ? BeanDesign.selectionBackground
                         : Color.clear
                 )
         )
@@ -1024,7 +1024,7 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(BeanDesign.Spacing.sm)
-        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.warmBackground))
+        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.brandBackground))
         .accessibilityElement(children: .contain)
     }
 
@@ -1181,14 +1181,14 @@ private struct SupportReportPreview: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(BeanDesign.Spacing.md)
             }
-            .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.warmBackground))
+            .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.brandBackground))
 
             HStack {
                 Button(copied ? "Report Copied ✓" : "Copy Support Report") {
                     copyError = onCopy()
                     copied = copyError == nil
                 }
-                .buttonStyle(.borderedProminent)
+                .beanButton(.primary)
                 Button("Open GitHub Bug Form") { issueError = onOpenIssue() }
                 Spacer()
                 Text("Opening GitHub does not upload this preview.")
@@ -1208,7 +1208,7 @@ private struct SupportReportPreview: View {
         }
         .padding(BeanDesign.Spacing.lg)
         .frame(width: 720, height: 620)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
     }
 }
 

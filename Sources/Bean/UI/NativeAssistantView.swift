@@ -20,7 +20,7 @@ struct NativeAssistantBadgeView: View {
     }
 }
 
-/// The visible status stays ten points; the surrounding clear motor target is
+/// The visible status stays eight points; the surrounding clear motor target is
 /// positioned inside the editor, clear of known text and controls as one unit.
 struct NativeStatusDot: View {
     let hasSuggestions: Bool
@@ -28,9 +28,9 @@ struct NativeStatusDot: View {
         ZStack {
             Circle().fill(hasSuggestions ? BeanDesign.issueDot : BeanDesign.accent)
             if hasSuggestions {
-                VStack(spacing: 0.8) {
-                    RoundedRectangle(cornerRadius: 0.7).frame(width: 1.4, height: 3.2)
-                    Circle().frame(width: 1.4, height: 1.4)
+                VStack(spacing: 0.6) {
+                    RoundedRectangle(cornerRadius: 0.6).frame(width: 1.2, height: 2.6)
+                    Circle().frame(width: 1.2, height: 1.2)
                 }
                 .foregroundColor(BeanDesign.issueDotMark)
             }
@@ -76,7 +76,7 @@ struct NativeAssistantPanelView: View {
                 if state.issueCount > 0 { Button("Review suggestions", action: onReview) }
                 Spacer(minLength: 0)
                 Button("Proofread \(scope)") { perform(state.aiAvailable ? .proofread : .localQuickCheck) }
-                    .buttonStyle(.borderedProminent)
+                    .beanButton(.primary)
             }
             .controlSize(.small)
             if state.safeFixCount > 0 {
@@ -113,7 +113,7 @@ struct NativeAssistantPanelView: View {
         }
         .padding(14)
         .frame(width: 320)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .background(RoundedRectangle(cornerRadius: BeanDesign.Radius.card).fill(.regularMaterial)
             .shadow(color: .black.opacity(0.18), radius: 10, y: 4))
         .onExitCommand(perform: onClose)

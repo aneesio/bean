@@ -153,9 +153,9 @@ final class AppSettings: ObservableObject {
         }
         didSet {
             defaults.set(provider.rawValue, forKey: Keys.provider)
-            // A model ID from the previous provider cannot work after a switch.
-            // Preserve unknown custom IDs, but migrate recognized provider IDs.
-            if model.isEmpty || oldValue.ownsModelID(model) {
+            // Every provider switch selects one of that provider's catalog
+            // choices, including when the old selection was a custom ID.
+            if oldValue != provider {
                 model = provider.defaultModel
             }
         }
@@ -170,6 +170,10 @@ final class AppSettings: ObservableObject {
         didSet {
             defaults.set(model, forKey: Keys.model)
         }
+    }
+
+    var modelChoices: [ProviderModel] {
+        provider.modelChoices(including: model)
     }
 
     @Published var timeoutSeconds: Double {

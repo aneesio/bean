@@ -3,6 +3,47 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.7.1 build 21 — 2026-10-10 (public beta)
+
+- Fix native replacement in Slack and other Chromium/Electron editors by using
+  guarded keyboard edits when their advertised Accessibility selected-text
+  setter cannot reliably apply changes. Keep direct selected-text edits for
+  native editors that support them, exact source verification, and no blind
+  retry after an uncertain edit.
+- Reduce native status dots to 8 points and browser dots to 8 pixels, retaining the
+  28-point normal and 20-point compact pointer targets and contrasting issue
+  marker.
+- Keep one native field assistant when local suggestions or review UI takes
+  over from the fallback dot. Cancel pending fallback presentations so stale
+  timers cannot restore a duplicate.
+- Bundle Bean for the Web 0.8.7. Reuse one overlay per script context, remove
+  invalidated presentations, and update eligible open pages in place after an
+  extension reload without refreshing pages or changing drafts, focus, or
+  selection. Local checks remain available without the native host.
+- Carry the Bean Green palette and dimensional bean icon across the Mac app
+  and extension, with rounded capsule actions and clear primary/secondary
+  treatments.
+- Add provider-specific model choices and compatible request settings,
+  including Claude Haiku 5.5, while preserving previously saved model IDs.
+  Keep OpenAI `gpt-5-nano` and Anthropic `claude-haiku-4-5` as defaults and
+  include cost estimates for Claude Haiku 5.5 usage.
+
+## 1.7.0 build 20 — 2026-10-07 (local candidate)
+
+- Replace the brown brand palette with Bean Green (`#237A48`) across the Mac
+  app and Bean for the Web 0.8.6, including controls, links, field dots, and
+  light/dark surfaces. Retain vivid red possible-issue dots and their contrasting
+  exclamation mark.
+- Remove residual warm warning, error, and shadow tones: use green warnings,
+  clear rose errors, neutral dark marks, and reflected green icon shading.
+- Use the dimensional green-bean artwork with a larger yellow seed scar and a
+  gentler bend. Regenerate every macOS and browser icon resolution from the
+  editable SVG and update the matching monochrome menu-bar silhouette.
+- Bundle the refreshed extension and icons with the Mac app so an in-place
+  app/extension upgrade uses the same green brand.
+- Standardize action buttons on a fully rounded capsule shape across the Mac
+  app and extension, retaining clear primary and secondary action treatments.
+
 ## 1.7.0 build 19 — 2026-10-06 (local candidate)
 
 - Keep brand brown for the neutral field dot and use vivid red for possible

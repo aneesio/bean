@@ -100,7 +100,7 @@ struct ActionMenuView: View {
         .padding(BeanDesign.Spacing.md)
         .frame(minWidth: 380, idealWidth: 440, maxWidth: .infinity,
                minHeight: 360, idealHeight: 410, maxHeight: .infinity)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .onExitCommand(perform: onCancel)
         .onAppear { focusedAction = visibleActions.first }
         .onChange(of: showsMore) { _ in focusedAction = visibleActions.first }
@@ -150,12 +150,12 @@ private struct ActionRow: View {
                 }
                 Spacer()
             }
-            .padding(.vertical, 5).padding(.horizontal, 6)
+            .padding(.vertical, 5).padding(.horizontal, BeanDesign.Spacing.md)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(hovering ? BeanDesign.accent.opacity(0.12) : Color.clear)
+                Capsule()
+                    .fill(hovering ? BeanDesign.selectionBackground : Color.clear)
             )
-            .contentShape(Rectangle())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .focused(focusedAction, equals: action)
@@ -288,7 +288,7 @@ struct RewritePreviewView: View {
                     .font(BeanDesign.Typography.caption()).foregroundColor(BeanDesign.danger)
             } else if let warning = model.reviewWarning {
                 Label(warning, systemImage: "exclamationmark.triangle.fill")
-                    .font(BeanDesign.Typography.caption()).foregroundColor(.orange)
+                    .font(BeanDesign.Typography.caption()).foregroundColor(BeanDesign.warning)
             } else {
                 Text(model.helperText)
                     .font(BeanDesign.Typography.caption()).foregroundColor(.secondary)
@@ -308,11 +308,11 @@ struct RewritePreviewView: View {
                         .keyboardShortcut("c", modifiers: [.command, .shift])
                         .disabled(model.isRunning)
                     Button("Replace") { model.onReplace() }
-                        .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(model.isRunning)
+                        .keyboardShortcut(.defaultAction).beanButton(.primary).disabled(model.isRunning)
                 } else {
                     Button("Copy Result") { model.onCopy() }
                         .keyboardShortcut("c", modifiers: [.command, .shift])
-                        .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(model.isRunning)
+                        .keyboardShortcut(.defaultAction).beanButton(.primary).disabled(model.isRunning)
                 }
             }
         }
@@ -320,7 +320,7 @@ struct RewritePreviewView: View {
         .frame(minWidth: 520, idealWidth: model.originalText == nil ? 600 : 760,
                maxWidth: .infinity, minHeight: 400, idealHeight: 540,
                maxHeight: .infinity)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .onExitCommand { model.cancelIfIdle() }
         .accessibilityElement(children: .contain)
     }
@@ -499,14 +499,14 @@ struct ActionNoticeView: View {
                 }
                 Button(notice.primaryAction.title, action: onPrimary)
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                    .beanButton(.primary)
                     .accessibilityHint("Completes this Bean notice")
             }
         }
         .padding(BeanDesign.Spacing.lg)
         .frame(minWidth: 400, idealWidth: 460, maxWidth: .infinity,
                minHeight: 180, idealHeight: 240, maxHeight: .infinity)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .onExitCommand(perform: onCancel)
         .accessibilityElement(children: .contain)
     }

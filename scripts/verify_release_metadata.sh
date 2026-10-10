@@ -37,8 +37,8 @@ grep -Eq "^## $APP_VERSION .*public beta" CHANGELOG.md || {
     exit 1
 }
 
-[[ "$APP_VERSION" == "1.7.0" && "$APP_BUILD" == "19" && "$EXTENSION_VERSION" == "0.8.5" ]] || {
-    echo "error: current public-beta contract must be app 1.7.0 (19), extension 0.8.5" >&2
+[[ "$APP_VERSION" == "1.7.1" && "$APP_BUILD" == "21" && "$EXTENSION_VERSION" == "0.8.7" ]] || {
+    echo "error: current public-beta contract must be app 1.7.1 (21), extension 0.8.7" >&2
     exit 1
 }
 

@@ -52,7 +52,7 @@ struct OnboardingView: View {
         }
         .frame(minWidth: 600, idealWidth: 640,
                minHeight: 620, idealHeight: 700)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: step)
         .onAppear {
             normalizePersistedStep()
@@ -165,7 +165,7 @@ struct OnboardingView: View {
                 Button(installedCopyExists ? "Open Installed Bean" : "Install in Applications") {
                     resolveAppLocation()
                 }
-                .buttonStyle(.borderedProminent)
+                .beanButton(.primary)
                 .disabled(appLocationIsWorking)
 
                 if appLocationIsWorking {
@@ -297,7 +297,7 @@ struct OnboardingView: View {
                 Button(sampleWasChecked ? "Checked ✓" : "Run Free Check") {
                     runSampleCheck()
                 }
-                .buttonStyle(.borderedProminent)
+                .beanButton(.primary)
 
                 if tryoutText != Self.sampleText || sampleWasChecked {
                     Button("Reset Sample") { resetSample() }
@@ -409,12 +409,12 @@ struct OnboardingView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .controlSize(.large)
-                .buttonStyle(.borderedProminent)
+                .beanButton(.primary)
             } else {
                 Button(nextButtonTitle) { goNext() }
                     .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
+                    .beanButton(.primary)
             }
         }
     }

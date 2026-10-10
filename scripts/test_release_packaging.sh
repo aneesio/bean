@@ -34,14 +34,30 @@ VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$TEST_ROOT/Resou
 BUILD="$(plutil -extract CFBundleVersion raw -o - "$TEST_ROOT/Resources/Info.plist")"
 NAME="Bean-$VERSION-build$BUILD-unnotarized"
 package_fixture() { BEAN_ALLOW_ADHOC_RELEASE=1 "$TEST_ROOT/scripts/package_release.sh" > "$TEST_ROOT/package.log" 2>&1; }
-for failure in build dmg; do
-    if PATH="$TEST_ROOT/tools:$PATH" BEAN_TEST_FAILURE="$failure" package_fixture; then
-        echo "Injected $failure packaging failure was accepted" >&2; exit 1
+# Tag validation stays strict, including callers that explicitly supply only a
+# ref name. Neither rejection may reach the fixture build or create artifacts.
+for ref_type in tag ""; do
+    if GITHUB_REF_TYPE="$ref_type" GITHUB_REF_NAME=v0.0.0 package_fixture; then
+        echo 'Mismatched release tag was accepted' >&2; exit 1
     fi
+    grep -Fq "error: tag v0.0.0 does not match Info.plist version v$VERSION." "$TEST_ROOT/package.log"
+    [[ ! -e "$TEST_ROOT/build" && ! -e "$TEST_ROOT/release" ]]
+done
+for failure in build dmg; do
+    # Both push and pull-request runs expose a non-release GITHUB_REF_NAME.
+    # Reaching the injected failure proves it did not fail at tag validation.
+    fixture_ref=main
+    [[ "$failure" != dmg ]] || fixture_ref=123/merge
+    fixture_status=0
+    PATH="$TEST_ROOT/tools:$PATH" BEAN_TEST_FAILURE="$failure" \
+        GITHUB_REF_TYPE=branch GITHUB_REF_NAME="$fixture_ref" package_fixture || fixture_status=$?
+    [[ "$fixture_status" -eq 42 ]] || {
+        echo "Expected injected $failure failure from branch ref $fixture_ref; got $fixture_status" >&2; exit 1
+    }
     [[ ! -e "$TEST_ROOT/release/$NAME" && ! -e "$TEST_ROOT/release/$NAME.zip" && ! -e "$TEST_ROOT/release/$NAME.dmg" && ! -e "$TEST_ROOT/release/$NAME.sha256" ]]
     [[ ! -e "$TEST_ROOT/release/.$NAME.lock" ]]
 done
-package_fixture
+GITHUB_REF_TYPE=tag GITHUB_REF_NAME="v$VERSION" package_fixture
 (cd "$TEST_ROOT/release" && shasum -a 256 -c "$NAME.sha256")
 codesign --verify --deep --strict "$TEST_ROOT/release/$NAME/Bean.app"
 ditto -x -k "$TEST_ROOT/release/$NAME.zip" "$TEST_ROOT/extracted"
@@ -49,4 +65,4 @@ codesign --verify --deep --strict "$TEST_ROOT/extracted/Bean.app"
 before_hash="$(shasum -a 256 "$TEST_ROOT/release/$NAME.zip")"
 if package_fixture; then echo 'Existing artifacts were overwritten' >&2; exit 1; fi
 [[ "$before_hash" == "$(shasum -a 256 "$TEST_ROOT/release/$NAME.zip")" ]]
-echo 'Private build/DMG failure cleanup, identical-build retry, real ZIP/DMG/checksums/signatures and completed-artifact preservation passed.'
+echo 'Branch/PR packaging, strict release tags, private build/DMG failure cleanup, identical-build retry, real ZIP/DMG/checksums/signatures and completed-artifact preservation passed.'

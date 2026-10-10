@@ -93,12 +93,12 @@ final class NativeAssistantViewTests: XCTestCase {
                     XCTAssertTrue(visibleMark, "The issue state retains a contrasting exclamation inside its existing paint bounds")
                 } else {
                     // cacheDisplay uses the current display's ColorSync profile.
-                    // Assert visible brown paint, rather than monitor-specific RGB.
-                    XCTAssertGreaterThan(center.redComponent, center.greenComponent + 0.15)
+                    // Assert visible green paint, rather than monitor-specific RGB.
+                    XCTAssertGreaterThan(center.greenComponent, center.redComponent + 0.15)
                     XCTAssertGreaterThan(center.greenComponent, center.blueComponent + 0.10)
                     if scheme == .light {
-                        XCTAssertLessThan(center.redComponent, 0.75,
-                            "The default dot remains filled brown")
+                        XCTAssertLessThan(center.greenComponent, 0.75,
+                            "The default dot retains its deep green fill")
                     }
                 }
             }
@@ -106,7 +106,7 @@ final class NativeAssistantViewTests: XCTestCase {
         let legacy = NSHostingView(rootView: BeanBubbleView(openOnHover: false, onOpen: { _ in }, onDismiss: {}))
         XCTAssertEqual(legacy.fittingSize, CGSize(width: 28, height: 28))
         let dot = NSHostingView(rootView: NativeStatusDot(hasSuggestions: false))
-        XCTAssertEqual(dot.fittingSize, CGSize(width: 10, height: 10))
+        XCTAssertEqual(dot.fittingSize, CGSize(width: 8, height: 8))
     }
 
     func testUnknownAndCrowdedPlacementHideOnlyDotAndKeepUnderline() throws {
@@ -168,7 +168,7 @@ final class NativeAssistantViewTests: XCTestCase {
             onOpen: { _ in }, onDismiss: {}, targetSize: 20))
         XCTAssertEqual(legacy.fittingSize, CGSize(width: 20, height: 20))
         XCTAssertEqual(NSHostingView(rootView: NativeStatusDot(hasSuggestions: true)).fittingSize,
-            CGSize(width: 10, height: 10))
+            CGSize(width: 8, height: 8))
 
         let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
         let controller = BeanBubbleController()
@@ -245,7 +245,7 @@ final class NativeAssistantViewTests: XCTestCase {
         }).frame
         XCTAssertTrue(protected.fieldRect.contains(frame))
         XCTAssertFalse(frame.intersects(text.insetBy(dx: -2, dy: -2)),
-            "A ten-point painted dot must not disguise a target covering known text")
+            "An eight-point painted dot must not disguise a target covering known text")
     }
 
     func testAssistantUsesAnotherInsideCornerWhenThePointProbeRejectsThePreferredTarget() throws {
@@ -332,7 +332,7 @@ final class NativeAssistantViewTests: XCTestCase {
         }
     }
 
-    func testActualQuietOverlayRenderingKeepsOwnedEditorFirstResponder() {
+    func testActualQuietOverlayRenderingKeepsOwnedEditorFirstResponder() throws {
         let editorWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
             styleMask: [.titled], backing: .buffered, defer: false)
         editorWindow.isReleasedWhenClosed = false
@@ -354,6 +354,40 @@ final class NativeAssistantViewTests: XCTestCase {
         XCTAssertFalse(controller.ownsKeyboardInteraction)
         XCTAssertTrue(editorWindow.firstResponder === originalResponder)
         XCTAssertTrue(NSApplication.shared.keyWindow === originalKeyWindow)
+
+        // The AppKit HUD now hosts the same capsule buttons as our panels.
+        // Publishing actionable Cancel/Undo must still leave the editor alone.
+        let existingWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let hud = StatusHUD(reduceMotion: { true }, announce: { _ in })
+        defer {
+            hud.dismiss()
+            for window in NSApp.windows where !existingWindows.contains(ObjectIdentifier(window)) {
+                window.isReleasedWhenClosed = false
+                window.close()
+            }
+        }
+        for (name, show) in [
+            ("hud-cancel", { hud.showProgress("Reviewing your draft…", onCancel: {}) }),
+            ("hud-undo", { hud.showConfirmedSuccess("Suggestion applied", onUndo: {}) })
+        ] {
+            show()
+            XCTAssertTrue(editorWindow.firstResponder === originalResponder)
+            XCTAssertTrue(NSApp.keyWindow === originalKeyWindow)
+            let panel = try XCTUnwrap(NSApp.windows.first {
+                !existingWindows.contains(ObjectIdentifier($0)) && $0 is NSPanel
+            })
+            XCTAssertFalse(panel.ignoresMouseEvents, "HUD actions must remain clickable")
+            XCTAssertGreaterThanOrEqual(panel.frame.height, 44)
+            if let directory = ProcessInfo.processInfo.environment["BEAN_QA_OUTPUT_DIRECTORY"],
+               let view = panel.contentView {
+                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+                view.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
+            }
+        }
     }
 
     func testDecorativeUnderlinesDoNotAddAccessibilityWindowsAndPointerReviewStillWorks() async throws {

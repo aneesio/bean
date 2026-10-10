@@ -2,8 +2,12 @@
 // preserves the source field during pointer interaction, and exposes explicit
 // Undo / re-enable contracts for the content-script replacement pipeline.
 (function () {
-  const ACCENT = "#8a4c17";
-  const DARK_ACCENT = "#e0a15e";
+  // Re-injecting the script bundle must keep the live closed shadow root.
+  // Replacing only this API would orphan its old dot while existing content
+  // listeners render a second host through the new instance.
+  if (window.BeanOverlay) return;
+  const ACCENT = "#237A48";
+  const DARK_ACCENT = "#81DCA5";
   let hostEl = null, shadow = null, underlineLayer = null, cardEl = null, hoverTimer = null;
   let groupLayer = null, groupCardEl = null, liveRegion = null;
   let paragraphReviewEl = null, paragraphReviewShield = null;
@@ -29,6 +33,12 @@
 
   function ensureHost() {
     if (hostEl) return;
+    // A prior extension world may have been invalidated without removing its
+    // closed shadow root. Our same-world singleton returns above; only a new
+    // owner constructing its first host retires these marked orphan hosts.
+    if (typeof document.querySelectorAll === "function") {
+      for (const orphan of document.querySelectorAll("#bean-inline-host[data-bean-overlay][data-bean='overlay']")) orphan.remove();
+    }
     hostEl = document.createElement("div");
     hostEl.id = "bean-inline-host";
     hostEl.dataset.bean = "overlay";
@@ -56,14 +66,15 @@
     });
     const style = document.createElement("style");
     style.textContent = `
-      :host { color-scheme:light dark; --bean-accent:${ACCENT}; --bean-ink:#252321;
-              --bean-muted:#66615c; --bean-issue:#D92D20; --bean-issue-mark:#fff; --bean-surface:rgba(255,253,250,.98); --bean-line:#d8d1c9; }
+      :host { color-scheme:light dark; --control-radius:999px; --bean-accent:${ACCENT}; --bean-accent-strong:#1C633A;
+              --bean-accent-tint:#E6F3E9; --bean-primary-ink:#FFFFFF; --bean-ink:#21352A;
+              --bean-muted:#53645A; --bean-danger:#B42335; --bean-issue:#D92D20; --bean-issue-mark:#fff; --bean-surface:rgba(255,255,255,.98); --bean-line:#D4DED5; }
       * { box-sizing:border-box; }
       .layer { position:absolute; top:0; left:0; pointer-events:none; }
-      button { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      button { border-radius:var(--control-radius); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
       button:focus-visible { outline:3px solid var(--bean-accent); outline-offset:2px; }
       .ul { position:absolute; pointer-events:auto; cursor:pointer; margin:0; padding:0;
-            border:0; border-bottom:2px solid var(--bean-accent); background:transparent; box-sizing:border-box; }
+            border:0; border-bottom:2px solid var(--bean-accent); border-radius:0; background:transparent; box-sizing:border-box; }
       .ul:hover,.ul:focus-visible { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .card { position:absolute; pointer-events:auto; width:min(300px,calc(100vw - 16px));
               max-height:calc(100vh - 16px); overflow:auto; overscroll-behavior:contain;
@@ -73,7 +84,7 @@
       .row { display:flex; align-items:center; gap:7px; }
       .pill { font-size:11px; color:var(--bean-muted); }
       .x,.more { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
-                 margin-left:auto; cursor:pointer; color:var(--bean-muted); border:0; border-radius:8px; background:transparent; font-size:14px; }
+                 margin-left:auto; cursor:pointer; color:var(--bean-muted); border:0; border-radius:var(--control-radius); background:transparent; font-size:14px; }
       .x:hover,.more:hover { color:var(--bean-accent); background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .fix { overflow-wrap:anywhere; font-size:14px; margin:9px 0 11px; }
       .orig { color:var(--bean-muted); text-decoration:line-through; }
@@ -84,43 +95,45 @@
       .alternatives { flex-wrap:wrap; margin-bottom:8px; }
       .alternatives button.b { min-width:0; max-width:100%; overflow-wrap:anywhere; }
       .spacer { flex:1; }
-      button.b { min-height:32px; border-radius:8px; border:1px solid var(--bean-line);
-                 background:var(--bean-surface); color:var(--bean-ink); padding:5px 10px; cursor:pointer; font-size:12px; }
+      button.b { min-height:32px; border-radius:var(--control-radius); border:1px solid var(--bean-line);
+                 background:var(--bean-surface); color:var(--bean-ink); padding:5px 13px; cursor:pointer; font-size:12px; }
       button.b:hover { border-color:var(--bean-accent); }
-      button.primary { background:var(--bean-accent); color:#fff; border-color:var(--bean-accent); font-weight:650; }
+      button.primary { background:var(--bean-accent); color:var(--bean-primary-ink); border-color:var(--bean-accent); font-weight:650; }
+      button.primary:hover { background:var(--bean-accent-strong); }
       button.b:disabled { opacity:.45; cursor:default; }
       .pico { position:absolute; pointer-events:auto; cursor:pointer; width:30px; height:30px; padding:2px;
-              border-radius:9px; background:var(--bean-surface); border:1px solid var(--bean-line);
+              border-radius:var(--control-radius); background:var(--bean-surface); border:1px solid var(--bean-line);
               box-shadow:0 2px 8px rgba(0,0,0,.2); box-sizing:border-box; }
       .assistant { position:absolute; display:flex; align-items:center; justify-content:center;
                    width:28px; height:28px; padding:0; pointer-events:auto; cursor:pointer;
                    appearance:none; border:0; border-radius:0; background:transparent; color:var(--bean-accent); }
       .assistant::before { content:""; position:absolute; inset:0; border-radius:50%; pointer-events:none; }
-      .assistant-dot { display:flex; align-items:center; justify-content:center; width:10px; height:10px; flex:none; border:1.5px solid currentColor;
+      .assistant-dot { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:8px; height:8px; flex:none; border:1.5px solid currentColor;
                        border-radius:50%; background:currentColor; pointer-events:none; }
       .assistant[data-has-issues="true"] .assistant-dot { border-color:var(--bean-issue); background:var(--bean-issue); }
-      .assistant-issue-mark { display:block; position:relative; width:1.4px; height:5.4px; flex:none; pointer-events:none; }
+      .assistant-issue-mark { display:block; position:relative; width:1.2px; height:4.4px; flex:none; pointer-events:none; }
       .assistant-issue-mark[hidden] { display:none; }
-      .assistant-issue-mark::before,.assistant-issue-mark::after { content:""; position:absolute; left:0; width:1.4px;
-                                                                background:var(--bean-issue-mark); border-radius:.7px; }
-      .assistant-issue-mark::before { top:0; height:3.2px; }
-      .assistant-issue-mark::after { bottom:0; height:1.4px; }
+      .assistant-issue-mark::before,.assistant-issue-mark::after { content:""; position:absolute; left:0; width:1.2px;
+                                                                background:var(--bean-issue-mark); border-radius:.6px; }
+      .assistant-issue-mark::before { top:0; height:2.6px; }
+      .assistant-issue-mark::after { bottom:0; height:1.2px; }
       .assistant:hover::before { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .source { font-size:10px; color:var(--bean-muted); margin:0 0 5px; }
       .pico img { display:block; width:24px; height:24px; border-radius:7px; }
       .pico:hover { border-color:var(--bean-accent); transform:translateY(-1px); }
       .gactions { display:flex; gap:7px; flex-wrap:wrap; margin-top:8px; }
       .gactions[hidden] { display:none; }
+      .gactions:not([hidden]) + .actions { margin-top:8px; }
       .scope { display:flex; gap:3px; margin:10px 0; padding:3px; border:1px solid var(--bean-line); border-radius:9px; }
       .scope[hidden] { display:none; }
-      .scope button { flex:1; min-height:32px; border:0; border-radius:6px; background:transparent; color:var(--bean-ink); cursor:pointer; font-size:11px; }
-      .scope button[aria-pressed="true"] { background:color-mix(in srgb,var(--bean-accent) 14%,transparent); font-weight:650; }
+      .scope button { flex:1; min-height:32px; border:0; border-radius:var(--control-radius); background:transparent; color:var(--bean-ink); cursor:pointer; font-size:11px; }
+      .scope button[aria-pressed="true"] { background:var(--bean-accent-tint); font-weight:650; }
       .overflow-wrap { position:relative; margin-left:auto; }
       .overflow-menu { position:absolute; right:0; bottom:38px; z-index:2; width:210px; padding:5px;
                        border:1px solid var(--bean-line); border-radius:10px; background:var(--bean-surface);
                        box-shadow:0 10px 24px rgba(0,0,0,.18); }
       .overflow-menu[hidden] { display:none; }
-      .overflow-menu button { display:block; width:100%; min-height:34px; padding:7px 9px; border:0; border-radius:7px;
+      .overflow-menu button { display:block; width:100%; min-height:34px; padding:7px 13px; border:0; border-radius:var(--control-radius);
                               background:transparent; color:var(--bean-ink); text-align:left; cursor:pointer; font-size:12px; }
       .overflow-menu button:hover,.overflow-menu button:focus-visible { background:color-mix(in srgb,var(--bean-accent) 11%,transparent); }
       .modal-shield { position:fixed; inset:0; pointer-events:auto; background:transparent; }
@@ -130,22 +143,22 @@
       .compare pre { box-sizing:border-box; height:150px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere;
                      margin:0; padding:9px; border-radius:8px; background:color-mix(in srgb,var(--bean-ink) 5%,transparent);
                      border:1px solid var(--bean-line); font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-      .diff-remove { background:color-mix(in srgb,#bd514c 17%,transparent); text-decoration:line-through; border-radius:2px; }
+      .diff-remove { background:color-mix(in srgb,var(--bean-danger) 17%,transparent); text-decoration:line-through; border-radius:2px; }
       .diff-add { background:color-mix(in srgb,#30956b 20%,transparent); border-radius:2px; }
       .toast { position:fixed; right:16px; bottom:16px; pointer-events:auto; display:flex; align-items:center; gap:12px;
                min-width:220px; max-width:min(380px,calc(100vw - 32px)); padding:10px 11px 10px 13px;
                border:1px solid var(--bean-line); border-radius:12px; background:var(--bean-surface); color:var(--bean-ink);
                box-shadow:0 12px 30px rgba(0,0,0,.22); font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
       .toast strong { flex:1; font-weight:600; }
-      .toast button { min-width:58px; min-height:32px; border:0; border-radius:8px; background:transparent;
+      .toast button { min-width:58px; min-height:32px; border:0; border-radius:var(--control-radius); padding:5px 13px; background:transparent;
                       color:var(--bean-accent); cursor:pointer; font-weight:700; }
       .toast button:hover { background:color-mix(in srgb,var(--bean-accent) 11%,transparent); }
       .live { position:fixed; width:1px; height:1px; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
       @media (max-width:620px) { .compare { grid-template-columns:1fr; } .compare pre { height:100px; } }
       @media (prefers-color-scheme:dark) {
-        :host { --bean-accent:${DARK_ACCENT}; --bean-ink:#f2efeb; --bean-muted:#c4bdb5;
-                --bean-issue:#FF6B6B; --bean-issue-mark:#24120F; --bean-surface:rgba(41,38,34,.98); --bean-line:#59514a; }
-        button.primary { color:#21160d; }
+        :host { --bean-accent:${DARK_ACCENT}; --bean-accent-strong:#A1E7B9;
+                --bean-accent-tint:#203D2B; --bean-primary-ink:#14281D; --bean-ink:#EDF4EF; --bean-muted:#B7C9BE;
+                --bean-danger:#FF8A94; --bean-issue:#FF6B6B; --bean-issue-mark:#191919; --bean-surface:rgba(34,45,38,.98); --bean-line:#42584A; }
       }
       @media (prefers-reduced-motion:reduce) { .pico:hover { transform:none; } * { transition:none !important; } }
       @media (forced-colors:active) { .card,.pico,.toast,button.b,.overflow-menu { border:1px solid CanvasText; }
@@ -1315,7 +1328,10 @@
     flashEl.setAttribute("role", "status");
     flashEl.setAttribute("aria-live", "polite");
     flashEl.textContent = message;
-    flashEl.style.cssText = `position:absolute;z-index:2147483647;pointer-events:none;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:${ACCENT};color:#fff;padding:5px 9px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap;`;
+    const dark = typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme:dark)").matches;
+    const background = dark ? DARK_ACCENT : ACCENT;
+    const ink = dark ? "#14281D" : "#FFFFFF";
+    flashEl.style.cssText = `position:absolute;z-index:2147483647;pointer-events:none;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:${background};color:${ink};padding:5px 9px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap;`;
     const x = Math.max(window.scrollX + 4, pageRect ? pageRect.x : window.scrollX + 8);
     const y = pageRect ? pageRect.y + (pageRect.h || 18) + 4 : window.scrollY + 8;
     Object.assign(flashEl.style, { left:`${x}px`, top:`${y}px` });

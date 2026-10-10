@@ -482,6 +482,18 @@ enum AccessibilityService {
         !isSecureElement(element) && isAttributeSettable(kAXSelectedTextAttribute as String, on: element)
     }
 
+    /// Keep native AppKit setters, but deliver ordinary editing commands to
+    /// web editors. Inspect ancestry as well as app identity to cover embedded
+    /// web views and Electron apps outside the known bundle list.
+    static func selectedTextEditTransport(for field: FocusedField,
+                                          in app: NSRunningApplication?) -> NativeEditTransport {
+        NativeEditTransport.preferred(
+            bundleIdentifier: app?.bundleIdentifier,
+            selectedTextSettable: field.isSelectedTextSettable,
+            isWebContent: field.isSelectedTextSettable && isBrowserWebContentField(field)
+        )
+    }
+
     /// Reads the substring for a range via AXStringForRange, or nil.
     static func string(in element: AXUIElement, range: NSRange) -> String? {
         guard range.location >= 0, range.length >= 0, !isSecureElement(element) else { return nil }

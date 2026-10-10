@@ -334,7 +334,7 @@ struct MiniActionMenuView: View {
         }
         .padding(8)
         .frame(width: 220)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
         .background(
             RoundedRectangle(cornerRadius: BeanDesign.Radius.card)
                 .fill(.regularMaterial)
@@ -367,10 +367,10 @@ private struct MiniRow: View {
                         .foregroundColor(.secondary)
                 }
             }
-            .padding(.vertical, 4).padding(.horizontal, 6)
+            .padding(.vertical, 4).padding(.horizontal, BeanDesign.Spacing.md)
             .frame(minHeight: OverlayGeometry.minimumMotorTarget)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? BeanDesign.accent.opacity(0.12) : .clear))
-            .contentShape(Rectangle())
+            .background(Capsule().fill(hovering ? BeanDesign.selectionBackground : .clear))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }

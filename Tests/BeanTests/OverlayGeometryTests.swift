@@ -122,7 +122,7 @@ final class OverlayGeometryTests: XCTestCase {
         XCTAssertEqual(size, CGSize(width: 28, height: 28))
         XCTAssertEqual(origin, CGPoint(x: field.maxX - 32, y: field.maxY - 32))
         XCTAssertTrue(field.contains(CGRect(origin: origin, size: size)))
-        XCTAssertEqual(OverlayGeometry.statusDotDiameter, 10)
+        XCTAssertEqual(OverlayGeometry.statusDotDiameter, 8)
     }
 
     func testTopRightControlSlidesDotLeftAlongInsideTopEdge() throws {

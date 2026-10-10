@@ -2,13 +2,13 @@
 
 This experimental Manifest V3 extension adds inline proofreading to supported
 web text fields. It is an unpacked developer beta, not a Chrome Web Store
-release. Current candidate: **0.8.5**, bundled with **Bean 1.7.0 (build 19)**.
+release. Current public beta: **0.8.7**, bundled with **Bean 1.7.1 (build 21)**.
 
 ## Defaults
 
 - Local writing help is enabled on ordinary websites after install.
 - Add websites to the blocked list when you do not want Bean there.
-- A single 10-pixel brown dot sits inside the active text area, preferring a
+- A single 8-pixel green dot sits inside the active text area, preferring a
   clear top-right corner. With possible issues it becomes vivid red with a tiny
   contrasting exclamation mark. The marker remains distinct in light/dark and forced
   colors, so the state does not rely only on color. Hover shows
@@ -46,6 +46,12 @@ content.
    required.
 5. Reload the extension once. Bean now works in supported fields on ordinary
    websites; use Options only to block websites or check app/AI readiness.
+
+After replacing Bean with a newer local build, reload the unpacked extension.
+It updates eligible open pages in place and removes stale Bean dots without
+refreshing pages or changing drafts, focus, or selection. Blocked websites
+receive only the native suppression guard. Closed or navigating documents are
+skipped safely and receive the current scripts on their next eligible load.
 
 Blocked hostnames and their subdomains are excluded from future content-script
 registration. If a site is blocked while already open, Bean stops there
@@ -96,7 +102,7 @@ Always excluded:
 - interactive buttons and links nested inside editable regions.
 
 Framework-based rich editors, including Slack web's ProseMirror composer, are
-evaluated by their editing capabilities and remain unverified on this candidate.
+evaluated by their editing capabilities and remain unverified on this release.
 Highlighting or replacement can be declined when DOM text cannot be mapped to
 one exact safe live range. That refusal is intentional.
 
@@ -131,7 +137,8 @@ open test/fixtures/editor.html
 The automated tests cover migrations, exact Mac spelling ranges, alternatives,
 offline/AI independence, stale results, live ownership leases, direct writing
 actions and Undo, IME composition, range/sanitization helpers, universal
-coverage/blocklist behavior, and permission rules. The fixture covers layout and
+coverage/blocklist behavior, permission rules, and light/dark text, button,
+focus-ring and warning/error-state contrast. The fixture covers layout and
 interaction without private text. Serve it locally and use `?beanqa=1` for a
 local-only API mock, `&beanactions=1` for simulated explicit AI actions, or
 `&beanlocal=0` for disconnected spelling coverage. Omit `beanqa` to test the real
@@ -140,6 +147,9 @@ installed extension and Mac host.
 ## Files
 
 - `manifest.json`: MV3 declaration and website permissions.
+- `icon16.png` / `icon32.png` / `icon48.png` / `icon128.png`: size-specific green
+  bean artwork generated from `Resources/Icons/AppIcon.svg` by
+  `scripts/generate_icons.sh` in the repository root.
 - `background.js`: all-site registration, blocklist exclusions, and native messaging.
 - `src/localDetector.js`: offline conservative detector.
 - `src/issueMapping.js`: exact range mapping and safe replacement helpers.

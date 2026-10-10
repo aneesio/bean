@@ -30,16 +30,16 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                         const near=(actual,expected)=>Math.abs(actual-expected)<0.03;
                         return {dark:matchMedia('(prefers-color-scheme:dark)').matches,
                             sourceUntouched:document.activeElement===editor && editor.value==='Short draft',
-                            dot10:d.width===10 && d.height===10,targetSize:b.width,targetSquare:b.width===b.height,
+                            dot8:d.width===8 && d.height===8,targetSize:b.width,targetSquare:b.width===b.height,
                             noLogoOrCount:button.children.length===1 && !button.querySelector('img') && button.textContent==='',
                             background:style.backgroundColor,markHidden:mark.hidden,markDisplay:getComputedStyle(mark).display,
                             markAriaHidden:mark.getAttribute('aria-hidden')==='true',label:button.getAttribute('aria-label'),
                             markInside:m.left>=d.left && m.right<=d.right && m.top>=d.top && m.bottom<=d.bottom,
                             markCentered:near(m.x+m.width/2,d.x+d.width/2) && near(m.y+m.height/2,d.y+d.height/2),
                             markCenterOffset:{x:m.x+m.width/2-d.x-d.width/2,y:m.y+m.height/2-d.y-d.height/2},
-                            markSize:near(m.width,1.4) && near(m.height,5.4),
-                            stemSize:near(parseFloat(stem.width),1.4) && near(parseFloat(stem.height),3.2),
-                            pointSize:near(parseFloat(point.width),1.4) && near(parseFloat(point.height),1.4),
+                            markSize:near(m.width,1.2) && near(m.height,4.4),
+                            stemSize:near(parseFloat(stem.width),1.2) && near(parseFloat(stem.height),2.6),
+                            pointSize:near(parseFloat(point.width),1.2) && near(parseFloat(point.height),1.2),
                             markColor:stem.backgroundColor,pointColor:point.backgroundColor,
                             buttonRetained:window.__ownedDotButton===undefined || window.__ownedDotButton===button};
                     };
@@ -47,7 +47,7 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                     return window.__ownedDotMeasure();
                     """)
                 XCTAssertEqual(neutral["dark"] as? Bool, dark)
-                XCTAssertEqual(neutral["background"] as? String, dark ? "rgb(224, 161, 94)" : "rgb(138, 76, 23)")
+                XCTAssertEqual(neutral["background"] as? String, dark ? "rgb(129, 220, 165)" : "rgb(35, 122, 72)")
                 XCTAssertEqual(neutral["markHidden"] as? Bool, true)
                 XCTAssertEqual(neutral["markDisplay"] as? String, "none")
                 let name = "dot-contrast-\(compact ? "compact" : "regular")-\(dark ? "dark" : "light")"
@@ -62,10 +62,10 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                 XCTAssertNotEqual(issue["background"] as? String, neutral["background"] as? String)
                 XCTAssertEqual(issue["markHidden"] as? Bool, false)
                 XCTAssertEqual(issue["markDisplay"] as? String, "block")
-                XCTAssertEqual(issue["markColor"] as? String, dark ? "rgb(36, 18, 15)" : "rgb(255, 255, 255)")
+                XCTAssertEqual(issue["markColor"] as? String, dark ? "rgb(25, 25, 25)" : "rgb(255, 255, 255)")
                 XCTAssertEqual(issue["pointColor"] as? String, issue["markColor"] as? String)
                 XCTAssertTrue((issue["label"] as? String ?? "").contains("2 writing suggestions"))
-                for key in ["sourceUntouched", "dot10", "targetSquare", "noLogoOrCount", "markAriaHidden",
+                for key in ["sourceUntouched", "dot8", "targetSquare", "noLogoOrCount", "markAriaHidden",
                             "markInside", "markCentered", "markSize", "stemSize", "pointSize", "buttonRetained"] {
                     XCTAssertEqual(issue[key] as? Bool, true, "\(name): \(key) \(issue)")
                 }
@@ -132,6 +132,50 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                     print("OWNED_BROWSER_OVERLAY_GEOMETRY \(name) \(geometry)")
                 }
             }
+        }
+    }
+
+    func testOverlayReinjectionKeepsOneDotAndOpenAssistantOnRealDOM() async throws {
+        let fixture = try OwnedBrowserOverlayFixture(size: NSSize(width: 800, height: 640), dark: false)
+        defer { fixture.close() }
+        try await fixture.load()
+        let initial = try await fixture.object("""
+            const editor=document.getElementById('editor');editor.focus();editor.setSelectionRange(0,9);
+            const r=editor.getBoundingClientRect();window.__reinjectionReviews=0;
+            const shown=BeanOverlay.renderAssistant({x:r.x,y:r.y,w:r.width,h:r.height},2,'nativeLocal',
+                {onReview:()=>window.__reinjectionReviews++},{source:editor});
+            window.__reinjectionOverlay=BeanOverlay;window.__reinjectionRoot=window.__ownedBeanShadow;
+            window.__reinjectionButton=window.__reinjectionRoot.querySelector('.assistant');
+            window.__reinjectionButton.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+            window.__reinjectionCard=window.__reinjectionRoot.querySelector('[aria-label="Bean writing assistant"]');
+            return {shown,cardOpen:!!window.__reinjectionCard};
+            """)
+        XCTAssertEqual(initial["shown"] as? Bool, true)
+        XCTAssertEqual(initial["cardOpen"] as? Bool, true)
+
+        // Load the exact production script again, as extension reinjection can
+        // do in an existing document. The current assistant must keep ownership.
+        try await fixture.reinjectOverlay()
+        try await fixture.reinjectOverlay()
+        let result = try await fixture.object("""
+            const root=window.__ownedBeanShadow,button=root.querySelector('.assistant');
+            const card=root.querySelector('[aria-label="Bean writing assistant"]');
+            const editor=document.getElementById('editor');
+            const result={sameOverlay:BeanOverlay===window.__reinjectionOverlay,
+                sameRoot:root===window.__reinjectionRoot,sameButton:button===window.__reinjectionButton,
+                sameCard:card===window.__reinjectionCard,oneHost:document.querySelectorAll('#bean-inline-host').length===1,
+                oneDot:root.querySelectorAll('.assistant-dot').length===1,
+                issueStateRetained:button.dataset.hasIssues==='true' && button.getAttribute('aria-label').includes('2 writing suggestions'),
+                presentationRetained:BeanOverlay.hasFieldPresentation(),
+                sourceUntouched:document.activeElement===editor && editor.selectionStart===0 && editor.selectionEnd===9 &&
+                    editor.value==='Synthetic draft with teh spelling issue.'};
+            card.querySelector('[data-act="review"]').dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+            result.originalHandlerRetained=window.__reinjectionReviews===1;
+            return result;
+            """)
+        for key in ["sameOverlay", "sameRoot", "sameButton", "sameCard", "oneHost", "oneDot",
+                    "issueStateRetained", "presentationRetained", "sourceUntouched", "originalHandlerRetained"] {
+            XCTAssertEqual(result[key] as? Bool, true, "\(key): \(result)")
         }
     }
 
@@ -268,13 +312,13 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
                     const fillsViewportShown=BeanOverlay.refreshAssistantPlacement();
                     e.style.left='1200px';BeanOverlay.refreshAssistantPlacement();const offscreenHidden=!root.querySelector('.assistant');
                     e.style.left='4px';const recovered=BeanOverlay.refreshAssistantPlacement();
-                    return {shown,topRight,insideEditor:inside(b,r),paint10:d.width===10 && d.height===10,target28:b.width===28 && b.height===28,
+                    return {shown,topRight,insideEditor:inside(b,r),paint8:d.width===8 && d.height===8,target28:b.width===28 && b.height===28,
                         noLogoOrCount:button.children.length===1 && !button.querySelector('img'),hasIssues:button.dataset.hasIssues==='true',
                         outsideControls:controls.every(control=>!overlap(b,control.getBoundingClientRect())),controlsUntouched,dotOwnsPixels,
                         hoverQuiet,clickOpens,thinExcluded,fillsViewportShown,offscreenHidden,recovered,
                         sourceUntouched:e.value==='Short draft' && e.selectionStart===4};
                     """)
-                for key in ["shown", "topRight", "insideEditor", "paint10", "target28", "noLogoOrCount", "hasIssues",
+                for key in ["shown", "topRight", "insideEditor", "paint8", "target28", "noLogoOrCount", "hasIssues",
                             "outsideControls", "controlsUntouched", "dotOwnsPixels", "hoverQuiet", "clickOpens", "thinExcluded",
                             "fillsViewportShown", "offscreenHidden", "recovered", "sourceUntouched"] {
                     XCTAssertEqual(result[key] as? Bool, true, "\(name) \(dark): \(key) \(result)")
@@ -320,11 +364,11 @@ final class OwnedBrowserOverlayVisualTests: XCTestCase {
             const i=input.getBoundingClientRect(),compactShown=BeanOverlay.renderAssistant({x:i.x,y:i.y,w:i.width,h:i.height},0,'nativeLocal',{}, {source:input});
             const compact=root.querySelector('.assistant').getBoundingClientRect();
             const compact20=compactShown && compact.width===20 && compact.height===20 && compact.top>=i.top && compact.bottom<=i.bottom;
-            const brown=getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor===getComputedStyle(root.querySelector('.assistant')).color;
+            const brandGreen=getComputedStyle(root.querySelector('.assistant-dot')).backgroundColor===getComputedStyle(root.querySelector('.assistant')).color;
             const valuePreserved=input.value==='Short' && input.selectionStart===5 && e.value==='';
-            return {aligned,rtl,placeholder,placeholderActuallyExcluded,scrolled,empty,emptyTopRight,compact20,brown,valuePreserved};
+            return {aligned,rtl,placeholder,placeholderActuallyExcluded,scrolled,empty,emptyTopRight,compact20,brandGreen,valuePreserved};
             """)
-        for key in ["aligned", "rtl", "placeholder", "placeholderActuallyExcluded", "scrolled", "empty", "emptyTopRight", "compact20", "brown", "valuePreserved"] {
+        for key in ["aligned", "rtl", "placeholder", "placeholderActuallyExcluded", "scrolled", "empty", "emptyTopRight", "compact20", "brandGreen", "valuePreserved"] {
             XCTAssertEqual(result[key] as? Bool, true, "\(key): \(result)")
         }
     }
@@ -434,6 +478,10 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
         throw FixtureError.loadTimeout
     }
 
+    func reinjectOverlay() async throws {
+        _ = try await webView.evaluateJavaScript(source)
+    }
+
     func object(_ body: String) async throws -> [String: Any] {
         let result = try await webView.evaluateJavaScript("(()=>{try{\(body)}catch(error){return {ownedFixtureJavaScriptError:String(error),ownedFixtureStack:error.stack || ''};}})()")
         let object = try XCTUnwrap(result as? [String: Any])
@@ -464,7 +512,7 @@ private final class OwnedBrowserOverlayFixture: NSObject, WKNavigationDelegate {
                 scopeVisibilityMatchesSelection:!group || (!!visible(group)===\(selection ? "false" : "true")),
                 clippedControls:controls.filter(e=>!fit(rect(e))).map(e=>({label:e.textContent,rect:rect(e)})),
                 protrudingControls:controls.filter(e=>!insideCard(e)).map(e=>({label:e.textContent,rect:rect(e)})),
-                compactDotMeasured:!!dot && !!entry && rect(dot).width===10 && rect(dot).height===10 &&
+                compactDotMeasured:!!dot && !!entry && rect(dot).width===8 && rect(dot).height===8 &&
                     rect(entry).width===28 && rect(entry).height===28 && !entry.querySelector('img') && entry.children.length===1};
             """)
     }

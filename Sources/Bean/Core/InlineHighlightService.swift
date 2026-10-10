@@ -54,6 +54,9 @@ final class InlineHighlightService {
     private var dismissalElement: AXUIElement?
     private(set) var assistantState = NativeAssistantState()
     var onLocalFeedback: ((Int) -> Void)?
+    /// Synchronous handoff before a field session renders, including sessions
+    /// whose control is hidden because no safe placement is available.
+    var onWillPresentUI: (() -> Void)?
 
     private struct AnalysisSnapshot {
         let element: AXUIElement
@@ -694,6 +697,7 @@ final class InlineHighlightService {
     // MARK: - Rendering / remap
 
     private func renderOverlay() {
+        if session != nil { onWillPresentUI?() }
         assistantState.issueCount = entries.count
         assistantState.aiAvailable = settings.hasAPIKey
         assistantState.safeFixCount = session.flatMap { s in

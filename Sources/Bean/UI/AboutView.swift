@@ -82,7 +82,7 @@ struct AboutView: View {
             .padding(BeanDesign.Spacing.xl)
         }
         .frame(minWidth: 420, idealWidth: 520, minHeight: 460, idealHeight: 590)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
     }
 
     private func projectLink(_ title: String, _ destination: URL) -> some View {

@@ -37,7 +37,7 @@ enum OverlayGeometry {
     /// inside the field; other overlay controls retain this normal target.
     static let minimumMotorTarget: CGFloat = 28
     static let beanLauncherSize: CGFloat = minimumMotorTarget
-    static let statusDotDiameter: CGFloat = 10
+    static let statusDotDiameter: CGFloat = 8
     static let compactFieldControlSize: CGFloat = 20
 
     /// Compact single-line fields retain a useful in-field target instead of

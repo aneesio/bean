@@ -44,6 +44,8 @@ final class PassiveSuggestionService {
         var reviewReason: String?
     }
     private var current: Session?
+    /// Revoke the fallback launcher before the richer UI becomes visible.
+    var onWillPresentUI: (() -> Void)?
 
     init(settings: AppSettings, userContent: UserContentStore,
          history: OperationHistoryStore, usageLedger: UsageLedgerStore,
@@ -294,6 +296,7 @@ final class PassiveSuggestionService {
     // MARK: - Popover actions
 
     private func presentSuggestion(_ session: Session) {
+        onWillPresentUI?()
         popover.present(
             previewText: session.correctedCore,
             showApply: true,
@@ -356,6 +359,7 @@ final class PassiveSuggestionService {
             guard !model.isRunning else { return }
             self?.dismissPreview()
         }
+        onWillPresentUI?()
         previewIsShowing = true
         previewController.presentPreview(model)
     }
@@ -517,6 +521,7 @@ final class PassiveSuggestionService {
                                  originalText: session.sourceCore,
                                  sourceAnchorRect: TextRangeLocator.fieldRect(for: session.element))
         configureRecovery(session: session, correctedCore: correctedCore, result: result, model: model)
+        onWillPresentUI?()
         previewIsShowing = true
         previewController.presentPreview(model)
     }

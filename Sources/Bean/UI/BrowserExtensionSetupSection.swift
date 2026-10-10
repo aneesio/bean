@@ -126,7 +126,7 @@ struct BrowserExtensionSetupSection: View {
             Spacer()
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.warmBackground))
+        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.brandBackground))
     }
 
     private var setupGuide: some View {
@@ -152,7 +152,7 @@ struct BrowserExtensionSetupSection: View {
                 Button(bridge.isWorking ? "Installing…" : "Install Mac Connection") {
                     bridge.installOrRepair(manualExtensionID: manualExtensionID)
                 }
-                .buttonStyle(.borderedProminent)
+                .beanButton(.primary)
                 .disabled(bridge.isWorking)
             }
         }

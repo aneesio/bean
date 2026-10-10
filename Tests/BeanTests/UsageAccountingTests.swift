@@ -386,6 +386,55 @@ final class UsageAccountingTests: XCTestCase {
             inputTokens: 10, outputTokens: 10, provider: "openai", model: "custom-model"))
     }
 
+    @MainActor
+    func testHaiku55DailyAggregateKeepsEachBoundedRequestsLowerPriceTier() throws {
+        let suite = "UsageLedgerHaiku55Pricing.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let directory = temporaryCoordinationDirectory("UsageLedgerHaiku55Pricing")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        // Haiku 5.5's 100k threshold applies to an individual prompt. Every
+        // Bean prompt stays below it, even when a day's aggregate exceeds it.
+        XCTAssertLessThan(EngineConfig.maxProviderRequestInputUTF8Bytes, 100_000)
+        let ledger = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
+        let now = Date()
+        for _ in 0..<10 {
+            ledger.record(
+                LLMUsage(inputTokens: 20_000, outputTokens: 100, isEstimated: false),
+                source: .manual, provider: "anthropic", model: "claude-haiku-5-5", at: now
+            )
+        }
+        let summary = ledger.summary(days: 1, now: now)
+        XCTAssertEqual(summary.inputTokens, 200_000)
+        XCTAssertEqual(summary.outputTokens, 1_000)
+        XCTAssertEqual(summary.operationCount, 10)
+        XCTAssertEqual(summary.unpricedOperationCount, 0)
+        XCTAssertEqual(summary.estimatedCostUSD, 0.0205, accuracy: 0.000_001)
+
+        let reloaded = UsageLedgerStore(
+            defaults: defaults, storageKey: "usage",
+            coordinationDirectoryURL: directory
+        )
+        XCTAssertEqual(reloaded.summary(days: 1, now: now), summary)
+    }
+
+    func testHaiku55PriceRequiresItsExactModelAndProvider() throws {
+        let cost = try XCTUnwrap(UsageCostEstimator.costUSD(
+            inputTokens: 10_000, outputTokens: 1_000,
+            provider: "anthropic", model: "claude-haiku-5-5"
+        ))
+        XCTAssertEqual(cost, 0.0015, accuracy: 0.000_001)
+        XCTAssertNil(UsageCostEstimator.rates(provider: "openai", model: "claude-haiku-5-5"))
+        // Haiku 5.5 is a fixed ID with no dated alias. An invented suffix must
+        // not silently acquire this model's prices.
+        XCTAssertNil(UsageCostEstimator.rates(provider: "anthropic", model: "claude-haiku-5-5-custom"))
+    }
+
     func testInlineProviderBudgetOnlyFillsSlotsLeftAfterLocalIssues() {
         let remaining = IssueDetector.remainingProviderIssueCapacity(
             totalLimit: 8, localIssueCount: 7

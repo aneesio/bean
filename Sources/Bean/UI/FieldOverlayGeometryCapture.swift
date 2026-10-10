@@ -81,7 +81,7 @@ enum FieldOverlayGeometryCapture {
         exclusions = protectedRects.filter { OverlayGeometry.isFiniteRect($0) && $0.intersects(fieldRect) }
         // kAXWindow binds the exact editor to its window. We no longer require
         // a complete path through every ancestor and unrelated window subtree
-        // merely to draw a 10-point dot inside this already-known editor.
+        // merely to draw an 8-point dot inside this already-known editor.
         // Reserve time for final source continuity reads. Optional local scans
         // contribute known obstacles; unavailable unrelated geometry cannot
         // invalidate all in-field candidates.

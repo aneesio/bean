@@ -152,7 +152,7 @@ private struct PersonalizationActionFeedbackView: View {
             systemImage: feedback.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
         )
         .font(.caption)
-        .foregroundColor(feedback.isError ? .red : .secondary)
+        .foregroundColor(feedback.isError ? BeanDesign.danger : .secondary)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityLabel(feedback.accessibilityLabel)
     }
@@ -168,6 +168,7 @@ private extension View {
             idealHeight: metrics.idealHeight,
             maxHeight: metrics.maxHeight
         )
+        .beanActionButtons()
     }
 }
 
@@ -194,7 +195,7 @@ struct PersonalizationPersistenceStatus: View {
         if let persistenceError = store.persistenceError {
             Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
-                .foregroundColor(.red)
+                .foregroundColor(BeanDesign.danger)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("Storage error: \(persistenceError)")
         }
@@ -219,7 +220,7 @@ struct StyleProfilesSection: View {
                         Text(profile.name).fontWeight(.medium)
                         if store.defaultProfileID == profile.id {
                             Text("Default").font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                                .background(Capsule().fill(BeanDesign.selectionBackground))
                         }
                         if profile.isBuiltIn {
                             Image(systemName: "lock.fill").font(.caption2).foregroundColor(.secondary)
@@ -474,6 +475,7 @@ struct ProfileEditor: View {
                             return
                         }
                     }
+                    .beanButton(.primary)
                     .keyboardShortcut(.defaultAction)
                     .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -726,6 +728,7 @@ struct WritingContextEditor: View {
                         return
                     }
                 }
+                .beanButton(.primary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -963,6 +966,7 @@ struct DictionaryTermEditor: View {
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Save") { save() }
+                    .beanButton(.primary)
                     .keyboardShortcut(.defaultAction)
                     .disabled(draft.term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -1064,6 +1068,7 @@ struct DictionaryImportSheet: View {
                     Button("Import \(preview.addedCount) \(preview.addedCount == 1 ? "Term" : "Terms")") {
                         performImport()
                     }
+                    .beanButton(.primary)
                     .keyboardShortcut(.defaultAction)
                     .disabled(preview.addedCount == 0)
                 }
@@ -1076,6 +1081,7 @@ struct DictionaryImportSheet: View {
                         preview = store.previewTermImport(newlineSeparated: importText)
                         importError = nil
                     }
+                    .beanButton(.primary)
                     .keyboardShortcut(.defaultAction)
                     .disabled(importText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -1298,7 +1304,7 @@ struct DataSection: View {
         if let persistenceError = store.persistenceError {
             Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
-                .foregroundColor(.red)
+                .foregroundColor(BeanDesign.danger)
                 .accessibilityLabel("Storage error: \(persistenceError)")
         }
         Text("Backups include styles, Writing Context, dictionary terms, and app defaults. They never include API keys, logs, or text you proofread or rewrite.")
@@ -1459,6 +1465,7 @@ struct PreferencesImportConfirmation: View {
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Import Preferences") { importError = onConfirm() }
+                    .beanButton(.primary)
                     .keyboardShortcut(.defaultAction)
             }
         }

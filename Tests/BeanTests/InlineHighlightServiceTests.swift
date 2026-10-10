@@ -5,6 +5,69 @@ import XCTest
 
 @MainActor
 final class InlineHighlightServiceTests: XCTestCase {
+    func testInlineSessionRevokesFallbackBeforeEveryPresentationPath() async throws {
+        let fixture = try Fixture(text: "Fix teh draft.")
+        defer { fixture.close() }
+        var fallbackIsVisible = true
+        var handoffs = 0
+        var presentations = 0
+        fixture.service.onWillPresentUI = { [weak service = fixture.service] in
+            XCTAssertTrue(service?.ownsFocusedFieldSession == true)
+            fallbackIsVisible = false
+            handoffs += 1
+        }
+        fixture.editor.beforePresent = {
+            presentations += 1
+            XCTAssertFalse(fallbackIsVisible,
+                           "The old launcher must disappear before the inline control can render")
+        }
+
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        XCTAssertFalse(fallbackIsVisible)
+        fallbackIsVisible = true
+        fixture.service.typingBegan()
+        XCTAssertFalse(fallbackIsVisible)
+        fallbackIsVisible = true
+        fixture.service.showUnavailable(field: fixture.field(), app: nil, reason: "cannotLocateRanges")
+        XCTAssertFalse(fallbackIsVisible)
+        fallbackIsVisible = true
+        var reason = ""
+        _ = await fixture.run(reason: &reason)
+        XCTAssertFalse(fallbackIsVisible)
+        let checkedTexts = fixture.editor.checkedTexts
+        fallbackIsVisible = true
+        _ = await fixture.run(reason: &reason)
+        XCTAssertFalse(fallbackIsVisible)
+        XCTAssertEqual(fixture.editor.checkedTexts, checkedTexts, "A cached result must also hand off before rendering")
+        XCTAssertEqual(handoffs, presentations)
+        XCTAssertGreaterThanOrEqual(handoffs, 5)
+    }
+
+    func testHiddenInlineSessionStillRevokesFallbackAndStaleWorkDoesNotReclaimIt() async throws {
+        let fixture = try Fixture(text: "Fix teh draft.")
+        defer { fixture.close() }
+        fixture.editor.geometry = nil
+        var fallbackIsVisible = true
+        var handoffs = 0
+        fixture.service.onWillPresentUI = {
+            fallbackIsVisible = false
+            handoffs += 1
+        }
+        fixture.service.prepare(field: fixture.field(), app: nil)
+        XCTAssertTrue(fixture.service.ownsFocusedFieldSession)
+        XCTAssertFalse(fixture.service.isShowingUI)
+        XCTAssertFalse(fallbackIsVisible, "No safe placement must not enable a second launcher for this session")
+        fixture.service.hideUI()
+        XCTAssertFalse(fixture.service.ownsFocusedFieldSession)
+        let previousHandoffs = handoffs
+        fallbackIsVisible = true
+        var reason = ""
+        _ = await fixture.run(isCurrent: { false }, reason: &reason)
+        XCTAssertEqual(reason, "staleDiscarded")
+        XCTAssertEqual(handoffs, previousHandoffs)
+        XCTAssertTrue(fallbackIsVisible, "A stale check cannot take presentation ownership from a newer field")
+    }
+
     func testFirstFocusedDraftRunsLocalDetectionAndPresentsActualIssues() async throws {
         let fixture = try Fixture(text: "Please fix teh  sentence.")
         defer { fixture.close() }
@@ -342,6 +405,7 @@ final class InlineHighlightServiceTests: XCTestCase {
         var value: String
         var checkedTexts: [String] = []
         var presentations: [[TextIssue]] = []
+        var beforePresent: (() -> Void)?
         var states: [NativeAssistantState] = []
         var canEditRanges = true
         var selectedRange: NSRange?
@@ -399,7 +463,7 @@ final class InlineHighlightServiceTests: XCTestCase {
                     return IssueDetector.LocalAnalysis(issues: result.issues,
                         spellingCoverage: editor.localCoverage, grammarCoverage: editor.localCoverage)
                 },
-                present: { editor.presentations.append($0.map(\.issue)) },
+                present: { editor.beforePresent?(); editor.presentations.append($0.map(\.issue)) },
                 selectedRange: { _ in editor.selectedRange }, anchor: { _ in editor.geometry?.fieldRect },
                 presentState: { editor.states.append($0) }, canEditRanges: { _ in editor.canEditRanges },
                 placementGeometry: { _ in editor.placementCaptureCount += 1; return editor.geometry },

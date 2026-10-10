@@ -313,7 +313,13 @@ function makeDOMDocument() {
     lastShadowMode: null,
     layoutControls: [],
     layoutNodes: [],
-    querySelectorAll(selector) { return selector === "*" ? document.layoutNodes : document.layoutControls; },
+    querySelectorAll(selector) {
+      if (selector === "#bean-inline-host[data-bean-overlay][data-bean='overlay']") {
+        return document.body.children.filter(node=>node.id==="bean-inline-host" &&
+          node.dataset.beanOverlay !== undefined && node.dataset.bean==="overlay");
+      }
+      return selector === "*" ? document.layoutNodes : document.layoutControls;
+    },
     elementsFromPoint(x,y) {
       if (document.hitTest) return document.hitTest(x,y);
       const hit = [...document.layoutControls].reverse().find(element => {
@@ -462,6 +468,16 @@ assert.equal(assistantIssueMark.hidden,false);
 assert.equal(assistant.querySelectorAll("img").length,0,"the field indicator has no Bean logo or numeric pill");
 assert.equal(assistant.dataset.hasIssues,"true");
 assert.match(assistant.title,/3 writing suggestions/,"hover details retain the useful issue count");
+const originalShadow = domDocument.lastShadow;
+vm.runInNewContext(source, domContext);
+vm.runInNewContext(source, domContext);
+assert.equal(domContext.window.BeanOverlay,domOverlay,"re-injection retains the live overlay API");
+domContext.window.BeanOverlay.renderAssistant(fieldRect,3,"local",{onReview:()=>{assistantReviews++;}});
+assert.equal(domDocument.lastShadow,originalShadow,"re-injection retains the closed shadow root");
+assert.equal(domDocument.body.children.filter(node=>node.id==="bean-inline-host").length,1,
+  "re-injection followed by rendering creates no duplicate host");
+assert.equal(originalShadow.querySelectorAll(".assistant").length,1,"only one status dot remains");
+assert.equal(originalShadow.querySelector(".assistant"),assistant,"the original control retains its listeners");
 for (const listener of assistant.listeners.click) listener(fakeEvent({ detail:1 }));
 const assistantCard = domDocument.lastShadow.querySelector(".card");
 assert.equal(assistantCard.getAttribute("aria-label"),"Bean writing assistant");
@@ -475,7 +491,7 @@ assert.equal(domDocument.lastShadow.activeElement.dataset.beanAssistant, "",
   "status updates preserve focus on the field assistant");
 assert.match(domDocument.lastShadow.activeElement.getAttribute("aria-label"), /Checking the changed paragraph/);
 assert.equal(domDocument.lastShadow.activeElement,assistant,"passive status updates retain the semantic button");
-assert.equal(assistant.dataset.hasIssues,"false","no issues uses the brand brown dot");
+assert.equal(assistant.dataset.hasIssues,"false","no issues uses the brand green dot");
 assert.equal(assistant.querySelector(".assistant-issue-mark"),assistantIssueMark,
   "status changes retain the same decorative node and semantic button");
 assert.equal(assistantIssueMark.hidden,true,"checking without known issues clears the exclamation mark");
@@ -483,7 +499,7 @@ domOverlay.renderAssistant(fieldRect,2,"local",{});
 assert.equal(domDocument.lastShadow.activeElement,assistant);
 assert.equal(assistantIssueMark.hidden,false,"new issues reveal the existing mark without changing focus");
 domOverlay.renderAssistant(fieldRect, 0, "local", {});
-assert.equal(assistantIssueMark.hidden,true,"a cleared issue state returns to the plain brown dot");
+assert.equal(assistantIssueMark.hidden,true,"a cleared issue state returns to the plain green dot");
 assert.match(domDocument.lastShadow.activeElement.getAttribute("aria-label"), /Basic checks only/);
 const statusAssistant = domDocument.lastShadow.activeElement;
 for (const listener of statusAssistant.listeners.click) listener(fakeEvent({ detail:1 }));
@@ -713,5 +729,24 @@ assert.match(contentSource, /state\.active\.isContentEditable && keyboardBridgeE
   "capture fallback is limited to rich editors with an actual Bean bridge");
 assert.match(contentSource, /!e\.defaultPrevented[\s\S]*!e\.ctrlKey[\s\S]*!e\.isComposing/,
   "rich-editor fallback preserves cancelled, modified, and composing Tab events");
+
+// A reloaded extension has a fresh isolated world but shares the page DOM with
+// its invalidated predecessor. Only the old marked host is retired; editor
+// state and unrelated nodes are not part of the migration.
+domOverlay.clear();domOverlay.clearAssistant();
+domOverlay.renderAssistant(fieldRect,1,"local",{});
+const orphanHost=domDocument.lastShadow.host;
+const unmarkedCollision=domDocument.createElement("div");unmarkedCollision.id="bean-inline-host";
+domDocument.body.appendChild(unmarkedCollision);
+const retainedFocus=domDocument.activeElement;
+const refreshedWindow={...domContext.window};delete refreshedWindow.BeanOverlay;
+const refreshedContext={...domContext,window:refreshedWindow};
+vm.runInNewContext(source,refreshedContext);
+refreshedWindow.BeanOverlay.renderAssistant(fieldRect,2,"local",{});
+assert.equal(orphanHost.parentNode,null,"fresh-world presentation retires the old closed shadow host");
+assert.equal(domDocument.body.contains(unmarkedCollision),true,"an unmarked colliding page ID is left intact");
+assert.equal(domDocument.body.children.filter(node=>node.dataset.beanOverlay!==undefined).length,1);
+assert.equal(domDocument.lastShadow.querySelectorAll(".assistant").length,1);
+assert.equal(domDocument.activeElement,retainedFocus,"orphan removal preserves source focus");
 
 console.log("Browser extension overlay accessibility tests passed");

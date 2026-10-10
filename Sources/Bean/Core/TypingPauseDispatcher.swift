@@ -23,6 +23,7 @@ final class TypingPauseDispatcher {
     private var workspaceObserver: NSObjectProtocol?
     private var pendingDispatch: DispatchWorkItem?
     private var pendingBubble: DispatchWorkItem?
+    private var bubblePresentationRevision = 0
     private var permissionRetry: DispatchWorkItem?
     private var targetValidationTimer: Timer?
     private var generation = 0
@@ -45,6 +46,8 @@ final class TypingPauseDispatcher {
         self.bubble = bubble
         self.coordinatorIsBusy = coordinatorIsBusy
         inline.onLocalFeedback = { [weak self] count in self?.recordLocalFeedback(issueCount: count) }
+        inline.onWillPresentUI = { [weak self] in self?.revokeFallbackBubble() }
+        passive.onWillPresentUI = { [weak self] in self?.revokeFallbackBubble() }
     }
 
     private var wantsMonitor: Bool {
@@ -106,7 +109,7 @@ final class TypingPauseDispatcher {
         removeMouseMonitor()
         if let workspaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver); self.workspaceObserver = nil }
         pendingDispatch?.cancel(); pendingDispatch = nil
-        pendingBubble?.cancel(); pendingBubble = nil
+        cancelPendingBubble()
         permissionRetry?.cancel(); permissionRetry = nil
         targetValidationTimer?.invalidate(); targetValidationTimer = nil
         fieldActivity.reset()
@@ -143,6 +146,9 @@ final class TypingPauseDispatcher {
     // MARK: - Events
 
     private func handleTyping(_ event: NSEvent) {
+        // Our Copy/Paste/Delete transport is part of the current operation.
+        // It must not dismiss its review or start another typing-pause check.
+        guard !ClipboardService.isBeanSyntheticKeyboardEvent(event) else { return }
         // Close expanded review and stale underlines, retain the quiet field
         // control, and re-arm checking after committed text changes.
         let app = NSWorkspace.shared.frontmostApplication
@@ -220,7 +226,7 @@ final class TypingPauseDispatcher {
             if settings.lastSupportReason != "appPaused" {
                 generation += 1
                 pendingDispatch?.cancel()
-                pendingBubble?.cancel()
+                cancelPendingBubble()
                 pendingFeedback = nil
                 fieldActivity.reset()
                 lastObservedElement = nil
@@ -253,7 +259,7 @@ final class TypingPauseDispatcher {
             if ownershipChanged || change != .unchanged {
                 generation += 1
                 pendingDispatch?.cancel()
-                pendingBubble?.cancel()
+                cancelPendingBubble()
             }
             if ownershipChanged || change != .unchanged || inline.isShowingUI
                 || passive.isShowingUI || bubble.isShowing {
@@ -303,17 +309,38 @@ final class TypingPauseDispatcher {
     }
 
     private func scheduleBubble(_ gen: Int) {
-        pendingBubble?.cancel()
-        let work = DispatchWorkItem { [weak self] in Task { @MainActor in self?.considerBubble(generation: gen) } }
+        cancelPendingBubble()
+        let revision = bubblePresentationRevision
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in self?.considerBubble(generation: gen, scheduledRevision: revision) }
+        }
         pendingBubble = work
         DispatchQueue.main.asyncAfter(deadline: .now() + settings.bubbleDelay, execute: work)
     }
 
-    private func considerBubble(generation gen: Int) {
+    private func cancelPendingBubble() {
+        bubblePresentationRevision += 1
+        pendingBubble?.cancel()
+        pendingBubble = nil
+    }
+
+    /// Runs synchronously before inline/passive presentation, so there is no
+    /// frame where both it and the fallback launcher own the focused field.
+    /// The revision also invalidates work already queued as a MainActor Task.
+    private func revokeFallbackBubble() {
+        cancelPendingBubble()
+        bubble.hide()
+    }
+
+    private func considerBubble(generation gen: Int, scheduledRevision: Int? = nil) {
+        guard scheduledRevision == nil || scheduledRevision == bubblePresentationRevision else { return }
         guard gen == generation, settings.bubbleEnabled, !coordinatorIsBusy() else { return }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         // Bubble is lowest priority: yield to passive/inline if they're showing.
-        guard !passive.isShowingUI, !inline.isShowingUI, !inline.ownsFocusedFieldSession else { return }
+        guard !passive.isShowingUI, !inline.isShowingUI, !inline.ownsFocusedFieldSession else {
+            revokeFallbackBubble()
+            return
+        }
         let app = NSWorkspace.shared.frontmostApplication
         guard !settings.isAssistancePaused(for: app?.bundleIdentifier) else { return }
         if browserExtensionOwnsField(app: app) { bubble.hide(); return }
@@ -380,8 +407,11 @@ final class TypingPauseDispatcher {
 
     private func finishPause(_ handler: String, _ reason: String, generation gen: Int,
                              richerUIShown: Bool) {
+        guard gen == generation else { return }
         setStatus(handler, reason)
-        if !richerUIShown { considerBubble(generation: gen) }
+        if richerUIShown || inline.ownsFocusedFieldSession || inline.isShowingUI || passive.isShowingUI {
+            revokeFallbackBubble()
+        } else { considerBubble(generation: gen) }
     }
 
     private func setStatus(_ handler: String, _ reason: String) {

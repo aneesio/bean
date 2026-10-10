@@ -5,6 +5,7 @@ const tests = [
   "sitePolicy.test.js",
   "ownershipGuard.test.js",
   "settingsMigration.test.js",
+  "reinjection.test.js",
   "background.test.js",
   "coverage.test.js",
   "core.test.js",
@@ -12,6 +13,7 @@ const tests = [
   "contentTrust.test.js",
   "options.test.js",
   "popup.test.js",
+  "palette.test.js",
   "overlay.test.js",
   "manifest.test.js",
   "versionContract.test.js"

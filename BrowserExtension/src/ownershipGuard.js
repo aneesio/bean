@@ -4,6 +4,8 @@
 // against the same top-level document and eligible focused prose surface.
 (() => {
   if (!/^https?:$/.test(location.protocol) || window.top !== window) return;
+  if (window.__beanOwnershipGuardLoaded) return;
+  window.__beanOwnershipGuardLoaded = true;
   let blocked = false, surface = null, token = null, heartbeat = null;
   const attribute = (el,name) => String(el.getAttribute(name) || "").trim().toLowerCase();
   function excluded(el) {

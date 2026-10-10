@@ -512,6 +512,7 @@ final class TextSelectionService {
         guard let selection else {
             return .failed(reason: "This editor does not expose a precise caret or selection.")
         }
+        let transport = AccessibilityService.selectedTextEditTransport(for: field, in: app)
         let monitor = GuardedInteractionMonitor()
         let revision = monitor.revision
         defer { monitor.stop() }
@@ -549,7 +550,7 @@ final class TextSelectionService {
                         readValue: { AccessibilityService.value(of: element) }, wait: { await Task.pause($0) })
                 },
                 readSelectedText: { AccessibilityService.selectedText(of: element) },
-                replaceSelectedText: field.isSelectedTextSettable
+                replaceSelectedText: transport == .accessibilitySelectedText
                     ? { AccessibilityService.setSelectedText($0, on: element) } : nil,
                 settleSelection: { await Task.pause(.milliseconds(35)) }))
         lastReplacementAttemptedDelivery = outcome.editWasSent
@@ -872,7 +873,8 @@ final class TextSelectionService {
         }
 
         let isElectronSource = AppCategory.isElectron(pending.targetApp?.bundleIdentifier)
-        let current = pending.targetApp.flatMap { AccessibilityService.focusedField(in: $0)?.element }
+        let currentField = pending.targetApp.flatMap { AccessibilityService.focusedField(in: $0) }
+        let current = currentField?.element
         let targetsMatch = pending.focusedElement.flatMap { target in
             current.map { AccessibilityService.isSameElement($0, target) }
         } ?? false
@@ -899,6 +901,10 @@ final class TextSelectionService {
             writeFallbackCorrection(corrected, pending: pending)
             return failure
         }
+
+        let transport = currentField.map {
+            AccessibilityService.selectedTextEditTransport(for: $0, in: pending.targetApp)
+        } ?? .keyboard
 
         // Capture what must survive before a clipboard-based continuity check
         // temporarily copies the live selection.
@@ -962,10 +968,20 @@ final class TextSelectionService {
             guard Self.exactTextMatches(AccessibilityService.selectedText(of: target), original) else {
                 return .failed(reason: "The selected text changed. Bean left the current text intact.")
             }
-            if AccessibilityService.isSelectedTextSettable(target) {
+            if transport == .accessibilitySelectedText {
                 lastReplacementAttemptedDelivery = true
                 _ = AccessibilityService.setSelectedText(corrected, on: target)
             } else {
+                // AX reads can service a focus change in the source app. PID
+                // routing alone cannot distinguish two of its editor fields.
+                // Recheck the exact destination before touching the clipboard
+                // or sending a keyboard edit, with no intervening await.
+                guard !Task.isCancelled,
+                      hasNativeDestinationProof(pending),
+                      AccessibilityService.selectedRange(of: target) == pending.selectedRangeBefore,
+                      guardedDestinationIsValid(.selectedText, pending: pending, checkPoint: .beforePaste) else {
+                    return .failed(reason: "The field or selection changed. Bean left the current text intact.")
+                }
                 ClipboardService.writeString(corrected)
                 beanClipboardChangeCount = ClipboardService.changeCount
                 lastReplacementAttemptedDelivery = true

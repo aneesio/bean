@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// Monotonic identity for HUD presentations and dismissals. Any asynchronous
 /// completion may mutate the panel only while its token is still current.
@@ -47,8 +48,8 @@ final class StatusHUD {
             case .progress: return .secondaryLabelColor
             case .success: return .systemGreen
             case .info: return .systemBlue
-            case .warning: return .systemOrange
-            case .error: return .systemRed
+            case .warning: return NSColor(BeanDesign.warning)
+            case .error: return NSColor(BeanDesign.danger)
             }
         }
     }
@@ -284,16 +285,14 @@ final class StatusHUD {
 
         var views: [NSView] = [badge, label]
         if cancelAction != nil {
-            let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelPressed))
-            cancel.bezelStyle = .rounded
-            cancel.setAccessibilityLabel("Cancel the current writing action")
-            views.append(cancel)
+            views.append(actionButton("Cancel", accessibilityLabel: "Cancel the current writing action") {
+                [weak self] in self?.cancelPressed()
+            })
         }
         if undoAction != nil {
-            let undo = NSButton(title: "Undo", target: self, action: #selector(undoPressed))
-            undo.bezelStyle = .rounded
-            undo.setAccessibilityLabel("Undo Bean's last change")
-            views.append(undo)
+            views.append(actionButton("Undo", accessibilityLabel: "Undo Bean's last change") {
+                [weak self] in self?.undoPressed()
+            })
         }
         let stack = NSStackView(views: views)
         stack.orientation = .horizontal
@@ -317,6 +316,20 @@ final class StatusHUD {
         let height = max(fitting.height, 44)
         panel.setContentSize(NSSize(width: width, height: height))
         panel.contentView = container
+    }
+
+    /// Share the same native capsule controls as the SwiftUI panels while
+    /// retaining the HUD's existing AppKit layout and nonactivating window.
+    private func actionButton(_ title: String, accessibilityLabel: String,
+                              action: @escaping () -> Void) -> NSView {
+        let button = Button(title, action: action)
+            .beanButton(.secondary)
+            .controlSize(.small)
+            .accessibilityLabel(accessibilityLabel)
+        let host = NSHostingView(rootView: button)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.setContentHuggingPriority(.required, for: .horizontal)
+        return host
     }
 
     @objc private func undoPressed() {
