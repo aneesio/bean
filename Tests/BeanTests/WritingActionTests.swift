@@ -58,14 +58,14 @@ final class WritingActionTests: XCTestCase {
     }
 
     @MainActor
-    func testAIProofreadPreviewsWholeFieldsButMayDirectlyReplaceSelection() {
-        XCTAssertTrue(TextActionCoordinator.requiresPreview(
+    func testProofreadAndRewriteApplyDirectlyInSelectionsAndWholeFields() {
+        XCTAssertFalse(TextActionCoordinator.requiresPreview(
             for: .proofread, mode: .focusedFieldFullText
         ))
         XCTAssertFalse(TextActionCoordinator.requiresPreview(
             for: .proofread, mode: .selectedText
         ))
-        XCTAssertTrue(TextActionCoordinator.requiresPreview(
+        XCTAssertFalse(TextActionCoordinator.requiresPreview(
             for: .makeClearer, mode: .selectedText
         ))
     }
@@ -81,9 +81,9 @@ final class WritingActionTests: XCTestCase {
         XCTAssertFalse(TextActionCoordinator.requiresReplacementRecovery(.noChangesNeeded))
     }
 
-    func testOnlyProofreadingActionsReplaceDirectly() {
+    func testExistingDraftImprovementsReplaceDirectlyAndGenerativeDraftsPreview() {
         for action in WritingAction.allCases {
-            let isProofreading = action == .proofread || action == .localQuickCheck
+            let isProofreading = action.category == .proofread || action.category == .rewrite
             XCTAssertEqual(action.allowsDirectReplace, isProofreading, "Unexpected policy for \(action)")
             XCTAssertEqual(action.requiresPreview, !isProofreading, "Unexpected preview policy for \(action)")
         }

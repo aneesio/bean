@@ -19,17 +19,38 @@ enum SingleInstanceGuard {
         guard let bundleID = current.bundleIdentifier else { return false }
 
         let duplicates = NSWorkspace.shared.runningApplications.filter {
-            $0.bundleIdentifier == bundleID && $0.processIdentifier != current.processIdentifier
+            !$0.isTerminated && isDuplicateGUIApplication(
+                bundleIdentifier: $0.bundleIdentifier,
+                processIdentifier: $0.processIdentifier,
+                activationPolicy: $0.activationPolicy,
+                currentBundleIdentifier: bundleID,
+                currentProcessIdentifier: current.processIdentifier
+            )
         }
 
         guard let existing = duplicates.first else { return false }
 
-        Log.event("single-instance: another Bean is already running; activating it and quitting")
+        Log.event("single-instance: another Bean is already running; reopening it and quitting")
+        // Activation alone leaves an accessory app with no windows invisible.
+        // An actual app reopen invokes its delegate's normal Writer/onboarding
+        // behavior. Native browser hosts share this executable but cannot
+        // accept application activation, so they are excluded above.
+        if let bundleURL = existing.bundleURL, NSWorkspace.shared.open(bundleURL) { return true }
         if #available(macOS 14.0, *) {
             existing.activate()
         } else {
             existing.activate(options: [.activateAllWindows])
         }
         return true
+    }
+
+    static func isDuplicateGUIApplication(bundleIdentifier: String?, processIdentifier: pid_t,
+                                         activationPolicy: NSApplication.ActivationPolicy,
+                                         currentBundleIdentifier: String?,
+                                         currentProcessIdentifier: pid_t) -> Bool {
+        guard let currentBundleIdentifier, let bundleIdentifier,
+              currentBundleIdentifier == bundleIdentifier,
+              processIdentifier != currentProcessIdentifier else { return false }
+        return activationPolicy == .regular || activationPolicy == .accessory
     }
 }

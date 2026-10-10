@@ -47,9 +47,9 @@ const extensionProtocol = Number(requiredMatch(background, /const BRIDGE_PROTOCO
 const minimumExtensionVersion = requiredMatch(nativeHost, /static let minimumExtensionVersion = "([^"]+)"/, "app minimum extension version");
 const appProtocol = Number(requiredMatch(nativeHost, /static let protocolVersion = (\d+)/, "app protocol version"));
 
-assert.equal(appVersion, "1.6.0", "the in-development app release is 1.6.0");
-assert.equal(appBuild, "11", "the in-development app build is 11");
-assert.equal(manifest.version, "0.7.2", "the in-development extension release is 0.7.2");
+assert.equal(appVersion, "1.7.1", "the current public beta app release is 1.7.1");
+assert.equal(appBuild, "21", "the current public beta app build is 21");
+assert.equal(manifest.version, "0.8.7", "the current public beta extension release is 0.8.7");
 assert.equal(appFallback, appVersion, "the unbundled app fallback must match Info.plist");
 assert.equal(buildFallback, appBuild, "the unbundled build fallback must match Info.plist");
 assert.equal(extensionProtocol, appProtocol, "the app and extension must speak the same bridge protocol");

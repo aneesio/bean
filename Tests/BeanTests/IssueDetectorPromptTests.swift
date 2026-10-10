@@ -35,6 +35,18 @@ final class IssueDetectorPromptTests: XCTestCase {
         XCTAssertFalse(IssueDetector.systemPrompt.contains("IssueTerm29"))
     }
 
+    func testRelevantSavedTermAfterUnrelatedEarlyEntriesStillReachesProductionPrompts() throws {
+        let dictionary = (0..<300).map { DictionaryTerm(term: "UnusedTerm\($0)") }
+            + [DictionaryTerm(term: "Quorvio")]
+        let source = "Please review Quorvio."
+        let message = IssueDetector.userMessage(text: source, context: nil, dictionary: dictionary, maximumIssues: 8)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any])
+        XCTAssertEqual(payload["preserveTerms"] as? String, "\"Quorvio\"")
+        let lines = NativeMessagingHost.dictionaryPreservationLines(for: source, dictionary: dictionary)
+        XCTAssertTrue(lines.first?.contains("\"Quorvio\"") == true)
+        XCTAssertFalse(lines.first?.contains("UnusedTerm") == true)
+    }
+
     func testSharedFormatterRetainsCaseSensitiveGuidanceWhenWithinBudget() {
         let formatted = DictionaryPromptFormatter.formattedRelevantTerms(
             from: [DictionaryTerm(term: "BeanCase", caseSensitive: true)],

@@ -8,7 +8,7 @@ import Foundation
 // Length expectations vary by action (Make Concise may be much shorter; Make
 // Clearer / Make Professional may be longer), so the bounds are action-aware.
 //
-// PRIVACY: works on lengths/scripts/shape only and returns a fixed reason CODE
+// PRIVACY: checks shape and bounded concrete markers, returns a fixed reason CODE
 // (never the text) for logging.
 enum OutputSafetyValidator {
 
@@ -27,7 +27,8 @@ enum OutputSafetyValidator {
 
     static func disposition(for reason: String) -> Disposition {
         switch reason {
-        case "too_short", "too_long", "answered_question":
+        case "too_short", "too_long", "answered_question", "changedNumbers",
+             "changedEntities", "changedTemporalFacts", "changedNegation", "changedCommitment":
             return .reviewRequired
         default:
             return .hardBlock
@@ -42,12 +43,23 @@ enum OutputSafetyValidator {
             return "This result is much longer than the original. Review it before replacing."
         case "answered_question":
             return "This may answer the text instead of editing it. Review it before replacing."
+        case "changedNumbers":
+            return "This result changes a number, date, or amount. Check those details before replacing."
+        case "changedEntities":
+            return "This result changes a name or saved term. Check those details before replacing."
+        case "changedTemporalFacts":
+            return "This result changes a day or date reference. Check those details before replacing."
+        case "changedNegation":
+            return "This result may reverse a negative statement. Check the meaning before replacing."
+        case "changedCommitment":
+            return "This result may change a promise, requirement, or uncertainty. Check the meaning before replacing."
         default:
             return "This result is unusual. Review it carefully before replacing."
         }
     }
 
-    static func validate(input: String, output: String, action: WritingAction) -> Result {
+    static func validate(input: String, output: String, action: WritingAction,
+                         protectedTerms: [String] = []) -> Result {
         let inText = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let outText = output.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -66,7 +78,8 @@ enum OutputSafetyValidator {
 
         // Script flip: Latin in, mostly non-Latin out (e.g. translated). Applies
         // to all actions — output should stay in the source language.
-        if isMostlyLatin(inText), isMostlyNonLatin(outText) {
+        if (isMostlyLatin(inText) && isMostlyNonLatin(outText))
+            || (isMostlyNonLatin(inText) && isMostlyLatin(outText)) {
             return .suspicious(reason: "scriptMismatch")
         }
 
@@ -86,8 +99,20 @@ enum OutputSafetyValidator {
         }
 
         // Answered a question instead of transforming it.
-        if looksLikeQuestion(inText), !outText.contains("?"), outText.count < inText.count {
+        if looksLikeQuestion(inText), !looksLikeQuestion(outText), outText.count < inText.count {
             return .suspicious(reason: "answered_question")
+        }
+
+        // An edit should retain concrete facts. Changed numbers can be a
+        // legitimate formatting choice, so require review instead of discarding
+        // the result. Generative actions already returned above.
+        if numericFacts(inText) != numericFacts(outText) {
+            return .suspicious(reason: "changedNumbers")
+        }
+
+        if let reason = TextMeaningPreservation.failure(input: inText, output: outText,
+                                                        action: action, protectedTerms: protectedTerms) {
+            return .suspicious(reason: reason)
         }
 
         return .ok
@@ -115,33 +140,25 @@ enum OutputSafetyValidator {
         return f < 0.3
     }
 
-    private static let questionWords: Set<String> = [
-        "what", "why", "how", "who", "when", "where", "which", "whose", "whom",
-        "is", "are", "am", "do", "does", "did", "can", "could", "would",
-        "should", "will", "was", "were", "has", "have", "had"
-    ]
-
     private static func looksLikeQuestion(_ text: String) -> Bool {
-        if text.contains("?") { return true }
-        let first = text.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? ""
-        return questionWords.contains(first)
+        text.contains("?") || text.contains("？") || text.contains("؟")
     }
-
-    private static let labelPrefixes = [
-        "here is", "here's", "sure,", "sure!", "certainly", "of course",
-        "rewritten text:", "transformed text:", "corrected text:"
-    ]
 
     private static func startsWithLabel(_ text: String) -> Bool {
         let lower = text.lowercased()
-        return labelPrefixes.contains { lower.hasPrefix($0) }
+        let labels = ["rewritten text:", "transformed text:", "corrected text:",
+                      "edited text:", "revised text:"]
+        if labels.contains(where: { lower.hasPrefix($0) }) { return true }
+        // "Here is my availability" and "Certainly, I can help" are normal
+        // writing, particularly in reply drafts. Reject editing wrappers only.
+        let pattern = "^(?:(?:sure[,!]|certainly[,!]|of course[,!])\\s*)?(?:here is|here's|here are)\\s+(?:the |your |a )?(?:corrected|rewritten|transformed|edited|proofread|revised)\\b"
+        return lower.range(of: pattern, options: .regularExpression) != nil
     }
 
     // Phrases that suggest the model echoed the prompt/system framing.
     private static let promptLeakMarkers = [
         "<text_to_correct>", "<provided_text>", "<context>", "system:",
-        "<bean_output>", "</bean_output>", "your task:", "as an ai",
-        "i cannot ", "i can't fulfill"
+        "<bean_output>", "</bean_output>", "your task:", "as an ai"
     ]
 
     private static func leaksPrompt(_ text: String, comparedTo input: String) -> Bool {
@@ -160,5 +177,12 @@ enum OutputSafetyValidator {
         let lower = output.lowercased()
         let inputLower = input.lowercased()
         return commentaryMarkers.contains { lower.contains($0) && !inputLower.contains($0) }
+    }
+
+    private static func numericFacts(_ text: String) -> [String] {
+        guard let expression = try? NSRegularExpression(pattern: "[+-]?\\p{N}+(?:[.,:/-]\\p{N}+)*") else { return [] }
+        let ns = text as NSString
+        return expression.matches(in: text, range: NSRange(location: 0, length: ns.length))
+            .map { ns.substring(with: $0.range) }
     }
 }

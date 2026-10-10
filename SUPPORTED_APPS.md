@@ -1,44 +1,180 @@
 # Supported Apps and Surfaces
 
-Policy matrix version: **1.6** (August 22, 2026). These expectations are backed
-by `FieldCapabilityPolicyTests`; the release checklist still requires live-app
-smoke testing because app and macOS Accessibility implementations can change.
+Policy revision: **1.7.1 public beta, build 21 / extension 0.8.7, October 10, 2026**. Capability
+routing is covered by `FieldCapabilityPolicyTests`; implementation checks are
+covered by focused-field, native-editing, issue-mapping, and geometry tests.
+These do not substitute for live compatibility checks in each application.
 
-Bean uses several text-access paths because macOS applications expose editors
-differently. “Supported” means Bean refuses uncertain operations safely; it does
-not mean every editor implementation can be replaced or highlighted.
+Bean evaluates the focused control rather than excluding entire application
+categories. It resolves editable text descendants and ancestors, enables an
+application's Accessibility tree where supported, and reads range text when
+AXValue is unavailable. Editable WebKit surfaces are identified by editing
+capabilities and use their text-marker APIs when ordinary text attributes are
+missing. This routing does not require a list of supported app names.
+Native span replacement prefers a writable selected-text capability after
+checking the settled range, actual selected text and complete source. Where that
+setter is unavailable, normal Paste/Delete events target the captured app. Both
+paths require an exact output check; an uncertain delivered edit is not retried. Readable rich drafts use bounded, verified span edits for
+Proofread and whole-field Rewrite instead of replacing the entire document as
+plain text. Bean Undo is available only for an exact output in the same field
+and a safe restoration path. An attempted but unconfirmed Undo is consumed;
+its completion cannot erase a newer correction’s history.
 
-## Five reference experiences
+## Expected native paths
 
-| Reference surface | Selected-text action | Focused-field replacement | Bean Bubble | Inline mode | Expected limitation |
-| --- | --- | --- | --- | --- | --- |
-| TextEdit | Supported | Direct verified AX write | Supported with valid bounds | Native, when range geometry verifies | Canonical end-to-end setup check. |
-| Apple Notes | Supported | Direct write or verified paste | Supported/best effort | Native or passive fallback | Rich-note geometry can vary. |
-| Apple Mail | Supported | Direct write or verified paste | Supported/best effort | Native or passive fallback | Test the message composer, not message display. |
-| Slack desktop | Supported | Best-effort Electron paste with stale guards | Bounds or recent click+typing evidence | No native highlight; passive/manual path | Slack may expose no focused AX editor. |
-| Chromium web editor | Supported/best effort | Verified paste when AX exposes the editor | Best effort | Browser extension on by default unless the site is blocked | Plain inputs, textareas, and simple contenteditable editors are the reference surfaces. |
+| Reference surface | Text acquisition / replacement | Live issues | Outstanding live check |
+| --- | --- | --- | --- |
+| TextEdit | Native text and selection; verified span edits where ranges are writable | Native underlines and one field-side assistant | Candidate manual journey, clipboard/caret and native Undo. |
+| Apple Notes | AX value/range text; surgical edits where exact ranges are supported | Underlines when exact range bounds exist; field-side cards otherwise | Candidate rich-note formatting, attachments and native Undo. |
+| Apple Mail | Generic editable WebKit/native composer path; explicit marker-selected passage may use guarded paste | Underlines where exact geometry exists; field-side cards otherwise | Pre-candidate user confirmation of the manual action only. Candidate live corrections, rich formatting, attachments, and other composer variants remain unverified. |
+| Electron apps | Application-provided Accessibility tree, editable ancestors and guarded edits | Native positions where available; field-side cards otherwise | Candidate per-app composer behavior, including Slack and VS Code. |
+| Browser fields | Native capabilities or optional DOM extension; exact range edits | One native or extension assistant for the focused field | Candidate input, textarea, rich contenteditable and framework-controlled field journeys. |
+| Search/address and code-app fields | Eligible when the specific control is editable | Local checking; status-dot visibility can be customized | Technical-token preservation and control boundaries. |
 
-## Deterministic exclusions
+An editor that exposes no readable text or usable editing control may need
+an integration with its editor framework or application. Recent typing evidence can support the existing
+Slack manual acquisition fallback; Bean does not silently scrape text from
+unreadable controls or report those as clean.
 
-| Surface trait | Selected text | Focused field | Bubble | Inline |
-| --- | --- | --- | --- | --- |
-| Password or secure | Excluded | Excluded | Excluded | Excluded |
-| Disabled | Excluded | Excluded | Excluded | Excluded |
-| Read-only text | May be selected manually | Excluded | Excluded | Excluded |
-| Search/address | Manual selection only | Excluded | Off/excluded | Excluded |
-| Code editor | Selected prose only | Excluded | Off unless explicitly enabled | Excluded |
-| Non-text button/control | Excluded | Excluded | Excluded | Excluded |
+## Field status dot
 
-Unknown apps use the same trait policy; Bean does not grant support merely from
-an app name. Bubble bounds and native inline range geometry are rechecked live.
+Native and browser field controls use a 10-point status dot without a visible
+count. Bean-green dots show no current suggestions; vivid red dots with a tiny
+contrasting exclamation mark indicate possible issues. Light/dark and browser forced-color
+appearances retain the marker so the state does not depend only on color.
+Tooltip/accessibility status and the clicked panel retain details;
+a neutral dot is not an assurance that the draft is error-free.
+
+The dot sits inside the exact editable area, preferring a clear top-right corner.
+The pointer target is 28 points in normal fields and 20 points in compact fields;
+the visible dot remains 10 points. Placement avoids available text and caret
+bounds, scrollbars, resize grips and nearby exposed controls, and must stay within
+the source window/viewport. Another clear inside edge is used when the preferred
+corner is occupied. A full-window editor no longer needs outside space.
+
+Native Accessibility text positions are not available in every app. The native
+path uses exposed source-local geometry and bounded nearby-control checks,
+without requiring the full surrounding app tree to be verifiable. Browser fields
+use rendered text fragments or a directional, scroll-aware text-control mirror.
+These checks improve ordinary-field visibility; they do not certify arbitrary
+hidden controls or application-specific custom rendering. Exact field/window
+bounds remain required. Very small, fully occupied, obscured or unsupported
+fields may hide the dot. Underlines and explicit menu-bar/shortcut actions remain
+available where their own capabilities permit. Hiding the dot must not revive a
+larger native launcher or produce duplicate native/browser assistance.
+
+## Control exclusions
+
+- Secure/password and disabled controls are excluded.
+- Explicitly read-only controls do not permit focused-field replacement.
+- Non-text controls do not qualify merely because their app contains an editor.
+- Delayed results never overwrite a changed source or a different focused field.
+- Range geometry may be unavailable without preventing floating suggestions.
+- In a document-style WebKit editor without a usable numeric selection API,
+  individual cards do not replace the entire rich document. Select the desired
+  passage and use a writing action instead; exact marker identity protects that
+  selected destination. Bean Undo is offered only when it has a safe undo path;
+  normal edit events aim to retain the source app's native Undo, which must be
+  verified in that app.
+- A failed shortcut read leaves the source editor focused and shows a brief
+  warning instead of requiring dismissal of a Bean window.
+- Native local checking is bounded to 50,000 characters and manual provider
+  actions to 8,000; a larger field is not treated as a successful clean review.
+
+Optional AXEditable/AXReadOnly attributes are not implemented by every app.
+Readable text with a settable selection can be editable despite having no
+AXValue setter. Bean proves the actual selection before using the supported
+selected-text setter or one guarded Paste/Delete command, then verifies the
+complete result. It does not repeat an uncertain delivered edit blindly.
+
+## Scope, rich content and Undo
+
+Selected passages, whole drafts and the current paragraph are distinct scopes.
+Native paragraph actions require a proven numeric caret and writable range;
+opaque text markers do not provide guessed paragraph offsets. An explicitly
+selected marker passage retains its guarded paste path. Selected rewriting may
+change formatting inside that selection, while unrelated content stays outside
+the target.
+
+Rich whole-field Proofread and Rewrite preserve unchanged spans through bounded
+edits. Changes to paragraph structure, attachment markers, grapheme boundaries,
+or unprovable ranges are declined. Native fields without those editing
+capabilities need an explicit selected passage; there is no silent rich-document
+plain-text fallback. Proven plain single-line inputs retain their guarded
+whole-value fallback.
+
+Browser fallback requires a proven undelivered no-op. Accepted commands, editing
+events, cancellation or uncertain responses never authorize a second mutation.
+Browser rich edits also require safe text-node boundaries. A paragraph-start or
+end insertion uses the actual paragraph node; an ambiguous boundary without
+that scope is refused. Page handlers that move focus, alter text or take over
+the caret stop further edits. Bean restores an unrelated typing position only
+while its last edit still owns the selection. A confirmed partial batch may
+offer Undo for exactly the verified subset; newer writing makes that Undo
+unavailable. Arbitrary rich rewrites and every source app's Undo grouping are
+not guaranteed.
+
+Owned AppKit and nonpersistent WebKit editor fixtures exercise attributed spans,
+links, lists, signatures, attachments, Unicode, selection and reversible edits.
+They establish editor-model behavior, not third-party app or cross-process AX
+compatibility. Live WebKit AX fixtures unavailable in the test host remain skips.
+
+## Checking coverage and controls
+
+Live checking combines conservative local rules with available macOS spelling
+and basic grammar services. Missing language dictionaries, service failures and
+bounded scans are reported as limited coverage. No suggestions means these
+checks found none; it does not certify an error-free draft. Without the native
+bridge, the browser provides its smaller basic rule checker.
+
+Fix All applies only verified, nonoverlapping deterministic local corrections;
+ambiguous spelling guesses and AI suggestions require review. A trusted Learn
+word action saves a spelling token in Bean's dictionary. Browser learning needs
+the compatible bridge and running Bean GUI to acknowledge persistence; failure
+does not claim the word was saved. Ignored occurrences remain dismissed while
+their exact context can be tracked.
+
+English dialect can be Automatic, Canadian, US or British. Automatic follows the
+Mac's spelling language with source-language detection where available; valid
+regional spellings and saved terms are protected. This does not promise complete
+grammar support for every language.
+
+Native automatic assistance can be paused for one hour or until resumed from
+the menu bar; Resume is also available in Writing settings. Manual native
+shortcuts and explicit provider actions remain available. The focused extension
+refreshes app-pause status every five seconds, suppresses automatic basic/Mac/AI
+suggestions when the pause is known, and retains explicit writing controls.
+Website pause lasts
+one hour for the exact host and resumes from the extension popup/settings or on
+expiry. Permanent website disabling includes subdomains. Cancel stops a pending
+explicit provider result from being applied; work already sent may still be
+billed. Native Cancel is available during provider work, before guarded editing.
 
 ## Browser extension
 
+The user confirmed Command-Option-G directly replaces text in ChatGPT, Claude,
+Slack, and Chrome's Gmail composer on October 2, 2026, and subsequently confirmed
+that Mail works after the shared rich-editor fix. These are pre-candidate,
+user-reported manual workflows on those fields, not new 1.7.0 compatibility
+tests. Live underlines and every editor variant still require verification.
+
+For a supported, focused web field, the extension's single control handles
+review, Proofread, and Rewrite while a short lease suppresses overlapping native
+controls. Local checking combines page rules with offline macOS spelling when
+the native bridge is available. Browser toolbar/address controls retain native
+assistance, and an expired or released lease restores the native path.
+
+A separate content-free focus guard can suppress a duplicate native control on
+permanently disabled HTTP(S) websites. It does not inject writing assistance or
+read draft text on those sites. Temporary site pause retains suppression for its
+focused field; browser toolbar/address controls remain separate.
+
 The unpacked Chromium extension works best in plain text inputs, textareas, and
-simple contenteditable editors such as basic Gmail composition. Complex rich
-editors vary. Slack web's ProseMirror composer, Google Docs canvas editing,
-Slack desktop, Safari, password/search/email-address fields, and code editors
-are excluded from the Chromium extension path for 1.6.
+simple contenteditable editors such as basic Gmail composition. Framework-based
+rich editors, including Slack web's ProseMirror composer, are evaluated by their
+editing capabilities and remain unverified on this candidate. Google Docs canvas
+editing, password/search/email-address fields, and code editors are excluded.
+Slack desktop and Safari use the native path rather than the Chromium extension.
 
 When an unsupported or ambiguous target is detected, the correct behavior is to
 show no highlight or decline replacement—not to guess.

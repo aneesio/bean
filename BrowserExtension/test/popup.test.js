@@ -29,6 +29,8 @@ let reloadedTab = null;
 let optionsOpened = false;
 let statusCallback = null;
 let storedSites = ["example.com"];
+let storedPauses={},now=1_000_000;
+const pauseMessages=[];
 let storageChangedListener = null;
 let mutationFailure = false;
 let registrationUpdated = true;
@@ -46,7 +48,7 @@ const readyStatus = {
 const chrome = {
   storage: {
     local: {
-      get: (_keys, callback) => callback({ blockedSites: [...storedSites] }),
+      get: (_keys, callback) => callback({ blockedSites: [...storedSites],pausedSites:storedPauses }),
       set: (value, callback) => { saved = value; storedSites = [...value.blockedSites]; callback(); }
     },
     onChanged: { addListener: (listener) => { storageChangedListener = listener; } }
@@ -55,6 +57,13 @@ const chrome = {
     lastError: null,
     sendMessage: (message, callback) => {
       if (message.type === "getStatus") statusCallback = callback;
+      else if(message.type === "mutateSitePause") {
+        pauseMessages.push(message);
+        if(mutationFailure) {callback({ok:false,errorCode:"settingsUnavailable"});return;}
+        storedPauses=message.operation === "pause" ? {...storedPauses,[message.host]:now + 3600000} :
+          Object.fromEntries(Object.entries(storedPauses).filter(([host]) => host !== message.host));
+        callback({ok:true,pausedSites:storedPauses});
+      }
       else if (message.type === "mutateBlockedSites") {
         mutationMessages.push(message);
         if (mutationFailure) {
@@ -86,6 +95,7 @@ const chrome = {
   }
 };
 
+const sitePolicySource = fs.readFileSync(path.join(__dirname, "..", "src", "sitePolicy.js"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "..", "popup.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "..", "popup.html"), "utf8");
 const context = {
@@ -94,6 +104,7 @@ const context = {
   URL,
   Set,
   Number,
+  Date:{now:() => now},
   setTimeout: (callback) => {
     const id = ++nextTimerID;
     timers.set(id, callback);
@@ -101,7 +112,7 @@ const context = {
   },
   clearTimeout: (id) => { timers.delete(id); }
 };
-vm.runInNewContext(source, context);
+vm.runInNewContext(sitePolicySource + "\n" + source, context);
 
 assert.match(html, /id="site-state"/);
 assert.match(html, /id="app-status"/);
@@ -122,7 +133,8 @@ assert.deepEqual(JSON.parse(JSON.stringify(saved.blockedSites)), ["newly-blocked
   "the authoritative background mutation preserves a concurrent rule");
 assert.equal(mutationMessages.at(-1).operation, "allowHost");
 assert.equal(mutationMessages.at(-1).host, "mail.example.com");
-assert.equal(reloadedTab, 42);
+assert.equal(reloadedTab, null, "changing website preferences never reloads or discards an active draft");
+assert.match(element("message").textContent, /draft is saved/);
 assert.match(element("message").textContent, /enabled for example\.com and its subdomains/);
 
 statusCallback(readyStatus);
@@ -150,6 +162,33 @@ registrationUpdated = true;
 storageChangedListener({ blockedSites: { newValue: ["mail.example.com"] } }, "local");
 assert.equal(element("site-state").textContent, "Blocked",
   "an external blocklist change updates the open popup");
+
+storageChangedListener({ blockedSites: { newValue: ["bad host"] } }, "local");
+assert.equal(element("site-state").textContent, "Unavailable");
+assert.equal(element("site-action").disabled, true,
+  "malformed website preferences never produce a misleading Active state");
+storageChangedListener({ blockedSites: { newValue: [] } }, "local");
+assert.equal(element("site-state").textContent, "Active");
+
+element("site-pause").listeners.click();
+assert.equal(pauseMessages.at(-1).operation,"pause");
+assert.equal(pauseMessages.at(-1).host,"mail.example.com");
+assert.equal(element("site-state").textContent,"Paused");
+assert.equal(element("site-pause").textContent,"Resume on this website");
+assert.equal(reloadedTab,null,"temporary pause preserves the open unsent draft");
+mutationFailure=true;
+element("site-pause").listeners.click();
+assert.equal(element("site-state").textContent,"Paused");
+assert.match(element("message").textContent,/could not|Could not/);
+mutationFailure=false;
+element("site-pause").listeners.click();
+assert.equal(pauseMessages.at(-1).operation,"resume");
+assert.equal(element("site-state").textContent,"Active");
+assert.equal(reloadedTab,null);
+element("site-pause").listeners.click();
+now += 3600001;
+context.renderSite();
+assert.equal(element("site-state").textContent,"Active","expired website pause disappears without reloading");
 
 element("open-settings").listeners.click();
 assert.equal(optionsOpened, true);
@@ -187,8 +226,8 @@ assert.equal(accountingUnavailable.app[0], "Connected");
 assert.equal(accountingUnavailable.ai[0], "Usage safety unavailable");
 assert.match(accountingUnavailable.message, /Local checks still work/);
 assert.match(accountingUnavailable.message, /Check Accounting Again/);
-assert.match(accountingUnavailable.message, /Full Reset in Privacy & Help is a data-erasing last resort/);
-assert.match(accountingUnavailable.message, /contact Support if reset fails/);
+assert.doesNotMatch(accountingUnavailable.message, /Full Reset/, "a routine connection warning never recommends deleting user data");
+
 assert.doesNotMatch(accountingUnavailable.message, /clear usage|clear usage\/history/i);
 assert.equal(context.assessBridgeStatus({
   ok: false, errorCode: "nativeHostForbidden", nativeHostInstalled: true
@@ -223,7 +262,7 @@ const previewContext = {
   setTimeout: () => 1,
   clearTimeout: () => {}
 };
-assert.doesNotThrow(() => vm.runInNewContext(source, previewContext));
+assert.doesNotThrow(() => vm.runInNewContext(sitePolicySource + "\n" + source, previewContext));
 assert.match(previewElements.get("message").textContent, /Preview mode/);
 
 console.log("Browser extension popup tests passed");

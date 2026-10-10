@@ -124,8 +124,11 @@ final class AppSettings: ObservableObject {
         // previously stored hidden background path once on upgrade so an old
         // preference cannot keep spending tokens after its controls disappear.
         static let liveAssistanceSimplificationVersion = "liveAssistanceSimplificationVersion"
+        static let systemWideLocalAssistanceVersion = "systemWideLocalAssistanceVersion"
         static let dailyAutomaticCallLimit = "dailyAutomaticCallLimit"
         static let monthlyTokenWarningThreshold = "monthlyTokenWarningThreshold"
+        static let writingDialect = "writingDialect"
+        static let assistancePausedApps = "assistancePausedApps"
     }
 
     private let defaults: UserDefaults
@@ -150,9 +153,9 @@ final class AppSettings: ObservableObject {
         }
         didSet {
             defaults.set(provider.rawValue, forKey: Keys.provider)
-            // A model ID from the previous provider cannot work after a switch.
-            // Preserve unknown custom IDs, but migrate recognized provider IDs.
-            if model.isEmpty || oldValue.ownsModelID(model) {
+            // Every provider switch selects one of that provider's catalog
+            // choices, including when the old selection was a custom ID.
+            if oldValue != provider {
                 model = provider.defaultModel
             }
         }
@@ -167,6 +170,10 @@ final class AppSettings: ObservableObject {
         didSet {
             defaults.set(model, forKey: Keys.model)
         }
+    }
+
+    var modelChoices: [ProviderModel] {
+        provider.modelChoices(including: model)
     }
 
     @Published var timeoutSeconds: Double {
@@ -282,6 +289,51 @@ final class AppSettings: ObservableObject {
     /// Invoked when an inline-highlights setting affecting monitoring changes.
     var onInlineChanged: (() -> Void)?
 
+    @Published var writingDialect: WritingDialect {
+        didSet {
+            defaults.set(writingDialect.rawValue, forKey: Keys.writingDialect)
+            onInlineChanged?()
+        }
+    }
+
+    /// Bundle identifiers and expiry timestamps only; no writing is stored.
+    /// A negative timestamp means the user paused until they choose Resume.
+    @Published private(set) var assistancePausedApps: [String: Double] {
+        didSet {
+            defaults.set(assistancePausedApps, forKey: Keys.assistancePausedApps)
+            onInlineChanged?()
+        }
+    }
+
+    func isAssistancePaused(for bundleIdentifier: String?, now: Date = Date()) -> Bool {
+        guard let bundleIdentifier, let expiry = assistancePausedApps[bundleIdentifier] else { return false }
+        return expiry < 0 || expiry > now.timeIntervalSince1970
+    }
+
+    func pauseAssistance(in bundleIdentifier: String, for duration: TimeInterval? = 3_600,
+                         now: Date = Date()) {
+        guard Self.validPausedAppIdentifier(bundleIdentifier) else { return }
+        var updated = assistancePausedApps.filter { $0.value < 0 || $0.value > now.timeIntervalSince1970 }
+        guard updated.count < 200 || updated[bundleIdentifier] != nil else { return }
+        if let duration {
+            guard duration.isFinite, duration > 0 else { return }
+            updated[bundleIdentifier] = now.addingTimeInterval(min(duration, 30 * 24 * 3_600)).timeIntervalSince1970
+        } else {
+            updated[bundleIdentifier] = -1
+        }
+        assistancePausedApps = updated
+    }
+
+    func resumeAssistance(in bundleIdentifier: String) {
+        guard assistancePausedApps[bundleIdentifier] != nil else { return }
+        assistancePausedApps.removeValue(forKey: bundleIdentifier)
+    }
+
+    private static func validPausedAppIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 255 && value.contains(".")
+            && value.unicodeScalars.allSatisfy { CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_").contains($0) }
+    }
+
     // MARK: - Bean Bubble (Phase 6.5)
 
     @Published var bubbleEnabled: Bool { didSet { defaults.set(bubbleEnabled, forKey: Keys.bubbleEnabled); onBubbleChanged?() } }
@@ -388,6 +440,16 @@ final class AppSettings: ObservableObject {
             defaults.set(false, forKey: Keys.inlineFallbackPassive)
             defaults.set(1, forKey: Keys.liveAssistanceSimplificationVersion)
         }
+        // Live local help is the product's primary behavior. Repair the old
+        // lab defaults once, without enabling background provider requests.
+        // Later choices to turn local help off remain respected.
+        if defaults.integer(forKey: Keys.systemWideLocalAssistanceVersion) < 1 {
+            defaults.set(true, forKey: Keys.inlineEnabled)
+            defaults.set(true, forKey: Keys.bubbleEnabled)
+            defaults.set(true, forKey: Keys.bubbleInCode)
+            defaults.set(true, forKey: Keys.bubbleInSearch)
+            defaults.set(1, forKey: Keys.systemWideLocalAssistanceVersion)
+        }
 
         let providerRaw = defaults.string(forKey: Keys.provider) ?? ProviderKind.openai.rawValue
         let resolvedProvider = ProviderKind(rawValue: providerRaw) ?? .openai
@@ -426,15 +488,22 @@ final class AppSettings: ObservableObject {
         let pausedTS = defaults.double(forKey: Keys.passivePausedUntil)
         self.passivePausedUntil = pausedTS > 0 ? Date(timeIntervalSince1970: pausedTS) : nil
 
-        // Inline Highlights — off by default.
+        // Live local suggestions — on by default.
         self.inlineHighlightsEnabled = defaults.bool(forKey: Keys.inlineEnabled)
-        let im = defaults.integer(forKey: Keys.inlineMaxIssues); self.inlineMaxIssues = im > 0 ? im : 5
+        let im = defaults.integer(forKey: Keys.inlineMaxIssues); self.inlineMaxIssues = im > 0 ? im : 8
         self.inlineLocalOnly = defaults.object(forKey: Keys.inlineLocalOnly) == nil ? true : defaults.bool(forKey: Keys.inlineLocalOnly)
         self.inlineIncludeLLM = defaults.bool(forKey: Keys.inlineIncludeLLM) // default false
         self.inlineShowExplanation = defaults.object(forKey: Keys.inlineShowExplanation) == nil ? true : defaults.bool(forKey: Keys.inlineShowExplanation)
         self.inlineFallbackPassive = defaults.bool(forKey: Keys.inlineFallbackPassive) // default false
+        self.writingDialect = WritingDialect(rawValue: defaults.string(forKey: Keys.writingDialect) ?? "") ?? .automatic
+        let pausedApps = defaults.dictionary(forKey: Keys.assistancePausedApps) ?? [:]
+        self.assistancePausedApps = Dictionary(uniqueKeysWithValues: pausedApps.sorted(by: { $0.key < $1.key }).prefix(200).compactMap { key, value in
+            guard Self.validPausedAppIdentifier(key), let expiry = value as? Double,
+                  expiry.isFinite, expiry < 0 || expiry > Date().timeIntervalSince1970 else { return nil }
+            return (key, expiry)
+        })
 
-        // Bean Bubble — off by default; sensible defaults otherwise.
+        // Writing actions stay available beside editable fields by default.
         self.bubbleEnabled = defaults.bool(forKey: Keys.bubbleEnabled)
         self.bubbleOnFocus = defaults.object(forKey: Keys.bubbleOnFocus) == nil ? true : defaults.bool(forKey: Keys.bubbleOnFocus)
         self.bubbleOnSelection = defaults.object(forKey: Keys.bubbleOnSelection) == nil ? true : defaults.bool(forKey: Keys.bubbleOnSelection)

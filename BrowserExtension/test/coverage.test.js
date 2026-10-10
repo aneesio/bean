@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const source = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
 let startupListener;
 let registered = null;
+let registrations = null;
 const chrome = {
   runtime: {
     onInstalled: { addListener: () => {} },
@@ -22,7 +23,7 @@ const chrome = {
   action: { onClicked: { addListener: () => {} } },
   scripting: {
     unregisterContentScripts: (_filter, callback) => callback(),
-    registerContentScripts: (scripts, callback) => { registered = scripts[0]; callback(); }
+    registerContentScripts: (scripts, callback) => { registrations=scripts;registered = scripts[0]; callback(); }
   }
 };
 
@@ -33,8 +34,13 @@ assert.ok(registered, "legacy global-off preference no longer prevents all-site 
 assert.deepEqual(JSON.parse(JSON.stringify(registered.matches)), ["http://*/*", "https://*/*"]);
 assert.ok(registered.excludeMatches.includes("https://example.com/*"));
 assert.ok(registered.excludeMatches.includes("https://*.example.com/*"));
+assert.equal(registrations.length,2,"disabled hosts retain a separate content-free native suppression guard");
+const guard=registrations[1];
+assert.deepEqual(JSON.parse(JSON.stringify(guard.matches)),JSON.parse(JSON.stringify(registered.excludeMatches)));
+assert.deepEqual(JSON.parse(JSON.stringify(guard.js)),["src/sitePolicy.js","src/ownershipGuard.js"]);
+assert.equal(guard.allFrames,undefined,"the disabled-site guard is confined to the main document");
 assert.deepEqual(JSON.parse(JSON.stringify(registered.js)), [
-  "src/localDetector.js", "src/trustPolicy.js", "src/issueMapping.js", "src/overlay.js", "src/contentScript.js"
+  "src/sitePolicy.js", "src/localDetector.js", "src/trustPolicy.js", "src/issueMapping.js", "src/overlay.js", "src/contentScript.js"
 ]);
 
 const content = fs.readFileSync(path.join(__dirname, "..", "src", "contentScript.js"), "utf8");
@@ -46,7 +52,7 @@ assert.match(content, /function disableCurrentSite\(\)/);
 assert.match(content, /event\.isTrusted/);
 assert.match(content, /activateInitiallyFocusedField[\s\S]*document\.activeElement/);
 assert.match(content, /function bridgeTextAuthorized\(text\)/);
-assert.match(content, /sendMessage\(\{ type: "getStatus" \}/);
+assert.match(content, /type:\s*"getStatus"/);
 assert.match(content, /BeanTrustPolicy\.bridgeReadiness/);
 assert.match(content, /protocol before the text-bearing request is even constructed\/sent/);
 assert.match(content, /if \(!bridgeTextAuthorized\(text\)\)/);
@@ -78,7 +84,7 @@ assert.match(content, /clearParagraphBusy/);
 assert.match(overlay, /Disable on this field/);
 assert.match(overlay, /Disable on this website/);
 assert.match(overlay, /mouseenter[\s\S]*onActivateGroup/);
-assert.match(overlay, /AI Proofread Paragraph/);
-assert.match(overlay, /Fix Obvious Issues/);
+assert.match(overlay, /Review AI changes/);
+assert.match(overlay, /Fix obvious issues/);
 
 console.log("Browser extension coverage and opt-out tests passed");

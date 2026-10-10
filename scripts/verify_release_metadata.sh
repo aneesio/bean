@@ -37,12 +37,12 @@ grep -Eq "^## $APP_VERSION .*public beta" CHANGELOG.md || {
     exit 1
 }
 
-[[ "$APP_VERSION" == "1.6.0" && "$APP_BUILD" == "11" && "$EXTENSION_VERSION" == "0.7.2" ]] || {
-    echo "error: current public-beta contract must be app 1.6.0 (11), extension 0.7.2" >&2
+[[ "$APP_VERSION" == "1.7.1" && "$APP_BUILD" == "21" && "$EXTENSION_VERSION" == "0.8.7" ]] || {
+    echo "error: current public-beta contract must be app 1.7.1 (21), extension 0.8.7" >&2
     exit 1
 }
 
-grep -Fq "shasum -a 256 Bean-$APP_VERSION-unnotarized.dmg" README.md || {
+grep -Fq "shasum -a 256 Bean-$APP_VERSION-build$APP_BUILD-unnotarized.dmg" README.md || {
     echo "error: README checksum example does not match the app version" >&2
     exit 1
 }

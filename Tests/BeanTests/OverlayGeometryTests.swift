@@ -109,6 +109,147 @@ final class OverlayGeometryTests: XCTestCase {
 
     func testOnlyExplicitActivationRequestsKeyboardInteraction() {
         XCTAssertFalse(OverlayActivationIntent.passiveHover.allowsKeyboardInteraction)
+        XCTAssertFalse(OverlayActivationIntent.pointer.allowsKeyboardInteraction,
+                       "Accept must not activate Bean or move focus away from the writing field")
         XCTAssertTrue(OverlayActivationIntent.explicit.allowsKeyboardInteraction)
+    }
+
+    func testLiveDotPrefersTopRightWithWholeTargetInsideEditor() throws {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let size = try XCTUnwrap(OverlayGeometry.fieldControlSize(for: field))
+        let geometry = FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: [])
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry: geometry, panelSize: size, in: main.visibleFrame))
+        XCTAssertEqual(size, CGSize(width: 28, height: 28))
+        XCTAssertEqual(origin, CGPoint(x: field.maxX - 32, y: field.maxY - 32))
+        XCTAssertTrue(field.contains(CGRect(origin: origin, size: size)))
+        XCTAssertEqual(OverlayGeometry.statusDotDiameter, 8)
+    }
+
+    func testTopRightControlSlidesDotLeftAlongInsideTopEdge() throws {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let button = CGRect(x: 764, y: 508, width: 36, height: 32)
+        let geometry = FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: [button])
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry: geometry, panelSize: CGSize(width: 28, height: 28), in: main.visibleFrame))
+        let target = CGRect(origin: origin, size: CGSize(width: 28, height: 28))
+        XCTAssertEqual(origin.y, field.maxY - 32)
+        XCTAssertLessThanOrEqual(target.maxX, button.minX - 2)
+        XCTAssertTrue(field.contains(target))
+        XCTAssertFalse(button.intersects(target))
+    }
+
+    func testBottomSendButtonAndOutsideToolbarCannotCoverInsideTopDot() throws {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let send = CGRect(x: 764, y: 300, width: 36, height: 36)
+        let outside = CGRect(x: 800, y: 508, width: 40, height: 40)
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry:
+            FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: [send, outside]),
+            panelSize: CGSize(width: 28, height: 28), in: main.visibleFrame))
+        XCTAssertEqual(origin, CGPoint(x: 768, y: 508))
+    }
+
+    func testInsideFullEdgeSearchFindsClearGapMoreThanNinetySixPointsFromCorner() throws {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let left = CGRect(x: 300, y: 506, width: 175, height: 34)
+        let right = CGRect(x: 520, y: 506, width: 280, height: 34)
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry:
+            FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: [left, right]),
+            panelSize: CGSize(width: 28, height: 28), in: main.visibleFrame))
+        XCTAssertEqual(origin.y, field.maxY - 32)
+        XCTAssertGreaterThan(field.maxX - 32 - origin.x, 96)
+        XCTAssertGreaterThanOrEqual(origin.x, left.maxX + 2)
+        XCTAssertLessThanOrEqual(origin.x + 28, right.minX - 2)
+    }
+
+    func testFullscreenEditorStillShowsDotInsideTopRight() throws {
+        let field = main.visibleFrame
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry:
+            FieldOverlayGeometry(fieldRect: field, windowRect: field, exclusionRects: []),
+            panelSize: CGSize(width: 28, height: 28), in: main.visibleFrame))
+        XCTAssertEqual(origin, CGPoint(x: field.maxX - 32, y: field.maxY - 32))
+        XCTAssertTrue(field.contains(CGRect(origin: origin, size: CGSize(width: 28, height: 28))))
+    }
+
+    func testPartlyClippedEditorUsesVisibleWindowAndNegativeOriginDisplay() throws {
+        let field = CGRect(x: -1700, y: 0, width: 400, height: 700)
+        let window = CGRect(x: -1800, y: -50, width: 800, height: 500)
+        let geometry = FieldOverlayGeometry(fieldRect: field, windowRect: window, exclusionRects: [])
+        let size = CGSize(width: 28, height: 28)
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry: geometry, panelSize: size, in: left.visibleFrame))
+        let target = CGRect(origin: origin, size: size)
+        XCTAssertEqual(origin, CGPoint(x: field.maxX - 32, y: window.maxY - 32))
+        XCTAssertTrue(field.contains(target))
+        XCTAssertTrue(window.contains(target))
+        XCTAssertTrue(left.visibleFrame.contains(target))
+    }
+
+    func testKnownGlyphAndCaretRectsProtectTheCompleteInsideTarget() throws {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let glyph = CGRect(x: 600, y: 514, width: 190, height: 20)
+        let caret = CGRect(x: 795, y: 514, width: 1, height: 20)
+        let geometry = FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: [glyph, caret])
+        let size = CGSize(width: 28, height: 28)
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry: geometry, panelSize: size, in: main.visibleFrame))
+        let target = CGRect(origin: origin, size: size)
+        XCTAssertFalse(glyph.insetBy(dx: -2, dy: -2).intersects(target))
+        XCTAssertFalse(caret.insetBy(dx: -2, dy: -2).intersects(target))
+        XCTAssertTrue(field.contains(target))
+    }
+
+    func testTransparentTargetCornerCannotHideAnInternalButton() {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let target = CGRect(x: 768, y: 508, width: 28, height: 28)
+        let button = CGRect(x: target.minX, y: target.minY, width: 3, height: 3)
+        XCTAssertFalse(OverlayGeometry.isSafeFieldControlFrame(target,
+            geometry: FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: [button]),
+            in: main.visibleFrame))
+    }
+
+    func testCompactSingleLineFieldsUseTwentyPointTargetAndAdaptivePadding() throws {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 22)
+        let size = try XCTUnwrap(OverlayGeometry.fieldControlSize(for: field))
+        XCTAssertEqual(size, CGSize(width: 20, height: 20))
+        let origin = try XCTUnwrap(OverlayGeometry.issueTrayOrigin(geometry:
+            FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: []),
+            panelSize: size, in: main.visibleFrame))
+        XCTAssertEqual(origin, CGPoint(x: field.maxX - 22, y: field.minY + 1))
+        XCTAssertTrue(field.contains(CGRect(origin: origin, size: size)))
+        XCTAssertEqual(OverlayGeometry.fieldControlSize(for: CGRect(x: 0, y: 0, width: 300, height: 32)), CGSize(width: 28, height: 28))
+        XCTAssertNil(OverlayGeometry.fieldControlSize(for: CGRect(x: 0, y: 0, width: 300, height: 19)))
+    }
+
+    func testUnknownBoundsAndFullyOccupiedEditorHaveNoOutsideFallback() {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let size = CGSize(width: 28, height: 28)
+        XCTAssertNil(OverlayGeometry.issueTrayOrigin(geometry: nil, panelSize: size, in: main.visibleFrame))
+        XCTAssertNil(OverlayGeometry.issueTrayOrigin(geometry:
+            FieldOverlayGeometry(fieldRect: .null, windowRect: main.visibleFrame, exclusionRects: []), panelSize: size, in: main.visibleFrame))
+        XCTAssertNil(OverlayGeometry.issueTrayOrigin(geometry:
+            FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: [field]), panelSize: size, in: main.visibleFrame))
+        XCTAssertNil(OverlayGeometry.issueTrayOrigin(geometry:
+            FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: []),
+            panelSize: CGSize(width: 10, height: 10), in: main.visibleFrame))
+        XCTAssertFalse(OverlayGeometry.isSafeFieldControlFrame(CGRect(x: 804, y: 300, width: 28, height: 28),
+            geometry: FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: []), in: main.visibleFrame))
+    }
+
+    func testCandidateSearchIsBoundedAndEveryTargetRemainsWithinEditor() {
+        let field = CGRect(x: 300, y: 300, width: 500, height: 240)
+        let obstacles = (0..<80).map { index in CGRect(x: 305 + CGFloat(index) * 6, y: 512, width: 2, height: 20) }
+        let geometry = FieldOverlayGeometry(fieldRect: field, windowRect: main.visibleFrame, exclusionRects: obstacles)
+        let candidates = OverlayGeometry.issueTrayCandidateFrames(geometry: geometry, panelSize: CGSize(width: 28, height: 28), in: main.visibleFrame)
+        XCTAssertFalse(candidates.isEmpty)
+        XCTAssertLessThanOrEqual(candidates.count, 96)
+        XCTAssertEqual(Set(candidates.map { "\($0.origin.x):\($0.origin.y)" }).count, candidates.count)
+        for target in candidates {
+            XCTAssertTrue(OverlayGeometry.isSafeFieldControlFrame(target, geometry: geometry, in: main.visibleFrame))
+        }
+    }
+
+    func testInlineCardMakesInvisibleSpacingAndDeletionUnderstandable() {
+        XCTAssertEqual(InlineSuggestionDisplay.text("  "), "2 spaces")
+        XCTAssertEqual(InlineSuggestionDisplay.text(" "), "1 space")
+        XCTAssertEqual(InlineSuggestionDisplay.text(". "), ".␣")
+        XCTAssertEqual(InlineSuggestionDisplay.text(""), "Remove")
+        XCTAssertEqual(InlineSuggestionDisplay.text("the message"), "the message")
     }
 }

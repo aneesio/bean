@@ -1,14 +1,6 @@
 import Foundation
 import Combine
 
-enum UserContentFileLimits {
-    /// Bounds both app imports/loads and the native host's dictionary-only read.
-    /// Two megabytes is ample for text preferences while preventing a crafted
-    /// JSON file from causing unbounded allocation or decode work.
-    static let maximumEncodedBytes = 2_000_000
-    static let maximumNativeDictionaryTerms = 5_000
-}
-
 // The result of resolving style + Writing Context + dictionary into prompt material.
 struct Personalization {
     /// Bounded user-authored preferences for the JSON user-role payload. These

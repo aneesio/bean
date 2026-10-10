@@ -186,8 +186,6 @@ enum FieldCapabilityPolicy {
         guard preferences.focusedFieldFallbackEnabled else {
             return .init(level: .unsupported, reason: "focusedFieldFallbackDisabled")
         }
-        if traits.isSearchLike { return .init(level: .unsupported, reason: "searchFieldDisabled") }
-        if category == .codeEditor { return .init(level: .unsupported, reason: "codeEditorDisabled") }
         if traits.acceptsTextInput {
             return .init(level: traits.isValueSettable ? .supported : .degraded,
                          reason: traits.isValueSettable
@@ -237,21 +235,22 @@ enum FieldCapabilityPolicy {
     private static func inlineAssessment(bundleIdentifier: String?, category: AppCategory,
                                          traits: FieldTraits,
                                          preferences: CapabilityPreferences) -> CapabilityAssessment {
-        if traits.isSearchLike { return .init(level: .unsupported, reason: "searchFieldDisabled") }
-        if category == .codeEditor { return .init(level: .unsupported, reason: "codeEditorDisabled") }
-        if AppCategory.isBrowser(bundleIdentifier) {
-            return .init(level: .degraded,
-                         reason: preferences.webInlineEnabled
-                            ? "browserExtensionEnabled" : "browserExtensionRequired")
-        }
-        if AppCategory.isElectron(bundleIdentifier) {
-            return .init(level: .degraded, reason: "electronEditorRequiresAdapter")
-        }
         guard traits.acceptsTextInput else {
-            return .init(level: .unsupported, reason: "richTextUnsupported")
+            return .init(level: .unsupported, reason: "readOnlyField")
         }
         guard preferences.inlineEnabled else {
             return .init(level: .degraded, reason: "supportedButDisabled")
+        }
+        if traits.nativeRangeBoundsReliable == true {
+            return .init(level: .supported, reason: "nativeRangeBoundsAvailable")
+        }
+        if AppCategory.isBrowser(bundleIdentifier) {
+            return .init(level: .degraded,
+                         reason: preferences.webInlineEnabled
+                            ? "browserExtensionEnabled" : "nativeRangeBoundsMissing")
+        }
+        if AppCategory.isElectron(bundleIdentifier) {
+            return .init(level: .degraded, reason: "nativeRangeBoundsMissing")
         }
         switch traits.nativeRangeBoundsReliable {
         case .some(true): return .init(level: .supported, reason: "nativeRangeBoundsAvailable")

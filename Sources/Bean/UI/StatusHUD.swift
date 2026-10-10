@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// Monotonic identity for HUD presentations and dismissals. Any asynchronous
 /// completion may mutate the panel only while its token is still current.
@@ -47,8 +48,8 @@ final class StatusHUD {
             case .progress: return .secondaryLabelColor
             case .success: return .systemGreen
             case .info: return .systemBlue
-            case .warning: return .systemOrange
-            case .error: return .systemRed
+            case .warning: return NSColor(BeanDesign.warning)
+            case .error: return NSColor(BeanDesign.danger)
             }
         }
     }
@@ -56,6 +57,8 @@ final class StatusHUD {
     private var panel: NSPanel?
     private var dismissWorkItem: DispatchWorkItem?
     private var lastMessage: String?
+    private var undoAction: (() -> Void)?
+    private var cancelAction: (() -> Void)?
     private var presentationGeneration = StatusHUDPresentationGeneration()
     private let reduceMotion: () -> Bool
     private let announcementHandler: ((String) -> Void)?
@@ -86,12 +89,14 @@ final class StatusHUD {
     func showProgress(
         _ message: String,
         sourceAppName: String? = nil,
-        sourceAnchorRect: CGRect? = nil
+        sourceAnchorRect: CGRect? = nil,
+        onCancel: (() -> Void)? = nil
     ) {
         show(
             .progress,
             Self.sourceAwareMessage(message, sourceAppName: sourceAppName),
-            sourceAnchorRect: sourceAnchorRect
+            sourceAnchorRect: sourceAnchorRect,
+            onCancel: onCancel
         )
     }
 
@@ -100,10 +105,26 @@ final class StatusHUD {
     func showConfirmedSuccess(
         _ message: String,
         sourceAppName: String? = nil,
-        sourceAnchorRect: CGRect? = nil
+        sourceAnchorRect: CGRect? = nil,
+        onUndo: (() -> Void)? = nil
     ) {
         show(
             .success,
+            Self.sourceAwareMessage(message, sourceAppName: sourceAppName),
+            sourceAnchorRect: sourceAnchorRect,
+            onUndo: onUndo
+        )
+    }
+
+    /// A read failure has no decision to make. Leave the user's editor focused
+    /// and give them enough time to read the warning without dismissing a modal.
+    func showWarning(
+        _ message: String,
+        sourceAppName: String? = nil,
+        sourceAnchorRect: CGRect? = nil
+    ) {
+        show(
+            .warning,
             Self.sourceAwareMessage(message, sourceAppName: sourceAppName),
             sourceAnchorRect: sourceAnchorRect
         )
@@ -112,13 +133,17 @@ final class StatusHUD {
     /// Compatibility entry point. New flows should use the explicit progress
     /// and confirmed-success methods above; actionable failures use a notice.
     /// Progress messages persist until the next show; all others auto-dismiss.
-    func show(_ style: Style, _ message: String, sourceAnchorRect: CGRect? = nil) {
+    func show(_ style: Style, _ message: String, sourceAnchorRect: CGRect? = nil,
+              onUndo: (() -> Void)? = nil, onCancel: (() -> Void)? = nil) {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
         let presentation = presentationGeneration.advance()
 
         let panel = panel ?? makePanel()
         self.panel = panel
+        undoAction = onUndo
+        cancelAction = onCancel
+        panel.ignoresMouseEvents = onUndo == nil && onCancel == nil
 
         let isRepeat = (message == lastMessage) && panel.isVisible
         lastMessage = message
@@ -155,7 +180,8 @@ final class StatusHUD {
                 self?.dismiss(ifCurrent: presentation)
             }
             dismissWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+            let duration: TimeInterval = onUndo != nil || style == .warning || style == .error ? 6 : 2.2
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
         }
     }
 
@@ -171,6 +197,8 @@ final class StatusHUD {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
         lastMessage = nil
+        undoAction = nil
+        cancelAction = nil
         let dismissal = presentationGeneration.advance()
         guard let panel, panel.isVisible else { return }
         let duration = Self.animationDuration(reduceMotion: reduceMotion(), appearing: false)
@@ -255,7 +283,18 @@ final class StatusHUD {
         label.translatesAutoresizingMaskIntoConstraints = false
         label.setAccessibilityLabel(message)
 
-        let stack = NSStackView(views: [badge, label])
+        var views: [NSView] = [badge, label]
+        if cancelAction != nil {
+            views.append(actionButton("Cancel", accessibilityLabel: "Cancel the current writing action") {
+                [weak self] in self?.cancelPressed()
+            })
+        }
+        if undoAction != nil {
+            views.append(actionButton("Undo", accessibilityLabel: "Undo Bean's last change") {
+                [weak self] in self?.undoPressed()
+            })
+        }
+        let stack = NSStackView(views: views)
         stack.orientation = .horizontal
         stack.spacing = 10
         stack.alignment = .centerY
@@ -277,6 +316,34 @@ final class StatusHUD {
         let height = max(fitting.height, 44)
         panel.setContentSize(NSSize(width: width, height: height))
         panel.contentView = container
+    }
+
+    /// Share the same native capsule controls as the SwiftUI panels while
+    /// retaining the HUD's existing AppKit layout and nonactivating window.
+    private func actionButton(_ title: String, accessibilityLabel: String,
+                              action: @escaping () -> Void) -> NSView {
+        let button = Button(title, action: action)
+            .beanButton(.secondary)
+            .controlSize(.small)
+            .accessibilityLabel(accessibilityLabel)
+        let host = NSHostingView(rootView: button)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.setContentHuggingPriority(.required, for: .horizontal)
+        return host
+    }
+
+    @objc private func undoPressed() {
+        let action = undoAction
+        undoAction = nil
+        dismiss()
+        action?()
+    }
+
+    @objc private func cancelPressed() {
+        let action = cancelAction
+        cancelAction = nil
+        dismiss()
+        action?()
     }
 
     static func preferredScreenIndex(

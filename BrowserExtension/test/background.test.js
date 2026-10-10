@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
+const sitePolicySource = fs.readFileSync(path.join(__dirname, "..", "src", "sitePolicy.js"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
 const EXTENSION_ID = "bean-extension-id";
 
@@ -47,7 +48,8 @@ function makeHarness(initialSettings = {}) {
   const timers = new Map();
   const nativeCalls = [];
   const storage = { ...initialSettings };
-  let currentTab = { id: 7, url: "https://example.com/editor" };
+  let currentTab = { id: 7, url: "https://example.com/editor",active:true,windowId:3 };
+  let windowFocused = true;
   let currentDocumentID = "document-1";
   let tabReadError = null;
   let deferTabReads = false;
@@ -90,7 +92,8 @@ function makeHarness(initialSettings = {}) {
     },
     storage: {
       local: {
-        get: (_keys, callback) => callback({ ...storage }),
+        get: (keys, callback) => callback(Object.fromEntries((Array.isArray(keys) ? keys : Object.keys(storage))
+          .filter((key) => Object.prototype.hasOwnProperty.call(storage,key)).map((key) => [key,storage[key]]))),
         set: (value, callback) => {
           Object.assign(storage, value);
           if (callback) callback();
@@ -124,7 +127,7 @@ function makeHarness(initialSettings = {}) {
             ? documentChallengeResponse(message, options)
             : documentChallengeResponse;
           callback(targetExists
-            ? (response || { ok: true, requestId: message.requestId })
+            ? (response || { ok: true, requestId: message.requestId,fieldToken:message.fieldToken })
             : undefined);
           chrome.runtime.lastError = null;
         };
@@ -132,13 +135,14 @@ function makeHarness(initialSettings = {}) {
         else finish();
       }
     },
+    windows:{get:(_id,callback) => callback({id:3,focused:windowFocused})},
     scripting: {
       unregisterContentScripts: (_filter, callback) => callback(),
       registerContentScripts: (_scripts, callback) => callback()
     }
   };
 
-  vm.runInNewContext(source, {
+  vm.runInNewContext(sitePolicySource + "\n" + source, {
     chrome, URL, Object, Array, Set, Date, Math, Number, String,
     setTimeout: (callback, delay) => {
       const id = nextTimerID++;
@@ -182,6 +186,7 @@ function makeHarness(initialSettings = {}) {
     nativeCalls, documentChallenges, storage, send, respond, disconnectNative, fireTimerWithDelay,
     timerDelays: () => [...timers.values()].map((timer) => timer.delay),
     setCurrentTab: (tab) => { currentTab = tab ? { ...tab } : null; },
+    setWindowFocused:(value) => { windowFocused = value; },
     setCurrentDocumentID: (id) => { currentDocumentID = id; },
     setDocumentChallengeResponse: (response) => { documentChallengeResponse = response; },
     setTabReadError: (message) => { tabReadError = message; },
@@ -282,7 +287,7 @@ function readyStatus(call, overrides = {}) {
   assert.equal(harness.documentChallenges.length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(harness.documentChallenges[0])), {
     id: 7,
-    message: { type: "revalidateTextRequest", requestId: "detect-happy" },
+    message: { type: "revalidateTextRequest", requestId: "detect-happy",purpose:"detectIssues" },
     options: { frameId: 0, documentId: "document-1" }
   });
   assert.equal(JSON.stringify(harness.documentChallenges[0]).includes(message.request.text), false,
@@ -729,7 +734,7 @@ for (const [nativeReply, expectedCode] of [
     chrome, URL, Object, Array, Set, Date, Math, Number, String,
     setTimeout: () => 1, clearTimeout: () => {}
   };
-  vm.runInNewContext(source, context);
+  vm.runInNewContext(sitePolicySource + "\n" + source, context);
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.patternsForHosts("corrupt-not-an-array"))),
@@ -802,7 +807,7 @@ for (const [nativeReply, expectedCode] of [
       registerContentScripts: (_scripts, callback) => callback()
     }
   };
-  vm.runInNewContext(source, {
+  vm.runInNewContext(sitePolicySource + "\n" + source, {
     chrome, URL, Object, Array, Set, Date, Math, Number, String,
     setTimeout: () => 1, clearTimeout: () => {}
   });
@@ -834,4 +839,266 @@ for (const [nativeReply, expectedCode] of [
   );
 }
 
-console.log("Browser extension background trust, lifecycle, concurrency, and timeout tests passed");
+// Offline spelling remains available when every automatic AI gate is closed.
+{
+  const harness = makeHarness({legacyAIOptOut:true});
+  const responses = harness.send(textMessage("local-offline",{type:"localCheck",settings:{maxIssues:32}}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{
+    localCheckAvailable:true,providerConfigured:false,webInlineEnabled:false,automaticAccountingAvailable:false
+  }));
+  assert.equal(harness.nativeCalls.length,2);
+  assert.equal(harness.nativeCalls[1].message.type,"localCheck");
+  assert.equal(harness.nativeCalls[1].message.settings.maxIssues,32);
+  assert.equal(harness.documentChallenges[0].message.purpose,"localCheck");
+  harness.respond(1,{id:"local-offline",ok:true,issues:[],localSpellingAvailable:true});
+  assert.equal(responses[0].ok,true);
+}
+{
+  const harness = makeHarness({blockedSites:["example.com"]});
+  const responses = harness.send(textMessage("local-blocked",{type:"localCheck"}));
+  assert.equal(responses[0].errorCode,"siteBlocked");
+  assert.equal(harness.nativeCalls.length,0,"blocked sites never send offline text either");
+}
+{
+  const harness = makeHarness();
+  const responses = harness.send(textMessage("local-old-host",{type:"localCheck"}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0]));
+  assert.equal(responses[0].errorCode,"localCheckerUnavailable");
+  assert.equal(harness.nativeCalls.length,1,"an older host never receives an unsupported text request");
+}
+
+// Explicit actions use a verified, single-use DOM authorization and the manual
+// provider path. Automatic opt-out/accounting must not disable an intentional UI action.
+{
+  const harness = makeHarness({legacyAIOptOut:true});
+  const responses = harness.send(textMessage("explicit-action",{type:"performAction",action:"makeClearer"}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{
+    performActionAvailable:true,webInlineEnabled:false,automaticAccountingAvailable:false
+  }));
+  assert.equal(harness.nativeCalls.length,2);
+  assert.equal(harness.documentChallenges[0].message.purpose,"performAction");
+  assert.equal(harness.nativeCalls[1].message.action,"makeClearer");
+  harness.respond(1,{id:"explicit-action",ok:true,text:"Clear text"});
+  assert.equal(responses[0].ok,true);
+}
+{
+  const harness = makeHarness();
+  const responses = harness.send(textMessage("unsupported-action",{type:"performAction",action:"sendEmail"}));
+  assert.equal(responses[0].errorCode,"invalidAction");
+  assert.equal(harness.nativeCalls.length,0);
+}
+
+// A long provider call cannot block offline spelling or the five-second UI lease.
+{
+  const harness = makeHarness();
+  const paid = harness.send(textMessage("slow-ai"));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{localCheckAvailable:true,performActionAvailable:true}));
+  assert.equal(harness.nativeCalls[1].message.type,"detectIssues");
+  const local = harness.send(textMessage("fast-local",{type:"localCheck"}));
+  assert.equal(harness.nativeCalls[2].message.type,"localCheck","offline request bypasses the provider queue");
+  const ownership = harness.send({type:"fieldOwnership",ownership:{fieldToken:"field-a",active:true}});
+  assert.equal(harness.nativeCalls[3].message.type,"fieldOwnership");
+  assert.equal("text" in harness.nativeCalls[3].message,false);
+  // Check serialized payload privacy, not URL trust.
+  assert.doesNotMatch(JSON.stringify(harness.nativeCalls[3].message), /example[.]com/);
+  harness.respond(3,{id:harness.nativeCalls[3].message.id,ok:true,ownershipAccepted:true});
+  harness.respond(2,{id:"fast-local",ok:true,issues:[],localSpellingAvailable:true});
+  assert.equal(local[0].ok,true);
+  assert.equal(ownership[0].ownershipAccepted,true);
+  assert.equal(paid.length,0,"the original provider request remains independently pending");
+}
+
+for (const mutation of [
+  (h) => h.setCurrentTab({id:7,url:"https://example.com/editor",active:false,windowId:3}),
+  (h) => h.setWindowFocused(false),
+  (h) => h.setDocumentChallengeResponse({ok:false,fieldToken:"field-a"})
+]) {
+  const harness = makeHarness(); mutation(harness);
+  const response = harness.send({type:"fieldOwnership",ownership:{fieldToken:"field-a",active:true}});
+  assert.equal(response[0].ownershipAccepted,false);
+  assert.equal(harness.nativeCalls.length,0,"inactive/unfocused/unverified fields cannot suppress native help");
+}
+{
+  const harness = makeHarness();
+  harness.deferTabReads();
+  const older = harness.send({type:"fieldOwnership",ownership:{fieldToken:"field-a",active:true}});
+  const release = harness.send({type:"fieldOwnership",ownership:{fieldToken:"field-a",active:false}});
+  assert.equal(harness.nativeCalls.length,1,"release bypasses pending focus checks");
+  harness.resolveTabRead();
+  assert.equal(older[0].ownershipAccepted,false,"a delayed older claim cannot resurrect a released field");
+  assert.equal(harness.nativeCalls.length,1);
+  harness.respond(0,{id:harness.nativeCalls[0].message.id,ok:true,ownershipAccepted:true});
+  assert.equal(release[0].ok,true);
+}
+{
+  const harness = makeHarness();
+  harness.send({type:"fieldOwnership",ownership:{fieldToken:"old-field",active:true}});
+  harness.respond(0,{id:harness.nativeCalls[0].message.id,ok:true,ownershipAccepted:true});
+  harness.deferTabReads();
+  harness.send({type:"fieldOwnership",ownership:{fieldToken:"new-field",active:true}});
+  const oldRelease = harness.send({type:"fieldOwnership",ownership:{fieldToken:"old-field",active:false}});
+  assert.equal(oldRelease[0].ownershipAccepted,false,"an old field release cannot invalidate a pending new field");
+  harness.resolveTabRead();
+  harness.resolveTabRead();
+  assert.equal(harness.nativeCalls[1].message.ownership.fieldToken,"new-field");
+  const navigatingSender = contentSender({tab:{id:7,url:"https://elsewhere.example/new"}});
+  const newRelease = harness.send({type:"fieldOwnership",ownership:{fieldToken:"new-field",active:false}},navigatingSender);
+  assert.equal(harness.nativeCalls[2].message.ownership.active,false,"known document can release after navigation");
+  harness.respond(2,{id:harness.nativeCalls[2].message.id,ok:true,ownershipAccepted:true});
+  assert.equal(newRelease[0].ok,true);
+}
+
+// Dictionary learning is an offline explicit action with the same immutable
+// document challenge as writing actions. The worker forwards one token only.
+{
+  const harness = makeHarness({legacyAIOptOut:true});
+  const responses = harness.send(textMessage("learn-word",{type:"learnDictionaryTerm",text:"Beaniverse"}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{learnWordAvailable:true,providerConfigured:false,webInlineEnabled:false}));
+  assert.equal(harness.nativeCalls.length,2);
+  assert.equal(harness.documentChallenges.at(-1).message.purpose,"learnDictionaryTerm");
+  assert.equal(harness.nativeCalls[1].message.text,"Beaniverse");
+  assert.equal("source" in harness.nativeCalls[1].message,false,"host only receives the token and protocol metadata");
+  harness.respond(1,{id:"learn-word",ok:true,learnedTerm:"Beaniverse"});
+  assert.equal(responses[0].learnedTerm,"Beaniverse");
+}
+{
+  const harness = makeHarness();
+  const responses = harness.send(textMessage("learn-unavailable",{type:"learnDictionaryTerm",text:"Beaniverse"}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{learnWordAvailable:false}));
+  assert.equal(responses[0].errorCode,"dictionaryUnavailable");
+  assert.equal(harness.nativeCalls.length,1,"an unavailable GUI dictionary receives no word");
+}
+for (const text of ["two words","private@example.com","word!","a".repeat(97)]) {
+  const harness = makeHarness();
+  const response = harness.send(textMessage("learn-invalid",{type:"learnDictionaryTerm",text}));
+  assert.equal(response[0].ok,false); assert.equal(harness.nativeCalls.length,0);
+}
+{
+  const harness = makeHarness();
+  harness.setDocumentChallengeResponse({ok:false,requestId:"learn-stale"});
+  const responses = harness.send(textMessage("learn-stale",{type:"learnDictionaryTerm",text:"Beaniverse"}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{learnWordAvailable:true}));
+  assert.equal(responses[0].ok,false);
+  assert.equal(harness.nativeCalls.length,1,"a stale word cannot be persisted after the DOM snapshot changes");
+}
+
+// Pausing is immediate policy, not registration or a draft reload. It blocks
+// pending handshakes, queued work and late responses; resume uses the same page.
+{
+  const harness = makeHarness();
+  const pause = harness.send({type:"mutateSitePause",operation:"pause"});
+  assert.equal(pause[0].ok,true);
+  assert.ok(harness.storage.pausedSites["example.com"] > Date.now());
+  const blocked = harness.send(textMessage("paused-local",{type:"localCheck"}));
+  assert.equal(blocked[0].errorCode,"sitePaused");
+  assert.equal(harness.nativeCalls.length,0);
+  const lease = harness.send({type:"fieldOwnership",ownership:{fieldToken:"paused-field",active:true}});
+  assert.equal(harness.nativeCalls[0].message.type,"fieldOwnership","paused fields retain content-free suppression of duplicate native UI");
+  harness.respond(0,{id:harness.nativeCalls[0].message.id,ok:true,ownershipAccepted:true});
+  assert.equal(lease[0].ok,true);
+  const resume = harness.send({type:"mutateSitePause",host:"example.com",operation:"resume"},extensionSender());
+  assert.equal(resume[0].ok,true);
+  const restored = harness.send(textMessage("resumed-local",{type:"localCheck"}));
+  harness.respond(1,readyStatus(harness.nativeCalls[1],{localCheckAvailable:true}));
+  harness.respond(2,{id:"resumed-local",ok:true,issues:[]});
+  assert.equal(restored[0].ok,true);
+}
+{
+  const harness = makeHarness();
+  const responses = harness.send(textMessage("pause-during-handshake",{type:"performAction",action:"makeClearer"}));
+  harness.send({type:"mutateSitePause",operation:"pause"});
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{performActionAvailable:true}));
+  assert.equal(responses[0].errorCode,"sitePaused");
+  assert.equal(harness.nativeCalls.length,1);
+}
+{
+  const harness = makeHarness();
+  const responses = harness.send(textMessage("pause-late-result",{type:"performAction",action:"makeClearer"}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{performActionAvailable:true}));
+  harness.send({type:"mutateSitePause",operation:"pause"});
+  harness.respond(1,{id:"pause-late-result",ok:true,text:"Provider replacement"});
+  assert.equal(responses[0].errorCode,"sitePaused","provider output cannot bypass a later pause");
+}
+{
+  const harness = makeHarness({pausedSites:{"example.com":"corrupt"}});
+  const response = harness.send(textMessage("bad-pause-policy",{type:"localCheck"}));
+  assert.equal(response[0].errorCode,"settingsUnavailable");
+  assert.equal(harness.nativeCalls.length,0);
+}
+{
+  const harness = makeHarness();
+  const response = harness.send({type:"mutateSitePause",host:"another.example",operation:"pause"});
+  assert.equal(response[0].ok,false,"a website cannot pause a different host");
+  assert.equal(harness.storage.pausedSites,undefined);
+}
+
+// Cancellation invalidates authorization but keeps an already running provider
+// in its bounded slot until completion, so cancel cannot create parallel calls.
+{
+  const harness = makeHarness();
+  const responses = harness.send(textMessage("cancel-handshake",{type:"performAction",action:"makeClearer"}));
+  harness.send({type:"cancelWritingAction",requestId:"cancel-handshake"});
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{performActionAvailable:true}));
+  assert.equal(responses[0].errorCode,"cancelled");
+  assert.equal(harness.nativeCalls.length,1);
+}
+{
+  const harness = makeHarness();
+  harness.deferDocumentChallenges();
+  const responses = harness.send(textMessage("cancel-challenge",{type:"performAction",action:"makeClearer"}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{performActionAvailable:true}));
+  harness.send({type:"cancelWritingAction",requestId:"cancel-challenge"});
+  harness.resolveDocumentChallenge();
+  assert.equal(responses[0].errorCode,"cancelled");
+  assert.equal(harness.nativeCalls.length,1,"cancel before the challenge returns sends no source text");
+}
+{
+  const harness = makeHarness();
+  const responses = harness.send(textMessage("cancel-inflight",{type:"performAction",action:"makeClearer"}));
+  harness.respond(0,readyStatus(harness.nativeCalls[0],{performActionAvailable:true}));
+  const foreign = harness.send({type:"cancelWritingAction",requestId:"cancel-inflight"},contentSender({documentId:"other-document"}));
+  assert.equal(foreign[0].errorCode,"unauthorizedSender");
+  harness.send({type:"cancelWritingAction",requestId:"cancel-inflight"});
+  const queued = harness.send(textMessage("after-cancel",{type:"performAction",action:"makeClearer"}));
+  assert.equal(harness.nativeCalls.length,2,"cancel leaves the running provider slot occupied");
+  assert.equal(queued[0].errorCode,"bridgeBusy");
+  harness.respond(1,{id:"cancel-inflight",ok:true,text:"Late replacement"});
+  assert.equal(responses[0].errorCode,"cancelled","a late provider response cannot apply canceled changes");
+  const retry = harness.send(textMessage("after-cancel",{type:"performAction",action:"makeClearer"}));
+  assert.equal(harness.nativeCalls[2].message.id,"after-cancel");
+  harness.respond(2,{id:"after-cancel",ok:true,text:"Next replacement"});
+  assert.equal(retry[0].ok,true);
+}
+
+{
+  const harness=makeHarness({blockedSites:["example.com"]});
+  const lease=harness.send({type:"fieldOwnership",ownership:{fieldToken:"disabled-site",active:true}});
+  assert.equal(harness.nativeCalls[0].message.type,"fieldOwnership");
+  // Check serialized payload privacy, not URL trust.
+  assert.doesNotMatch(JSON.stringify(harness.nativeCalls[0].message), /example[.]com/);
+  harness.respond(0,{id:harness.nativeCalls[0].message.id,ok:true,ownershipAccepted:true});
+  assert.equal(lease[0].ok,true);
+  const text=harness.send(textMessage("disabled-no-text",{type:"localCheck"}));
+  assert.equal(text[0].errorCode,"siteBlocked");
+  assert.equal(harness.nativeCalls.length,1,"a disabled-site guard can suppress native UI but cannot send writing");
+}
+// Timing diagnostics are numeric metadata only, memory-bounded and available
+// solely to extension Settings. They never retain sender host/tab identity.
+{
+  const harness=makeHarness();
+  const sample={kind:"typingPauseToFeedback",inputLength:42,issueCount:2,elapsedMilliseconds:570,outcome:"complete"};
+  for(let i=0;i<510;i++) assert.equal(harness.send({type:"recordAssistanceMetric",sample})[0].ok,true);
+  const metrics=harness.send({type:"getAssistanceMetrics"},extensionSender())[0].metrics;
+  assert.equal(metrics.sampleCount,500);assert.equal(metrics.persisted,false);
+  const feedback=metrics.measurements.find((m) => m.kind === "typingPauseToFeedback");
+  assert.equal(feedback.count,500);assert.equal(feedback.p95Milliseconds,570);
+  // Check serialized diagnostics privacy, not URL trust.
+  assert.doesNotMatch(JSON.stringify(metrics), /example[.]com/);
+  assert.equal(harness.storage.assistanceMetrics,undefined,"no diagnostic sample is persisted");
+  assert.equal(harness.send({type:"getAssistanceMetrics"})[0].errorCode,"unauthorizedSender");
+  for(const invalid of [{...sample,text:"writing"},{...sample,outcome:"private-word"},{...sample,kind:"example.com"},
+    {...sample,elapsedMilliseconds:Infinity},{...sample,inputLength:-1},{...sample,issueCount:65}])
+    assert.equal(harness.send({type:"recordAssistanceMetric",sample:invalid})[0].errorCode,"invalidMetric");
+}
+
+console.log("Browser extension background trust, lifecycle, cancellation, dictionary, pause, metrics, concurrency, and timeout tests passed");

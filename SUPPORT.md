@@ -42,7 +42,7 @@ contents, window titles, and field labels/values.
 6. Preview the Support Report and remove anything you do not want public.
 7. Open the [GitHub bug form](https://github.com/aneesio/bean/issues/new?template=bug.yml).
 
-Include Bean 1.6.0 (8) or the relevant commit, macOS version, source app/version,
+Include the exact Bean version and build (or commit), macOS version, source app/version,
 action used, expected result, actual result, and the reviewed report. For
 unexpected provider cost, include the AI & Usage source breakdown and automatic
 call count—not a provider invoice or account identifier.

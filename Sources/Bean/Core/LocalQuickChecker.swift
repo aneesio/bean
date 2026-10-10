@@ -5,7 +5,12 @@ import Foundation
 /// drift and provider code is never reached.
 enum LocalQuickChecker {
     static func corrected(_ text: String, dictionary: [DictionaryTerm]) -> String {
-        let issues = IssueDetector().localIssues(in: text, dictionary: dictionary)
+        // Quick Fix applies only rules we can prove locally. A spellchecker
+        // guess is useful in a suggestion card, but must never rewrite names or
+        // specialist vocabulary without the user choosing it.
+        var detector = IssueDetector()
+        detector.maxIssues = max(1, (text as NSString).length)
+        let issues = detector.localIssues(in: text, dictionary: dictionary, includeSpellChecker: false)
             .sorted { $0.range.location > $1.range.location }
         let result = NSMutableString(string: text)
         for issue in issues {

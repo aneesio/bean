@@ -128,7 +128,7 @@ enum DictionaryPromptFormatter {
     static let maximumPromptCharacters = 800
     static let maximumPromptUTF8Bytes = maximumPromptCharacters * 4
     static let maximumIncludedTerms = 50
-    static let maximumScannedTerms = 200
+    static let maximumScannedTerms = UserContentFileLimits.maximumNativeDictionaryTerms
 
     static func formattedRelevantTerms(
         from dictionary: [DictionaryTerm],

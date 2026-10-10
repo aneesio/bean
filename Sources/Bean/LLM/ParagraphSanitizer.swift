@@ -16,17 +16,19 @@ enum ParagraphSanitizer {
         let zeroWidthStripped: Int
     }
 
-    // Zero-width space, ZWNJ, ZWJ, and BOM — model artifacts, never user intent.
-    private static let zeroWidthScalars: Set<UInt32> = [0x200B, 0x200C, 0x200D, 0xFEFF]
+    // Joiners are meaningful in emoji, Persian and other languages. Only new
+    // ZWSP/BOM artifacts are removed; source-authored separators survive.
+    private static let zeroWidthScalars: Set<UInt32> = [0x200B, 0xFEFF]
 
-    static func sanitize(_ raw: String) -> Result {
-        var s = stripCodeFence(raw)
-        s = stripWrappingQuotes(s)
+    static func sanitize(_ raw: String, preservingWrappingQuotes: Bool = false,
+                         original: String = "") -> Result {
+        var s = original.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("```") ? raw : stripCodeFence(raw)
+        if !preservingWrappingQuotes { s = stripWrappingQuotes(s) }
 
         var stripped = 0
         var scalars = String.UnicodeScalarView()
         for u in s.unicodeScalars {
-            if zeroWidthScalars.contains(u.value) { stripped += 1; continue }
+            if zeroWidthScalars.contains(u.value), !original.unicodeScalars.contains(u) { stripped += 1; continue }
             scalars.append(u)
         }
         return Result(text: String(scalars), zeroWidthStripped: stripped)

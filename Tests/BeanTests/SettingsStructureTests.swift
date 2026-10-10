@@ -39,7 +39,7 @@ final class SettingsStructureTests: XCTestCase {
 
         XCTAssertFalse(source.contains("List(selection: sidebarSelection)"))
         XCTAssertTrue(source.contains("navigation.selection = category"))
-        XCTAssertTrue(source.contains("BeanDesign.accent.opacity(0.18)"))
+        XCTAssertTrue(source.contains("BeanDesign.selectionBackground"))
         XCTAssertTrue(source.contains("category == navigation.selection ? .isSelected : []"))
     }
 
@@ -202,7 +202,7 @@ final class SettingsStructureTests: XCTestCase {
 
         XCTAssertTrue(browserSetup.contains("Mac connection installed"))
         XCTAssertTrue(browserSetup.contains("Live browser status is checked inside the extension"))
-        XCTAssertTrue(browserSetup.contains("choose Check again to verify the live app connection"))
+        XCTAssertTrue(browserSetup.contains("Open Bean's browser toolbar icon to verify the app connection"))
         XCTAssertFalse(browserSetup.contains("return \"Browser connected\""))
         XCTAssertTrue(settings.contains("Mac-side setup checks passed"))
         XCTAssertTrue(settings.contains("For live browser status"))

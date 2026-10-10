@@ -28,6 +28,14 @@ struct StatusPill: View {
             case .experimental: return "flask.fill"
             }
         }
+        func background(increasedContrast: Bool) -> Color {
+            switch self {
+            case .experimental: return BeanDesign.selectionBackground
+            case .warning: return BeanDesign.warningBackground
+            case .danger: return BeanDesign.dangerBackground
+            default: return color.opacity(increasedContrast ? 0.24 : 0.14)
+            }
+        }
     }
 
     let text: String
@@ -44,7 +52,7 @@ struct StatusPill: View {
         .padding(.vertical, 3)
         .foregroundColor(kind.color)
         .background(
-            Capsule().fill(kind.color.opacity(increaseContrast ? 0.24 : 0.14))
+            Capsule().fill(kind.background(increasedContrast: increaseContrast))
         )
         .overlay {
             if increaseContrast {
@@ -137,7 +145,7 @@ struct BenefitCard: View {
         .padding(BeanDesign.Spacing.md)
         .background(
             RoundedRectangle(cornerRadius: BeanDesign.Radius.card, style: .continuous)
-                .fill(BeanDesign.warmBackground)
+                .fill(BeanDesign.brandBackground)
         )
         .overlay(
                 RoundedRectangle(cornerRadius: BeanDesign.Radius.card, style: .continuous)
@@ -166,7 +174,7 @@ struct BeanMark: View {
                 Image(nsImage: image).resizable().scaledToFit()
             } else {
                 RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                    .fill(BeanDesign.warmBackground)
+                    .fill(BeanDesign.brandBackground)
                     .overlay(Image(systemName: "text.badge.checkmark").font(.system(size: size * 0.42)).foregroundColor(BeanDesign.accent))
                     .overlay(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous).stroke(BeanDesign.subtleBorder))
             }

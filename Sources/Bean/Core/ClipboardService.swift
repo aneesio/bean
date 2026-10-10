@@ -75,6 +75,8 @@ enum ClipboardService {
     private static let keyA: CGKeyCode = 0x00
     private static let keyC: CGKeyCode = 0x08
     private static let keyV: CGKeyCode = 0x09
+    private static let keyDelete: CGKeyCode = 0x33
+    private static let keyRight: CGKeyCode = 0x7C
 
     /// Simulates Cmd+C in the frontmost app.
     static func simulateCopy() {
@@ -82,8 +84,8 @@ enum ClipboardService {
     }
 
     /// Simulates Cmd+V in the frontmost app.
-    static func simulatePaste() {
-        postCommandKey(keyV)
+    static func simulatePaste(to processIdentifier: pid_t? = nil) {
+        postKey(keyV, flags: .maskCommand, to: processIdentifier)
     }
 
     /// Simulates Cmd+A (Select All) in the frontmost app. Used ONLY by the
@@ -91,6 +93,19 @@ enum ClipboardService {
     /// editors Cmd+A selects the whole file.
     static func simulateSelectAll() {
         postCommandKey(keyA)
+    }
+
+    /// Deletes an exactly verified non-empty selection. Empty clipboard text
+    /// is ignored by several editors, so inline punctuation deletion needs a
+    /// normal Delete event instead of a nominal empty Paste.
+    static func simulateDelete(to processIdentifier: pid_t? = nil) {
+        postKey(keyDelete, flags: [], to: processIdentifier)
+    }
+
+    /// Clears a temporary Select All without changing text in an editor that
+    /// does not expose a writable AX selection range.
+    static func simulateCollapseSelectionToEnd() {
+        postKey(keyRight, flags: [])
     }
 
     static func isBeanSyntheticKeyboardEvent(_ event: NSEvent) -> Bool {
@@ -101,19 +116,41 @@ enum ClipboardService {
     /// Requires Accessibility permission; without it the events are silently
     /// dropped by the system.
     private static func postCommandKey(_ key: CGKeyCode) {
-        let source = CGEventSource(stateID: .combinedSessionState)
+        postKey(key, flags: .maskCommand)
+    }
 
+    static func syntheticKeyEvents(_ key: CGKeyCode, flags: CGEventFlags) -> (source: CGEventSource, down: CGEvent, up: CGEvent)? {
+        // An isolated source must not inherit a user's held shortcut modifiers
+        // or leave synthetic modifier state in the combined hardware session.
+        guard let source = CGEventSource(stateID: .privateState) else { return nil }
         guard
             let keyDown = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
             let keyUp = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
-        else { return }
+        else { return nil }
 
-        keyDown.flags = .maskCommand
-        keyUp.flags = .maskCommand
+        keyDown.flags = flags
+        keyUp.flags = flags
         keyDown.setIntegerValueField(.eventSourceUserData, value: syntheticEventUserData)
         keyUp.setIntegerValueField(.eventSourceUserData, value: syntheticEventUserData)
+        keyDown.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
+        keyUp.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
+        return (source, keyDown, keyUp)
+    }
 
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+    private static func postKey(_ key: CGKeyCode, flags: CGEventFlags, to processIdentifier: pid_t? = nil) {
+        guard let events = syntheticKeyEvents(key, flags: flags) else { return }
+        // CoreGraphics owns the private state table through this source. Keep
+        // it alive through both deliveries, rather than retaining only events.
+        withExtendedLifetime(events.source) {
+            if let processIdentifier {
+                // A verified native span belongs to this process even if a window
+                // activation changes while WindowServer is delivering the event.
+                events.down.postToPid(processIdentifier)
+                events.up.postToPid(processIdentifier)
+            } else {
+                events.down.post(tap: .cghidEventTap)
+                events.up.post(tap: .cghidEventTap)
+            }
+        }
     }
 }

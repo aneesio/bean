@@ -34,6 +34,8 @@ for (const id of ["app-status", "ai-status", "usage-status"]) element(id).status
 let saved = null;
 const messages = [];
 let storedSites = ["example.com"];
+let storedPauses={},now=1_000_000;
+let copiedDiagnostics=null;
 let storageChangedListener = null;
 let mutationFailure = false;
 let mutationResponseLost = false;
@@ -57,7 +59,7 @@ const readyStatus = {
 const chrome = {
   storage: {
     local: {
-      get: (_keys, callback) => callback({ blockedSites: [...storedSites] }),
+      get: (_keys, callback) => callback({ blockedSites: [...storedSites],pausedSites:storedPauses }),
       set: (value, callback) => { saved = value; storedSites = [...value.blockedSites]; callback(); }
     },
     onChanged: { addListener: (listener) => { storageChangedListener = listener; } }
@@ -69,6 +71,12 @@ const chrome = {
       if (message.type === "getStatus") {
         if (deferStatus) pendingStatusCallback = callback;
         else callback(readyStatus);
+      }
+      else if(message.type === "getAssistanceMetrics") callback({ok:true,metrics:{sampleCount:4,persisted:false,measurements:[]}});
+      else if(message.type === "mutateSitePause") {
+        if(mutationFailure) {callback({ok:false,errorCode:"settingsUnavailable"});return;}
+        storedPauses=Object.fromEntries(Object.entries(storedPauses).filter(([host]) => host !== message.host));
+        callback({ok:true,pausedSites:storedPauses});
       }
       else if (message.type === "mutateBlockedSites") {
         if (mutationFailure) {
@@ -94,6 +102,7 @@ const chrome = {
 
 const context = {
   chrome,
+  navigator:{clipboard:{writeText:(text) => {copiedDiagnostics=text;return Promise.resolve();}}},
   document: {
     getElementById: element,
     createElement: () => new FakeElement()
@@ -101,6 +110,7 @@ const context = {
   URL,
   Set,
   Number,
+  Date:{now:() => now},
   setTimeout: (callback) => {
     const id = ++nextTimerID;
     timers.set(id, callback);
@@ -108,9 +118,10 @@ const context = {
   },
   clearTimeout: (id) => { timers.delete(id); }
 };
+const sitePolicySource = fs.readFileSync(path.join(__dirname, "..", "src", "sitePolicy.js"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "..", "options.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "..", "options.html"), "utf8");
-vm.runInNewContext(source, context);
+vm.runInNewContext(sitePolicySource + "\n" + source, context);
 
 assert.match(html, /Blocked websites/);
 assert.match(html, /Changes save automatically/);
@@ -222,8 +233,8 @@ assert.equal(accountingUnavailable.app[0], "Connected");
 assert.equal(accountingUnavailable.ai[0], "Usage safety unavailable");
 assert.match(accountingUnavailable.detail, /Local checks still work/);
 assert.match(accountingUnavailable.detail, /Check Accounting Again/);
-assert.match(accountingUnavailable.detail, /Full Reset in Privacy & Help is a data-erasing last resort/);
-assert.match(accountingUnavailable.detail, /contact Support if reset fails/);
+assert.doesNotMatch(accountingUnavailable.detail, /Full Reset/, "a routine AI warning never recommends deleting user data");
+
 assert.doesNotMatch(accountingUnavailable.detail, /clear usage|clear usage\/history/i);
 
 const incompatible = context.assessBridgeStatus({
@@ -252,6 +263,29 @@ assert.equal(element("app-status").statusValue.textContent, "Bean app not connec
   "a response after timeout cannot revive a settled connection attempt");
 deferStatus = false;
 
+storedPauses={"mail.example.com":now + 3600000};
+storageChangedListener({pausedSites:{newValue:storedPauses}},"local");
+let pauseRows=element("paused-list").children;
+assert.equal(pauseRows.length,1);
+assert.match(pauseRows[0].children[0].textContent,/mail\.example\.com/);
+const resumePause=pauseRows[0].children.at(-1);
+assert.equal(resumePause.textContent,"Resume");
+mutationFailure=true;resumePause.listeners.click();
+assert.equal(element("paused-list").children.length,1,"failed persistence keeps the visible paused record");
+assert.equal(resumePause.disabled,false);
+mutationFailure=false;resumePause.listeners.click();
+assert.equal(messages.at(-1).type,"mutateSitePause");
+assert.equal(messages.at(-1).operation,"resume");
+assert.equal(element("paused-list").children.length,1);
+assert.match(element("paused-list").children[0].textContent,/No paused websites/);
+element("copy-performance").listeners.click();
+assert.deepEqual(JSON.parse(copiedDiagnostics),{sampleCount:4,persisted:false,measurements:[]});
+assert.equal(messages.at(-1).type,"getAssistanceMetrics");
+storedPauses={"mail.example.com":now + 1};
+storageChangedListener({pausedSites:{newValue:storedPauses}},"local");
+now += 2;context.renderPausedSites();
+assert.match(element("paused-list").children[0].textContent,/No paused websites/);
+
 // The real HTML can be opened on localhost for visual QA without extension APIs.
 const previewElements = new Map();
 const previewContext = {
@@ -268,7 +302,7 @@ const previewContext = {
   setTimeout: () => 1,
   clearTimeout: () => {}
 };
-assert.doesNotThrow(() => vm.runInNewContext(source, previewContext));
+assert.doesNotThrow(() => vm.runInNewContext(sitePolicySource + "\n" + source, previewContext));
 assert.match(previewElements.get("notice").textContent, /Preview mode/);
 
 console.log("Browser extension options tests passed");

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // Owns Bean's auxiliary windows (Settings, About, Onboarding) and the logic for
 // showing onboarding on first run. Keeping window lifecycle here keeps
@@ -18,6 +19,11 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
     private var settingsWindow: NSWindow?
     private var aboutWindow: NSWindow?
     private var onboardingWindow: NSWindow?
+    private var writerWindow: NSWindow?
+    private var draftURL: URL?
+    private lazy var writerModel = WritingWorkspaceModel(dictionary: { [weak self] in
+        self?.userContent.dictionary ?? []
+    })
     private let settingsNavigation = SettingsNavigation()
 
     init(
@@ -44,8 +50,7 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
     // MARK: - First run
 
     func showOnboardingIfNeeded() {
-        guard !settings.onboardingComplete else { return }
-        showOnboarding()
+        if !settings.onboardingComplete { showOnboarding() }
     }
 
     func showOnboarding() {
@@ -71,6 +76,97 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
         settings.onboardingStepRawValue = OnboardingStep.ready.rawValue
         settings.onboardingComplete = true
         onboardingWindow?.close()
+        // Continue typing in the user's app; Bean's assistance lives there.
+    }
+
+    // MARK: - Writer
+
+    func showWriter() {
+        if let writerWindow { present(writerWindow); return }
+        let root = WritingWorkspaceView(
+            model: writerModel,
+            settings: settings,
+            userContent: userContent,
+            usageLedger: usageLedger,
+            onSettings: { [weak self] section in self?.showSettings(section: section) },
+            onOpen: { [weak self] in self?.openDraft() },
+            onSave: { [weak self] in _ = self?.saveDraft() }
+        )
+        let window = makeWindow(title: "Bean Writer", root: root, resizable: true, identifier: "writer")
+        window.contentMinSize = NSSize(width: 860, height: 600)
+        window.setContentSize(NSSize(width: 1080, height: 760))
+        window.setFrameAutosaveName("BeanWriterWindow")
+        writerWindow = window
+        present(window)
+    }
+
+    private func openDraft() {
+        guard confirmDiscard() else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Open a writing draft"
+        panel.allowedContentTypes = [.plainText, UTType(filenameExtension: "md") ?? .plainText]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= WritingWorkspaceModel.maximumLocalCharacters * 4 else {
+                writerModel.showNotice("This file is too large. Open a section of up to 50,000 characters.")
+                return
+            }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            guard text.count <= WritingWorkspaceModel.maximumLocalCharacters else {
+                writerModel.showNotice("This file is too long. Open a section of up to 50,000 characters.")
+                return
+            }
+            draftURL = url
+            writerModel.load(text, name: url.lastPathComponent, saved: true)
+        } catch {
+            writerModel.showNotice("Bean couldn't open this file. Choose a UTF-8 text or Markdown file.")
+        }
+    }
+
+    @discardableResult
+    private func saveDraft() -> Bool {
+        let panel = NSSavePanel()
+        panel.title = "Save your draft"
+        panel.allowedContentTypes = [.plainText, UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = writerModel.documentName == "Untitled draft" || writerModel.documentName == "Example draft"
+            ? "Draft.txt" : writerModel.documentName
+        if let draftURL { panel.directoryURL = draftURL.deletingLastPathComponent() }
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        do {
+            try writerModel.text.write(to: url, atomically: true, encoding: .utf8)
+            draftURL = url
+            writerModel.markSaved(name: url.lastPathComponent)
+            return true
+        } catch {
+            writerModel.showNotice("Bean couldn't save this draft. Choose a writable folder and try again.")
+            return false
+        }
+    }
+
+    /// Window closure keeps the current draft in memory. Leaving the process
+    /// or opening another document protects unsaved work with standard choices.
+    func confirmQuit() -> Bool {
+        guard writerModel.isDirty else { return true }
+        showWriter()
+        return confirmDiscard()
+    }
+
+    private func confirmDiscard() -> Bool {
+        guard writerModel.isDirty else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Save changes to your draft?"
+        alert.informativeText = "Your unsaved writing will be lost if you continue without saving."
+        alert.addButton(withTitle: "Save…")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don't Save")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return saveDraft()
+        case .alertThirdButtonReturn: return true
+        default: return false
+        }
     }
 
     // MARK: - Settings
@@ -97,7 +193,8 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
             },
             applyShortcut: { [weak self] slot, shortcut in
                 self?.onApplyShortcut(slot, shortcut) ?? "Bean isn't ready to set a shortcut yet."
-            }
+            },
+            openWriter: { [weak self] in self?.showWriter() }
         )
         let root = SettingsView(
             settings: settings,
@@ -111,8 +208,8 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
         )
         let window = makeWindow(title: "Bean Settings", root: root,
                                 resizable: true, identifier: "settings")
-        window.minSize = NSSize(width: 980, height: 720)
-        window.setContentSize(NSSize(width: 1120, height: 800))
+        window.contentMinSize = NSSize(width: 820, height: 600)
+        window.setContentSize(NSSize(width: 980, height: 720))
         window.setFrameAutosaveName("BeanSettingsWindow")
         window.center()
         settingsWindow = window

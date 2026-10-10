@@ -14,6 +14,27 @@ CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/build"
 APP="$BUILD_DIR/Bean.app"
+APP_DESTINATION="$APP"
+ASSEMBLY_ROOT=""
+PREVIOUS_APP=""
+BUILD_PUBLISHED=0
+BUILD_LOCK=""
+
+cleanup_build() {
+    if [[ "$BUILD_PUBLISHED" != 1 && -n "$PREVIOUS_APP" && -e "$PREVIOUS_APP" ]]; then
+        # The exclusive build lock covers both moves. A signal after publication
+        # but before its success flag restores the last verified bundle too.
+        [[ ! -e "$APP_DESTINATION" ]] || rm -rf "$APP_DESTINATION"
+        mv "$PREVIOUS_APP" "$APP_DESTINATION" || {
+            echo "error: automatic restoration failed; previous bundle: $PREVIOUS_APP" >&2
+        }
+    fi
+    [[ -z "$ASSEMBLY_ROOT" ]] || rm -rf "$ASSEMBLY_ROOT"
+    [[ -z "$BUILD_LOCK" ]] || rmdir "$BUILD_LOCK"
+}
+trap cleanup_build EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 case "$CONFIG" in
     debug|release) ;;
@@ -35,6 +56,13 @@ command -v codesign >/dev/null 2>&1 || {
     echo "error: codesign is unavailable." >&2
     exit 1
 }
+
+mkdir -p "$BUILD_DIR"
+if ! mkdir "$BUILD_DIR/.Bean-build.lock" 2>/dev/null; then
+    echo "error: another build owns build/.Bean-build.lock; inspect it before retrying." >&2
+    exit 1
+fi
+BUILD_LOCK="$BUILD_DIR/.Bean-build.lock"
 
 # Keep the array non-empty. Empty-array expansion with `set -u` fails under the
 # Bash 3.2 shipped by macOS.
@@ -62,7 +90,9 @@ if [[ ! -f "$EXE" ]]; then
 fi
 
 echo "==> Assembling Bean.app…"
-rm -rf "$APP"
+mkdir -p "$BUILD_DIR"
+ASSEMBLY_ROOT="$(mktemp -d "$BUILD_DIR/.bean-assembly.XXXXXX")"
+APP="$ASSEMBLY_ROOT/Bean.app"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 
@@ -128,8 +158,27 @@ fi
 
 codesign --verify --deep --strict --verbose=2 "$APP"
 
+# Never discard the last working bundle while assembling or signing a new one.
+# Publication happens only after verification; a failed move restores it.
+if [[ -L "$APP_DESTINATION" ]]; then
+    echo "error: build destination must not be a symbolic link." >&2
+    exit 1
+fi
+if [[ -e "$APP_DESTINATION" ]]; then
+    PREVIOUS_ROOT="$(mktemp -d "$BUILD_DIR/previous-build.XXXXXX")"
+    PREVIOUS_APP="$PREVIOUS_ROOT/Bean.app"
+    mv "$APP_DESTINATION" "$PREVIOUS_APP"
+fi
+if ! mv "$APP" "$APP_DESTINATION"; then
+    echo "error: could not publish the verified app; the previous build was restored." >&2
+    exit 1
+fi
+BUILD_PUBLISHED=1
+APP="$APP_DESTINATION"
+
 echo ""
 echo "Built: $APP"
+[[ -z "$PREVIOUS_APP" ]] || echo "Previous build preserved: $PREVIOUS_APP"
 echo "$SIGNING_NOTE"
 echo "Run with:  open \"$APP\""
 echo ""

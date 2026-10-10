@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Carbon
 
 // Wires together the menu bar, the two global hotkeys (quick proofread + Bean
 // menu), and the coordinator. Owns the long-lived services.
@@ -7,6 +8,7 @@ import Combine
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = AppSettings()
     private let userContent = UserContentStore()
+    private lazy var dictionaryLearning = DictionaryLearningService(userContent: userContent)
     private let operationHistory = OperationHistoryStore()
     private let usageLedger = UsageLedgerStore()
     private let automaticCallBudget = AutomaticCallBudgetStore()
@@ -33,7 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var inlineService = InlineHighlightService(
         settings: settings, userContent: userContent, history: operationHistory,
         usageLedger: usageLedger, automaticCallBudget: automaticCallBudget,
-        statusHUD: statusHUD
+        undoStore: replacementUndo,
+        statusHUD: statusHUD,
+        runAction: { [weak self] action in self?.coordinator.runAction(action) },
+        runParagraphAction: { [weak self] action in self?.coordinator.runAction(action, currentParagraph: true) }
     )
 
     private lazy var bubbleService = BeanBubbleService(
@@ -41,7 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusHUD: statusHUD,
         runAction: { [weak self] action in self?.coordinator.runAction(action) },
         openFullMenu: { [weak self] in self?.coordinator.showActionMenu() },
-        openAISettings: { [weak self] in self?.windowPresenter.showSettings(section: .provider) }
+        openAISettings: { [weak self] in self?.windowPresenter.showSettings(section: .provider) },
+        runParagraphAction: { [weak self] action in self?.coordinator.runAction(action, currentParagraph: true) }
     )
 
     private lazy var typingDispatcher = TypingPauseDispatcher(
@@ -64,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private lazy var menuBarController = MenuBarController(
+        onOpenWriter: { [weak self] in self?.windowPresenter.showWriter() },
         onQuickFix: { [weak self] in self?.coordinator.fixSelectedText() },
         onAIProofread: { [weak self] in self?.coordinator.proofreadWithAI() },
         onOpenBeanMenu: { [weak self] in self?.coordinator.showActionMenu() },
@@ -72,7 +79,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onCheckCurrentField: { [weak self] in self?.checkCurrentField() },
         onCheckPermissions: { [weak self] in self?.coordinator.checkPermissions() },
         onShowSettings: { [weak self] in self?.windowPresenter.showSettings() },
-        onShowAbout: { [weak self] in self?.windowPresenter.showAbout() }
+        onShowAbout: { [weak self] in self?.windowPresenter.showAbout() },
+        assistanceSettings: settings
     )
 
     private let hotkeyService = HotkeyService()
@@ -92,6 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Keep browser learning on this process's authoritative content store.
+        _ = dictionaryLearning
+
         // Reconcile crash-recovery leases even when all automatic features are
         // now off, so minimal reservation metadata never lingers indefinitely.
         _ = automaticCallBudget.cleanupStaleReservations()
@@ -101,7 +112,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController.install(proofreadShortcut: settings.shortcut,
                                   shortcutAction: settings.primaryShortcutAction,
                                   beanMenuShortcut: settings.beanMenuShortcut)
-        windowPresenter.showOnboardingIfNeeded()
+        // Finder/Dock launches should have an immediate, useful destination.
+        // macOS login launches retain the quiet menu-bar behavior.
+        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
+        let launchedAtLogin = launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAELaunchedAsLogInItem)) != nil
+            || launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == keyAELaunchedAsLogInItem
+        if !launchedAtLogin { windowPresenter.showOnboardingIfNeeded() }
 
         registerHotkeys()
 
@@ -119,6 +135,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }.store(in: &settingsCancellables)
         typingDispatcher.refresh()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if settings.onboardingComplete { windowPresenter.showSettings(section: .writing) }
+        else { windowPresenter.showOnboarding() }
+        return true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        windowPresenter.confirmQuit() ? .terminateNow : .terminateCancel
     }
 
     private func checkCurrentField() {

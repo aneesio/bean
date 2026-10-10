@@ -16,16 +16,57 @@ function load(relativePath, overrides = {}) {
 }
 
 const detector = load("src/localDetector.js").BeanDetector;
-const detectorIssues = detector.detect("i  recieve teh teh note");
+const detectorIssues = detector.detect("hello  world recieve the the note i");
 assert.ok(detectorIssues.some((issue) => issue.original.includes("  ") && issue.type === "spacing"));
 assert.ok(detectorIssues.some((issue) => issue.original === "recieve" && issue.suggestion === "receive"));
-assert.ok(detectorIssues.some((issue) => issue.original === "teh teh" && issue.type === "grammar"));
+assert.ok(detectorIssues.some((issue) => issue.original === "the the" && issue.type === "grammar"));
 assert.ok(detectorIssues.length <= 8);
 assert.equal(
   detector.fixObvious("teh result works,tommorow.\n\nleave this paragraf ."),
   "the result works, tomorrow.\n\nleave this paragraf .",
   "overlapping local fixes compose without dropping line breaks or touching unsupported text"
 );
+
+const repeated = detector.detect("i recieve mail and i recieve parcels");
+assert.equal(repeated.filter((issue) => issue.original === "recieve").length, 2,
+  "each repeated typo keeps an exact local occurrence");
+assert.equal(repeated.filter((issue) => issue.original === "i").length, 2);
+for (const issue of repeated) {
+  assert.equal("i recieve mail and i recieve parcels".slice(issue.start, issue.end), issue.original);
+}
+assert.equal(detector.fixObvious("i recieve mail and i recieve parcels"), "I receive mail and I receive parcels");
+for (const valid of [
+  "I had had enough and knew that that mattered.",
+  "Visit https://teh.example.com/a,b or email teh@example.com.",
+  "Open node.js and example.com, then version 2.1 or e.g. this note.",
+  "The plan changed.\nThe next paragraph stays here."
+]) assert.equal(detector.detect(valid).length, 0, `valid prose/reference stays untouched: ${valid}`);
+assert.equal(detector.fixObvious("hello,next\n\nleave this alone"), "hello, next\n\nleave this alone");
+assert.equal(detector.detect(null).length, 0);
+assert.equal(detector.detect("i")[0].suggestion, "I", "one-character drafts are supported");
+
+// The real mirror receives directional layout styles and scroll offsets.
+// WebKit fixtures below validate their actual rendering; this harness checks
+// the mapping transport without mutating the source field.
+const capturedMirrors=[];
+const mirrorDocument={body:{appendChild:node=>capturedMirrors.push(node)},
+  createTextNode:text=>({textContent:text}),createElement:tag=>({tagName:tag.toUpperCase(),style:{},children:[],
+    setAttribute(){},appendChild(child){child.parent=this;this.children.push(child);},
+    getBoundingClientRect(){return {left:-9999,top:0};},
+    getClientRects(){return [{left:-9990,top:12,width:40,height:16}];}})};
+const sourceStyles={textAlign:"right",direction:"rtl",writingMode:"horizontal-tb",tabSize:"8",
+  paddingLeft:"9px",paddingRight:"9px",lineHeight:"20px",fontSize:"14px"};
+const mirrorMapping=load("src/issueMapping.js",{document:mirrorDocument,
+  window:{scrollX:20,scrollY:30,getComputedStyle:()=>sourceStyles}}).BeanMapping;
+const mirrorField={tagName:"TEXTAREA",value:"مرحبا",clientWidth:240,scrollLeft:3,scrollTop:4,
+  getBoundingClientRect:()=>({left:100,top:200,bottom:360})};
+const mirrorRects=mirrorMapping.rectsForRange(mirrorField,0,mirrorField.value.length);
+for(const key of ["textAlign","direction","writingMode","tabSize"]) {
+  assert.equal(capturedMirrors[0].style[key],sourceStyles[key],`${key} survives the source-to-mirror mapping`);
+}
+assert.deepEqual(JSON.parse(JSON.stringify(mirrorRects)),[{x:126,y:238,w:40,h:16}],
+  "occupied text retains both page and inner scrolling coordinates");
+assert.equal(mirrorField.value,"مرحبا","measuring occupancy never rewrites the field");
 
 const mapping = load("src/issueMapping.js").BeanMapping;
 assert.deepEqual(
@@ -44,6 +85,14 @@ assert.equal(mapping.replaceRangePreservingBoundaries("one\r\ntwo", 0, 8, "ONE\n
   "changing a CRLF boundary into LF is refused");
 assert.equal(mapping.replaceRangePreservingBoundaries("short", -1, 2, "x"), null);
 
+assert.deepEqual(JSON.parse(JSON.stringify(mapping.alignTextOffset(
+  "teh catteh dog", "teh cat\nteh dog", 8, 11))), { start:7, end:10 },
+  "a repeated typo in a second contenteditable block maps to exact text-node coordinates");
+assert.equal(mapping.alignTextOffset("hidden teh visible teh", "visible teh", 8, 11), null,
+  "hidden or normalized content never acquires a guessed local offset");
+assert.equal(mapping.alignTextOffset("a  b", "a b", 2, 3), null,
+  "space normalization requires conservative unique-range mapping");
+
 function FakeEvent(type) { this.type = type; }
 const editDocument = { activeElement: null, execCommand: () => false };
 const editMapping = load("src/issueMapping.js", {
@@ -51,7 +100,7 @@ const editMapping = load("src/issueMapping.js", {
   Event: FakeEvent,
   InputEvent: undefined
 }).BeanMapping;
-const listeners = { input: [], change: [] };
+const listeners = { beforeinput: [], input: [], change: [] };
 let ownSetterCalls = 0, nativeSetterCalls = 0;
 const nativeControl = {};
 Object.defineProperty(nativeControl, "value", {
@@ -118,6 +167,24 @@ assert.equal(sanitized.text, "Fixed.");
 assert.equal(sanitized.zeroWidthStripped, 1);
 
 const trust = load("src/trustPolicy.js").BeanTrustPolicy;
+const nativeText = "🙂 tme and tme";
+const nativeIssues = trust.mergeLocalIssues(nativeText,[],[
+  {original:"tme",suggestion:"time",location:3,length:3,category:"spelling",alternatives:["tame","tame","t\nme"]},
+  {original:"tme",suggestion:"time",start:11,end:14},
+  {original:"tme",suggestion:"time",start:2,end:5},
+  {original:"and",suggestion:"an\nd",start:7,end:10}
+],64);
+assert.equal(nativeIssues.length,2,"native local offsets are UTF-16 and must match exactly");
+assert.deepEqual(Array.from(nativeIssues,(issue) => issue.start),[3,11]);
+assert.deepEqual(Array.from(nativeIssues[0].alternatives),["tame"]);
+const longLocal = "Words in a paragraph. ".repeat(1600) + "🙂 tme";
+const chunks = trust.localCheckChunks(longLocal);
+assert.equal(chunks.map((chunk) => chunk.text).join(""),longLocal,"local chunks never lose source text");
+assert.ok(chunks.every((chunk) => chunk.text.length <= 6000));
+for (const chunk of chunks) assert.equal(longLocal.slice(chunk.start,chunk.end),chunk.text);
+assert.equal(trust.localBridgeReadiness({ok:true,bridgeAvailable:true,compatible:true,protocolVersion:1,
+  localCheckAvailable:true,providerConfigured:false,webInlineEnabled:false,automaticAccountingAvailable:false}).ready,true);
+assert.equal(trust.localBridgeReadiness({ok:true,bridgeAvailable:true,protocolVersion:1}).ready,false);
 const local = [
   { original: "teh", suggestion: "the", type: "spelling" },
   { original: "double  space", suggestion: "double space", type: "spacing" }
@@ -128,10 +195,22 @@ const ai = [
   { original: "unchanged", suggestion: "unchanged", type: "grammar" }
 ];
 const merged = trust.mergeIssues(local, ai, 8);
-assert.deepEqual(JSON.parse(JSON.stringify(merged)), [local[0], local[1], ai[1]],
+assert.deepEqual(JSON.parse(JSON.stringify(merged)), [local[0], local[1], { ...ai[1], source:"ai" }],
   "provider findings augment local findings without duplicates or unchanged output");
-assert.deepEqual(JSON.parse(JSON.stringify(trust.mergeIssues([], ai, 1))), [ai[0]],
+assert.deepEqual(JSON.parse(JSON.stringify(trust.mergeIssues([], ai, 1))), [{ ...ai[0], source:"ai" }],
   "merged findings obey the request limit");
+const preciseLocals = detector.detect("recieve again and recieve later");
+const repeatedMerged = trust.mergeIssues(preciseLocals, [{
+  original:"recieve", suggestion:"receive", source:"local", start:0, end:7
+}], 8);
+assert.equal(repeatedMerged.length, 2, "provider de-duplication retains both exact local occurrences");
+const forgedOffset = trust.mergeIssues([], [{
+  original:"phrase", suggestion:"better phrase", source:"local", start:500, end:506
+}], 8)[0];
+assert.equal(forgedOffset.source, "ai");
+assert.equal(forgedOffset.start, undefined, "provider offset hints never acquire local mapping trust");
+assert.equal(trust.mergeIssues(preciseLocals, [], 0).length, 0);
+
 assert.equal(trust.isMeaningfulEdit("same", "same"), false);
 assert.equal(trust.isMeaningfulEdit("same", "\u200Bsame"), false, "zero-width artifacts are not edits");
 assert.equal(trust.isMeaningfulEdit("teh", "the"), true);

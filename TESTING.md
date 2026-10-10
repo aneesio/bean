@@ -1,5 +1,9 @@
 # Bean Testing Guide
 
+Current public beta: **Bean 1.7.1 (21), Chromium extension 0.8.7**. A checklist
+below is a required test, not a recorded pass. Historical user reports and the
+current automated evidence must be recorded separately.
+
 Automated checks are necessary but cannot fully exercise macOS Accessibility,
 clipboard replacement, or third-party editor geometry. Every public beta should
 pass both the automated suite and the focused manual matrix below.
@@ -33,6 +37,60 @@ Then assemble a fresh app:
 codesign --verify --deep --strict --verbose=2 build/Bean.app
 ```
 
+Run the owned editor and transaction regressions when changing replacement:
+
+```bash
+swift test --filter 'NativeEditPlanTests|NativeEditTransactionTests|OwnedWebEditorModelTests|ReplacementUndoStoreTests'
+```
+
+Slack/Electron transport regressions also run with:
+
+```bash
+swift test --filter 'NativeEditTransportTests|NativeKeyboardTransportTests|NativeEditingPathTests|TextReplacementTruthTests'
+```
+
+These tests cover misleading writable `AXSelectedText` capabilities, exact
+deletion/replacement/insertion spans, and Bean's synthetic-key marker. They do
+not prove cross-process keyboard delivery in Slack. For the live Slack gate,
+use an unsent synthetic draft such as `looks like the text replacement is broken
+agamin`: correcting `agamin` to `again` must delete only `m`, confirm the result,
+and preserve native Undo, the caret, and the previous clipboard. Also test a
+nonempty correction (`teh` to `the`), an explicit selection, and a rich draft.
+Web editors must use ordinary Paste/Delete even when AX advertises a writable
+selected-text attribute; an uncertain delivery must never be retried.
+
+The AppKit fixture uses synthetic attributed text and attachments; the
+nonpersistent WKWebView fixture loads the production browser mapping helper
+without network content, cross-process AX, clipboard access or other apps. Its
+passes do not replace third-party app tests. Unavailable live WebKit AX tests
+remain skips, with their reason recorded.
+
+Writing quality has a separate, opt-in local evaluation:
+
+```bash
+./scripts/run_quality_benchmark.sh build/quality-reports/candidate
+./scripts/run_quality_benchmark.sh --enforce build/quality-reports/candidate-gated
+```
+
+The frozen, family-isolated 1,024-case synthetic corpus and measured results are
+documented in [WRITING_QUALITY_2026-10-02.md](docs/qa/WRITING_QUALITY_2026-10-02.md).
+The recorded strict gate currently fails preferred correction accuracy on the
+heldout split; do not reduce the gate or call the candidate certified. These
+checks make no paid provider request. An unavailable dictionary/service is not a
+clean pass. Human-reviewed labels, external corpora and real-provider judgment
+remain separate evidence.
+
+Prepare the separate provider-evaluation review pack without credentials or
+paid requests:
+
+```bash
+./scripts/run_provider_quality_evaluation.sh --dry-run
+```
+
+Paid evaluation is opt-in with an explicit provider/model, request and estimated
+cost budget; blind human ratings are required. A dry-run pack or mock response
+does not establish provider quality.
+
 ## Clean-install gate
 
 - Quit every running copy of Bean.
@@ -51,15 +109,31 @@ Exercise selected text and focused-field mode with short synthetic samples:
 | --- | --- |
 | `i has a apple` → Proofread | Small grammatical correction; no commentary footer. |
 | Already-correct sentence | No replacement or a clear no-changes result. |
-| Make Clearer/Concise/Professional/Casual | Preview appears before replacement. |
+| Make Clearer/Concise/Professional/Casual | Safe output replaces the unchanged source directly; Bean Undo appears only when safe restoration is available. |
+| Whole rich draft Proofread/Rewrite | Bounded span edits preserve unchanged formatting, links, signatures and attachments; structural or unprovable edits decline safely. |
+| Current paragraph | Exact paragraph scope is shown before the action; a missing numeric native caret or ambiguous browser boundary refuses the action. |
+| Explicit marker-selected passage | Guarded selected-span paste remains available; do not offer whole-document Bean Undo for opaque selection. |
+| Fix All obvious issues | Applies only deterministic local, nonoverlapping verified corrections; no provider call and no automatic choice of ambiguous spelling guesses. |
 | Reply actions | Draft is copy-first and never replaces the source message. |
 | Provider returns a label/fence/footer | Wrapper is removed or unsafe output is rejected. |
 | Field changes while request is running | Bean refuses stale replacement and preserves the correction safely. |
-| Paste cannot be verified | UI says the correction is on the clipboard; it never falsely says “fixed.” |
+| Paste cannot be verified | UI reports an unconfirmed replacement or the actual clipboard recovery state; it never falsely says “fixed.” |
 
-After every replacement test, verify text before and after the intended range is
-unchanged and the prior clipboard is restored unless the UI explicitly reports a
-clipboard fallback.
+After every replacement test, verify text before and after the intended range,
+rich node/attachment identity, caret and native Undo. Bean Undo must affect only
+the same field while its exact output remains present. Check exact partial Undo
+after one verified span and an interrupted batch; a newer or unverified mutation
+must not be rolled back. The prior clipboard must be restored unless the UI
+explicitly reports a clipboard fallback; a newer user copy must survive.
+
+Exercise first focus, a new revision and the clean cache path, not just a card
+that was already visible. Include repeated typos, emoji/combining sequences,
+CRLF, source quotation/outer whitespace, paragraph-start/end insertions,
+deletions and attachments. Move focus/caret, edit the source or copy new text
+while a provider is pending and during a controlled transaction. No result may
+overwrite those newer changes. Cancel a pending native/browser explicit action
+and let a delayed completion arrive; it must not apply. Work already sent may
+still be billed. Native Cancel ends before guarded application begins.
 
 ## App compatibility gate
 
@@ -72,20 +146,31 @@ tested.
 | TextEdit | Correct + verify | Correct + verify | Anchors only to editor | Native highlight or documented range fallback | Read-only view excluded |
 | Apple Notes | Correct selection | Preserve note structure | No button/control anchors | Native or passive fallback | Formatting outside target unchanged |
 | Apple Mail | Correct in composer | Preserve greeting/sign-off | Composer only | Native or passive fallback | Displayed mail excluded |
-| Slack desktop | Correct selection | Composer replacement or honest fallback | Composer/evidence only | Passive/manual; no fake native inline | Channel buttons excluded |
-| Chromium (Gmail + Slack web) | Manual path best effort | Honest AX fallback | Editable DOM field only | Extension on by default unless blocked | Search/email-address/buttons excluded |
+| Slack desktop | Correct selection | Composer replacement or honest fallback | Composer/evidence only | Range underlines/cards only with proven editor capabilities | Channel buttons excluded |
+| Chromium (Gmail + Slack web) | Manual path best effort | Honest AX fallback | Native controls or supported DOM field | Local extension checks on by default unless blocked; complex editors may use the native path | Extension skips search/email-address fields; ordinary buttons excluded |
 
 Also test one code editor, a search field, password field, disabled field,
-read-only field, and ordinary button. Focused-field replacement, Bubble, and
-inline UI must fail closed according to [SUPPORTED_APPS.md](SUPPORTED_APPS.md).
+read-only field, and ordinary button. Eligible editable controls in code apps
+and search fields use the native capability policy; secure, disabled, read-only,
+and non-text controls fail closed according to [SUPPORTED_APPS.md](SUPPORTED_APPS.md).
 
 Record macOS version, app version, acquisition path, replacement result, and any
 content-free diagnostics. Update [SUPPORTED_APPS.md](SUPPORTED_APPS.md) when a
 repeatable compatibility boundary changes.
 
+The October 2 reports for ChatGPT, Claude, Slack, Gmail and subsequently Apple
+Mail are user-reported pre-candidate manual workflows. They do not mark this
+candidate's live correction, rich formatting, attachment or Undo journeys passed.
+
+Repeat one native and one browser control with input-method composition,
+dictation, zoom, display changes and light/dark appearance. Compose text must not
+be edited mid-composition. Record keyboard/VoiceOver focus and a readable issue
+card without automatic card opening or overlapping native/browser controls.
+
 ## Cost and privacy gate
 
-- Fresh preferences show native automatic writing features and diagnostics: Off.
+- Fresh preferences enable local live suggestions and the Bean dot;
+  diagnostics remain Off.
 - Fresh preferences show Automatic provider checks: Off.
 - Pausing after typing makes no provider request with defaults.
 - “Disable automatic AI checks” turns off passive, provider inline, fallback,
@@ -96,9 +181,9 @@ repeatable compatibility boundary changes.
   instead of reporting a misleading zero; automatic provider checks fail closed.
 - Clear usage/history with a request in flight, then let it finish; neither
   visible ledger may be recreated by the late result.
-- A native Live-suggestion preview's explicit **Try Again** remains available
-  after the automatic cap and is recorded as a manual call. Browser **Fix Paragraph**
-  remains capped because a webpage cannot prove a trusted native user gesture.
+- Explicit native AI actions and browser field-control **Proofread** / **Rewrite**
+  remain available after the automatic cap and are recorded as manual calls; the paragraph
+  **Fix Paragraph** path remains automatically capped.
 - Diagnostics are off by default and contain no source or output text when on.
 - API keys never appear in UserDefaults, Application Support, logs, diagnostics,
   browser storage, packaged resources, or Git history.
@@ -119,27 +204,43 @@ repeatable compatibility boundary changes.
 - Disable two fields, return to each one, and verify its own **Re-enable**
   control restores that field only. A failed blocklist write must leave Bean
   active and announce that the website could not be blocked.
-- Hovering a paragraph Bean icon opens its actions, including both disable
-  controls.
-- Activate issue underlines and paragraph icons with VoiceOver/AXPress as well
+- Activating the single Bean field control opens review and writing actions,
+  including selected/draft/paragraph scope, local obvious fixes, Learn word,
+  pause and disable controls.
+- Activate issue underlines and the field control with VoiceOver/AXPress as well
   as pointer, Enter, and Space. Next, Ignore, Apply, and Review one by one must
   keep a sensible focus target or return focus to the source field.
 - Password, search/ARIA-search, email, one-time-code, card-number,
   numeric-secret, read-only, and code fields plus Google Docs canvas are skipped.
 - Local checks work with no native host and make no network request.
-- Provider checks require a compatible local bridge, a configured provider,
-  and **Allow deeper AI checks from the browser** in the Bean app.
+- Missing native spelling, unavailable language services or bounded/invalid
+  scans show Basic/limited coverage. Zero findings never becomes an error-free
+  claim. Verify configured dialect and learned words in both native and browser
+  results; a word after many protected spans must remain protected.
+- Learn word requires real Bean UI activation and an exact spelling occurrence;
+  a page-created event cannot save it. Missing GUI/native bridge or a failed
+  dictionary write must report failure. A subsequently saved GUI preference
+  must not overwrite the learned term.
+- Pause the exact website for one hour, relaunch/reload, Resume via popup or
+  Options and verify expiry resumes an open draft without reload. Permanent
+  blocking remains separate and includes subdomains. No paused/blocked-page
+  text may cross the automatic bridge or produce a duplicate native control.
+- Automatic provider checks require a compatible local bridge, a configured
+  provider, and **Allow deeper AI checks from the browser** in the Bean app.
 - Sender hostname and field type are validated inside the extension, then
   omitted from the native payload. Provider prompts use only Bean's fixed
   `Browser` / `web editor` labels.
 - Applying an issue verifies the exact live substring and preserves line breaks.
 - Options reports all-site coverage, lists blocked websites, and saves changes
   automatically.
-- A review-required paragraph shows the before/after approval card and is not
-  applied until approved.
+- An unsafe explicit Proofread/Rewrite result remains unapplied with a compact
+  notice. The legacy review-required automatic paragraph route retains its
+  approval gate; routine explicit actions do not require a comparison window.
 - **Check again** reports the automatic daily-call count and limit.
-- All provider-backed browser requests, including **Fix Paragraph**, stop at the
-  reported automatic limit; local issue application remains available.
+- Automatic browser checks and **Fix Paragraph** stop at the reported automatic
+  limit. Explicit field-control **Proofread** and **Rewrite** remain available
+  with a verified provider and bridge even when automatic checks are off or capped;
+  local issue application remains available.
 - **Check again** reaches a final Connected/Error state within seven seconds;
   it never remains on Checking indefinitely.
 - Settings discovers a loaded Bean extension and Connect/Repair writes an exact
@@ -157,7 +258,22 @@ Use `BrowserExtension/test/fixtures/editor.html` for deterministic manual cases.
 - Troubleshooting details, field metadata, and operation history appear only
   inside Advanced diagnostics; the menu bar keeps only everyday actions.
 - First launch shows the guided onboarding flow. Closing it early does not mark
-  onboarding complete, and **Start using Bean** is the explicit finish action.
+  onboarding complete, and **Finish Setup** closes the completed setup to the
+  menu-bar experience without opening Writer.
+- Native one-hour and Until Resumed app pauses persist across relaunch and stop
+  automatic native checks and browser suggestions. The focused extension
+  refreshes content-free app status every five seconds; once paused, it must not
+  scan/read drafts automatically or authorize automatic text sends. Resume is reachable from menu bar or
+  Writing settings; an expired pause is not listed as active. Manual native
+  shortcuts and explicit browser provider actions remain available. Browser
+  local fallback Proofread may offer its basic deterministic checks while Mac
+  automatic checking is paused.
+- English dialect is shared by native and bridge checks. Canadian, US and UK
+  conventions preserve already-valid regional spellings and saved vocabulary;
+  confident non-English text must not be forced through English-only rules.
+- Ignore an occurrence, change unrelated writing and re-check: that occurrence
+  stays dismissed when exact mapping remains provable; an ambiguous new
+  occurrence must not inherit the dismissal.
 - Launching and leaving Bean idle makes no GitHub update request.
 - Clicking **Check for Updates** shows the installed version and newest
   non-draft GitHub release, including its prerelease status.
@@ -188,7 +304,7 @@ manual reset gate against personal API keys, personalization, or browser data.
   active style as a canonical built-in or `custom`, and omit custom profile
   names, personalization text, full app/native-host paths, hostnames, and field
   labels.
-- About shows Bean 1.6.0 (8), identifies the community-supported public beta,
+- About shows Bean 1.7.1 (21), identifies the community-supported public beta,
   and opens only the canonical `aneesio/bean` GitHub, Support, Privacy, License,
   Changelog, and manual update-check destinations. At the minimum width and
   larger Accessibility text sizes, links reflow and **Open Update Check…** lands
@@ -223,11 +339,18 @@ Verify:
 
 - the app is universal (`arm64` and `x86_64`);
 - the ZIP and DMG names include `-unnotarized`;
+- filenames also include build 21; packaging must refuse overwriting an already
+  committed build, while an interrupted/failed package can be retried safely;
 - the SHA-256 file matches both artifacts;
 - the app contains current README, TESTING, QA_TEST_PLAN, SUPPORT, PRIVACY, LICENSE, CHANGELOG,
   and extension resources;
 - the repository remains clean except for intended source changes;
-- installation from the DMG preserves shortcuts, Keychain access, and settings.
+- installation from the DMG preserves shortcuts, Keychain access, and settings;
+- local installer tests use private signed app copies, never `/Applications`,
+  and cover upgrade, rollback, signature rejection, concurrency and interrupted
+  publication. Run `./scripts/test_local_install.sh build/Bean.app` before
+  claiming that evidence. Preserve the installed app if Bean/native hosts are
+  running; verify backups before publishing a replacement;
 - app/build/changelog/tag versions match, and the extension version was
   incremented when extension code changed;
 - README, Privacy, DMG, and release notes consistently identify the artifact as
@@ -235,4 +358,85 @@ Verify:
 
 Developer ID releases must additionally pass notarization, stapling, and
 Gatekeeper assessment. The packaging script fails closed when those credentials
-are incomplete.
+are incomplete. Developer ID signing/notarization is explicitly postponed for
+this public beta; strict ad-hoc signature verification is not notarization.
+
+## Performance and evidence gate
+
+Use Writing → Advanced → Copy Performance Summary after synthetic typing and
+acceptance journeys. Counts and timings are content-free, bounded, in memory
+only, and separate local analysis, typing-pause feedback, acceptance and provider
+work. Browser Settings diagnostics also include bounded worker-memory analysis,
+last-committed-edit-to-feedback and acceptance timings. Capture sample counts,
+supported-path outcomes, cache behavior and idle/
+typing CPU work; do not combine provider latency with local feedback latency.
+
+For an explicitly selected Bean process, `./scripts/profile_bean_runtime.sh PID 15`
+records content-free CPU/RSS samples. Record idle or synthetic typing
+activity separately; the script does not inspect fields or generate typing.
+
+The roadmap's proposed p95 goals are local feedback within 750 ms of committed
+input and simple confirmed acceptance within 500 ms. Detector-only and owned
+editor-model timings exclude AX/clipboard/UI transport and do not establish
+these goals. The 97% precision, 90% common spelling recall, 99.5% confirmed edit
+success and zero critical wrong-target/data-loss goals also need independent
+evidence on declared supported paths; grammar recall and preferred correction
+accuracy are separate measures. Keep missing manual, provider and profiling
+evidence open in [SYSTEM_WIDE_IMPLEMENTATION.md](docs/qa/SYSTEM_WIDE_IMPLEMENTATION.md).
+
+
+### Inside status dot regression (build 21)
+
+Use crowded native and browser composer fixtures with Send, attachments,
+microphone and scrollbar controls. Verify 8-point paint with no logo, pill or
+visible count. The complete target stays inside the exact editable area: 28
+points for normal fields, 20 points for compact fields, with a clear top-right
+corner preferred. Occupied text/caret and exposed control rectangles must not
+be covered; another inside edge can be used. Move controls without editing text;
+change focus between two fields with identical bounds; scroll, resize and zoom.
+Full-window editors must be able to show the dot without an outside margin.
+Unknown exact source bounds, obscured editors, a fully occupied field or a field
+too small for the target can hide it. Large unrelated AX/DOM branches must not
+suppress an otherwise usable source field. Test left/right alignment, RTL text,
+placeholders, empty fields, inner scrolling and compact single-line controls.
+Check the Bean-green neutral state and vivid red possible-issues state with its
+tiny contrasting exclamation mark in light/dark appearance and browser forced colors.
+Confirm the marker distinguishes possible issues without relying on color; keep
+the same 8-point paint and complete 28/20-point targets. Check hover details,
+click/keyboard review and source focus. The older native launcher obeys the same inside placement
+rules. Browser ownership remains with visible underlines/cards when the dot
+cannot fit. Owned fixture results do not certify an uninspected third-party
+composer or arbitrary hidden custom controls.
+
+Check that exactly one field dot remains when the fallback launcher hands off
+to live suggestions or a review popover. Repeat browser-script injection while
+a dot is visible, then interrupt and restore the native bridge and reload the
+extension. An invalidated extension context must clear its old presentation
+before its ownership lease expires; it must not recreate a stale dot after
+focus returns. A valid extension without the native host retains local checks.
+
+### Green brand and icon regression (build 21)
+
+Regenerate every icon from the editable SVG and inspect the bean silhouette and
+yellow seed scar at all app and browser resolutions. Verify the installed app's
+Dock/Finder icon, Settings, About, onboarding, menu-bar template, browser toolbar,
+popup, Options, and field cards use the current green-bean artwork. The menu-bar
+template stays monochrome and adapts to macOS appearance. Review the Bean Green
+`#237A48` accents and their contrast-safe dark variants on controls, links,
+selection, status dots, and surfaces. Warning labels and indicators also use
+Bean Green; verify their text explains the state without depending on hue.
+Errors and possible-issue dots remain red and legible. A green dot must not
+imply an error-free writing claim.
+
+Check capsule action buttons across Settings, onboarding, writing previews,
+suggestion footers, HUD actions, browser popup/Options, and field cards. Review
+long labels, compact widths, enabled/disabled states, focus rings, Return/default
+actions, and Escape/cancel actions. Cards, navigation rows, text fields, field
+markers, and underlines retain geometry appropriate to their roles.
+
+Reload the existing unpacked extension after its files update, then use a
+synthetic fixture to check the new UI. Preserve its path, ID, blocked sites, and
+settings during upgrade; do not reload a real page containing an unsaved draft.
+Compare installed app/extension resources with the tested build and verify the
+native-host manifest still points to the stable installed executable. Record
+actual passes and skips separately from this checklist.

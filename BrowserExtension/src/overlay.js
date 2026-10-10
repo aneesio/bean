@@ -2,15 +2,24 @@
 // preserves the source field during pointer interaction, and exposes explicit
 // Undo / re-enable contracts for the content-script replacement pipeline.
 (function () {
-  const ACCENT = "#8a4c17";
-  const DARK_ACCENT = "#e0a15e";
+  // Re-injecting the script bundle must keep the live closed shadow root.
+  // Replacing only this API would orphan its old dot while existing content
+  // listeners render a second host through the new instance.
+  if (window.BeanOverlay) return;
+  const ACCENT = "#237A48";
+  const DARK_ACCENT = "#81DCA5";
   let hostEl = null, shadow = null, underlineLayer = null, cardEl = null, hoverTimer = null;
   let groupLayer = null, groupCardEl = null, liveRegion = null;
   let paragraphReviewEl = null, paragraphReviewShield = null;
   let paragraphReviewResolve = null, paragraphBusyEl = null;
   let undoEl = null, undoTimer = null, fieldDisabledEl = null;
   let keyboardActivationPending = false, keyboardActivationTimer = null;
-  let keyboardExitHandler = null;
+  let keyboardExitHandler = null, assistantEl = null, assistantCardEl = null;
+  let assistantCardState = null;
+  let assistantPlacementState = null;
+  const ASSISTANT_TARGET_SIZE = 28;
+  const ASSISTANT_GAP = 4;
+  const ASSISTANT_OBSTACLES = 'button,input,textarea,select,a[href],label,summary,iframe,[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="combobox"],[role="slider"],[role="menuitem"],[contenteditable]:not([contenteditable="false"]),[tabindex],[onclick],[onmousedown],[draggable="true"],video[controls],audio[controls]';
 
   function officialMarkURL() {
     try {
@@ -24,6 +33,12 @@
 
   function ensureHost() {
     if (hostEl) return;
+    // A prior extension world may have been invalidated without removing its
+    // closed shadow root. Our same-world singleton returns above; only a new
+    // owner constructing its first host retires these marked orphan hosts.
+    if (typeof document.querySelectorAll === "function") {
+      for (const orphan of document.querySelectorAll("#bean-inline-host[data-bean-overlay][data-bean='overlay']")) orphan.remove();
+    }
     hostEl = document.createElement("div");
     hostEl.id = "bean-inline-host";
     hostEl.dataset.bean = "overlay";
@@ -51,23 +66,25 @@
     });
     const style = document.createElement("style");
     style.textContent = `
-      :host { color-scheme:light dark; --bean-accent:${ACCENT}; --bean-ink:#252321;
-              --bean-muted:#66615c; --bean-surface:rgba(255,253,250,.98); --bean-line:#d8d1c9; }
+      :host { color-scheme:light dark; --control-radius:999px; --bean-accent:${ACCENT}; --bean-accent-strong:#1C633A;
+              --bean-accent-tint:#E6F3E9; --bean-primary-ink:#FFFFFF; --bean-ink:#21352A;
+              --bean-muted:#53645A; --bean-danger:#B42335; --bean-issue:#D92D20; --bean-issue-mark:#fff; --bean-surface:rgba(255,255,255,.98); --bean-line:#D4DED5; }
       * { box-sizing:border-box; }
       .layer { position:absolute; top:0; left:0; pointer-events:none; }
-      button { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      button { border-radius:var(--control-radius); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
       button:focus-visible { outline:3px solid var(--bean-accent); outline-offset:2px; }
       .ul { position:absolute; pointer-events:auto; cursor:pointer; margin:0; padding:0;
-            border:0; border-bottom:2px dashed var(--bean-accent); background:transparent; box-sizing:border-box; }
+            border:0; border-bottom:2px solid var(--bean-accent); border-radius:0; background:transparent; box-sizing:border-box; }
       .ul:hover,.ul:focus-visible { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .card { position:absolute; pointer-events:auto; width:min(300px,calc(100vw - 16px));
+              max-height:calc(100vh - 16px); overflow:auto; overscroll-behavior:contain;
               font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
               background:var(--bean-surface); color:var(--bean-ink); border:1px solid var(--bean-line);
               border-radius:13px; box-shadow:0 12px 32px rgba(0,0,0,.2); padding:13px; }
       .row { display:flex; align-items:center; gap:7px; }
       .pill { font-size:11px; color:var(--bean-muted); }
       .x,.more { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
-                 margin-left:auto; cursor:pointer; color:var(--bean-muted); border:0; border-radius:8px; background:transparent; font-size:14px; }
+                 margin-left:auto; cursor:pointer; color:var(--bean-muted); border:0; border-radius:var(--control-radius); background:transparent; font-size:14px; }
       .x:hover,.more:hover { color:var(--bean-accent); background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
       .fix { overflow-wrap:anywhere; font-size:14px; margin:9px 0 11px; }
       .orig { color:var(--bean-muted); text-decoration:line-through; }
@@ -75,24 +92,48 @@
       .sugg { color:var(--bean-accent); font-weight:650; }
       .expl { font-size:11px; color:var(--bean-muted); margin:6px 0 9px; }
       .actions { display:flex; gap:7px; align-items:center; }
+      .alternatives { flex-wrap:wrap; margin-bottom:8px; }
+      .alternatives button.b { min-width:0; max-width:100%; overflow-wrap:anywhere; }
       .spacer { flex:1; }
-      button.b { min-height:32px; border-radius:8px; border:1px solid var(--bean-line);
-                 background:var(--bean-surface); color:var(--bean-ink); padding:5px 10px; cursor:pointer; font-size:12px; }
+      button.b { min-height:32px; border-radius:var(--control-radius); border:1px solid var(--bean-line);
+                 background:var(--bean-surface); color:var(--bean-ink); padding:5px 13px; cursor:pointer; font-size:12px; }
       button.b:hover { border-color:var(--bean-accent); }
-      button.primary { background:var(--bean-accent); color:#fff; border-color:var(--bean-accent); font-weight:650; }
+      button.primary { background:var(--bean-accent); color:var(--bean-primary-ink); border-color:var(--bean-accent); font-weight:650; }
+      button.primary:hover { background:var(--bean-accent-strong); }
       button.b:disabled { opacity:.45; cursor:default; }
       .pico { position:absolute; pointer-events:auto; cursor:pointer; width:30px; height:30px; padding:2px;
-              border-radius:9px; background:var(--bean-surface); border:1px solid var(--bean-line);
+              border-radius:var(--control-radius); background:var(--bean-surface); border:1px solid var(--bean-line);
               box-shadow:0 2px 8px rgba(0,0,0,.2); box-sizing:border-box; }
+      .assistant { position:absolute; display:flex; align-items:center; justify-content:center;
+                   width:28px; height:28px; padding:0; pointer-events:auto; cursor:pointer;
+                   appearance:none; border:0; border-radius:0; background:transparent; color:var(--bean-accent); }
+      .assistant::before { content:""; position:absolute; inset:0; border-radius:50%; pointer-events:none; }
+      .assistant-dot { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:8px; height:8px; flex:none; border:1.5px solid currentColor;
+                       border-radius:50%; background:currentColor; pointer-events:none; }
+      .assistant[data-has-issues="true"] .assistant-dot { border-color:var(--bean-issue); background:var(--bean-issue); }
+      .assistant-issue-mark { display:block; position:relative; width:1.2px; height:4.4px; flex:none; pointer-events:none; }
+      .assistant-issue-mark[hidden] { display:none; }
+      .assistant-issue-mark::before,.assistant-issue-mark::after { content:""; position:absolute; left:0; width:1.2px;
+                                                                background:var(--bean-issue-mark); border-radius:.6px; }
+      .assistant-issue-mark::before { top:0; height:2.6px; }
+      .assistant-issue-mark::after { bottom:0; height:1.2px; }
+      .assistant:hover::before { background:color-mix(in srgb,var(--bean-accent) 10%,transparent); }
+      .source { font-size:10px; color:var(--bean-muted); margin:0 0 5px; }
       .pico img { display:block; width:24px; height:24px; border-radius:7px; }
       .pico:hover { border-color:var(--bean-accent); transform:translateY(-1px); }
       .gactions { display:flex; gap:7px; flex-wrap:wrap; margin-top:8px; }
+      .gactions[hidden] { display:none; }
+      .gactions:not([hidden]) + .actions { margin-top:8px; }
+      .scope { display:flex; gap:3px; margin:10px 0; padding:3px; border:1px solid var(--bean-line); border-radius:9px; }
+      .scope[hidden] { display:none; }
+      .scope button { flex:1; min-height:32px; border:0; border-radius:var(--control-radius); background:transparent; color:var(--bean-ink); cursor:pointer; font-size:11px; }
+      .scope button[aria-pressed="true"] { background:var(--bean-accent-tint); font-weight:650; }
       .overflow-wrap { position:relative; margin-left:auto; }
       .overflow-menu { position:absolute; right:0; bottom:38px; z-index:2; width:210px; padding:5px;
                        border:1px solid var(--bean-line); border-radius:10px; background:var(--bean-surface);
                        box-shadow:0 10px 24px rgba(0,0,0,.18); }
       .overflow-menu[hidden] { display:none; }
-      .overflow-menu button { display:block; width:100%; min-height:34px; padding:7px 9px; border:0; border-radius:7px;
+      .overflow-menu button { display:block; width:100%; min-height:34px; padding:7px 13px; border:0; border-radius:var(--control-radius);
                               background:transparent; color:var(--bean-ink); text-align:left; cursor:pointer; font-size:12px; }
       .overflow-menu button:hover,.overflow-menu button:focus-visible { background:color-mix(in srgb,var(--bean-accent) 11%,transparent); }
       .modal-shield { position:fixed; inset:0; pointer-events:auto; background:transparent; }
@@ -101,24 +142,29 @@
       .compare label { display:block; font-size:10px; font-weight:650; color:var(--bean-muted); margin-bottom:4px; }
       .compare pre { box-sizing:border-box; height:150px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere;
                      margin:0; padding:9px; border-radius:8px; background:color-mix(in srgb,var(--bean-ink) 5%,transparent);
-                     border:1px solid var(--bean-line); font:12px ui-monospace,monospace; }
+                     border:1px solid var(--bean-line); font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      .diff-remove { background:color-mix(in srgb,var(--bean-danger) 17%,transparent); text-decoration:line-through; border-radius:2px; }
+      .diff-add { background:color-mix(in srgb,#30956b 20%,transparent); border-radius:2px; }
       .toast { position:fixed; right:16px; bottom:16px; pointer-events:auto; display:flex; align-items:center; gap:12px;
                min-width:220px; max-width:min(380px,calc(100vw - 32px)); padding:10px 11px 10px 13px;
                border:1px solid var(--bean-line); border-radius:12px; background:var(--bean-surface); color:var(--bean-ink);
                box-shadow:0 12px 30px rgba(0,0,0,.22); font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
       .toast strong { flex:1; font-weight:600; }
-      .toast button { min-width:58px; min-height:32px; border:0; border-radius:8px; background:transparent;
+      .toast button { min-width:58px; min-height:32px; border:0; border-radius:var(--control-radius); padding:5px 13px; background:transparent;
                       color:var(--bean-accent); cursor:pointer; font-weight:700; }
       .toast button:hover { background:color-mix(in srgb,var(--bean-accent) 11%,transparent); }
       .live { position:fixed; width:1px; height:1px; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
       @media (max-width:620px) { .compare { grid-template-columns:1fr; } .compare pre { height:100px; } }
       @media (prefers-color-scheme:dark) {
-        :host { --bean-accent:${DARK_ACCENT}; --bean-ink:#f2efeb; --bean-muted:#c4bdb5;
-                --bean-surface:rgba(41,38,34,.98); --bean-line:#59514a; }
-        button.primary { color:#21160d; }
+        :host { --bean-accent:${DARK_ACCENT}; --bean-accent-strong:#A1E7B9;
+                --bean-accent-tint:#203D2B; --bean-primary-ink:#14281D; --bean-ink:#EDF4EF; --bean-muted:#B7C9BE;
+                --bean-danger:#FF8A94; --bean-issue:#FF6B6B; --bean-issue-mark:#191919; --bean-surface:rgba(34,45,38,.98); --bean-line:#42584A; }
       }
       @media (prefers-reduced-motion:reduce) { .pico:hover { transform:none; } * { transition:none !important; } }
       @media (forced-colors:active) { .card,.pico,.toast,button.b,.overflow-menu { border:1px solid CanvasText; }
+                                     .assistant-dot { border-color:ButtonText; }
+                                     .assistant[data-has-issues="true"] .assistant-dot { border-color:Highlight; background:Highlight; }
+                                     .assistant-issue-mark::before,.assistant-issue-mark::after { background:HighlightText; }
                                      .ul { border-bottom:3px solid LinkText; } }
     `;
     underlineLayer = document.createElement("div");
@@ -140,7 +186,7 @@
   }
 
   function call(handlers, name, ...args) {
-    if (handlers && typeof handlers[name] === "function") handlers[name](...args);
+    if (handlers && typeof handlers[name] === "function") return handlers[name](...args);
   }
 
   function isPlainTabEvent(event) {
@@ -155,6 +201,8 @@
   // the next page control. Page scripts still cannot query or click Apply/AI.
   function keyboardScope() {
     if (paragraphReviewEl) return paragraphReviewEl;
+    if (paragraphBusyEl) return paragraphBusyEl;
+    if (assistantCardEl) return assistantCardEl;
     if (cardEl) return cardEl;
     if (groupCardEl) return groupCardEl;
     return shadow;
@@ -231,6 +279,10 @@
     const active = shadow.activeElement;
     const controls = keyboardControls();
     const fallbackIndex = Math.max(0, controls.indexOf(active));
+    if (active === assistantEl) return { kind:"assistant", fallbackIndex };
+    if (assistantCardEl && assistantCardEl.contains(active)) {
+      return {kind:"assistantCard",action:cardAction(active),fallbackIndex};
+    }
     if (active.dataset && active.dataset.beanIssue) {
       const matches = [...underlineLayer.querySelectorAll("button")].filter((button) =>
         button.dataset && button.dataset.beanIssue === active.dataset.beanIssue
@@ -255,6 +307,8 @@
   function restoreKeyboardFocus(token) {
     if (!token || !shadow) return;
     let target = null;
+    if (token.kind === "assistant" && focusWithoutScroll(assistantEl)) return;
+    if (token.kind === "assistantCard") target = findCardAction(assistantCardEl,token.action);
     if (token.kind === "issue" || token.kind === "issueCard") {
       if (token.kind === "issueCard" && cardEl && cardEl.dataset.beanIssueCard === token.id) {
         target = findCardAction(cardEl, token.action);
@@ -284,12 +338,18 @@
     if (typeof keyboardExitHandler === "function") keyboardExitHandler(-1);
   }
 
-  function clear() {
+  function clearFindings() {
     if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
     if (underlineLayer) underlineLayer.replaceChildren();
     if (cardEl) { cardEl.remove(); cardEl = null; }
     if (groupLayer) groupLayer.replaceChildren();
     if (groupCardEl) { groupCardEl.remove(); groupCardEl = null; }
+  }
+
+  function clear() {
+    clearFindings();
+    if (assistantCardEl) { assistantCardEl.remove(); assistantCardEl = null; }
+    assistantCardState = null;
     if (paragraphReviewEl) { paragraphReviewEl.remove(); paragraphReviewEl = null; }
     if (paragraphReviewShield) { paragraphReviewShield.remove(); paragraphReviewShield = null; }
     if (paragraphBusyEl) { paragraphBusyEl.remove(); paragraphBusyEl = null; }
@@ -352,7 +412,10 @@
   function render(entries, selectedId, position, handlers) {
     const focusToken = keyboardFocusToken();
     try {
-      if (!entries || !entries.length) { clear(); return; }
+      // Empty async results/scroll updates clear findings while retaining a
+      // still-valid expanded assistant. Explicit content invalidation calls
+      // clear() and removes its captured action scope as well.
+      if (!entries || !entries.length) { clearFindings(); return; }
       ensureHost();
       underlineLayer.replaceChildren();
       for (const entry of entries) {
@@ -363,7 +426,7 @@
           underline.dataset.bean = "overlay";
           underline.dataset.beanIssue = entry.id;
           underline.setAttribute("aria-label", `Suggestion: replace ${entry.issue.original} with ${entry.issue.suggestion}`);
-          Object.assign(underline.style, { left:`${r.x}px`, top:`${r.y}px`, width:`${r.w}px`, height:`${r.h}px` });
+          Object.assign(underline.style, { left:`${r.x}px`, top:`${r.y + r.h - Math.min(6, r.h)}px`, width:`${r.w}px`, height:`${Math.min(6, r.h)}px` });
           underline.addEventListener("mouseenter", () => {
             if (hoverTimer) clearTimeout(hoverTimer);
             hoverTimer = setTimeout(() => call(handlers, "onActivate", entry.id), 180);
@@ -404,6 +467,7 @@
       <button class="more" type="button" data-act="more" aria-label="More options" aria-haspopup="menu" aria-expanded="false">•••</button>
       <div class="overflow-menu" role="menu" hidden>
         <button type="button" role="menuitem" data-act="disableField">Disable on this field</button>
+        <button type="button" role="menuitem" data-act="pauseSite">Pause on this website for 1 hour</button>
         <button type="button" role="menuitem" data-act="disableSite">Disable on this website</button>
       </div>
     </div>`;
@@ -466,6 +530,7 @@
       if (event.key === "ArrowUp" && items.length) { event.preventDefault(); items[(index - 1 + items.length) % items.length].focus(); }
     });
     wire(card, '[data-act="disableField"]', () => call(handlers, "onDisableField"));
+    wire(card, '[data-act="pauseSite"]', (event) => call(handlers, "onPauseSite",event));
     wire(card, '[data-act="disableSite"]', () => call(handlers, "onDisableSite"));
   }
 
@@ -476,17 +541,41 @@
     const posText = position ? `${position.index + 1} of ${position.total}` : "";
     card.innerHTML = `<div class="row"><span class="pill" data-part="type"></span>
       <span class="pill" data-part="position"></span><button class="x" type="button" aria-label="Close suggestion">✕</button></div>
-      <div class="fix"><span class="orig"></span><span class="arrow" aria-hidden="true">→</span><span class="sugg"></span></div>
+      <div class="source"></div><div class="fix"><span class="orig"></span><span class="arrow" aria-hidden="true">→</span><span class="sugg"></span></div>
       ${issue.explanation ? '<div class="expl"></div>' : ""}
-      <div class="actions"><button class="b" type="button" data-act="ignore">Ignore</button><span class="spacer"></span>
+      ${Array.isArray(issue.alternatives) && issue.alternatives.length ? '<div class="alternatives"></div>' : ''}
+      ${issue.type === "spelling" ? '<div class="gactions"><button class="b" type="button" data-act="learn">Add to Dictionary</button></div>' : ''}
+      <div class="actions"><button class="b" type="button" data-act="ignore">Dismiss</button><span class="spacer"></span>
         ${position && position.total > 1 ? '<button class="b" type="button" data-act="next" aria-label="Next suggestion">Next</button>' : ""}
-        <button class="b primary" type="button" data-act="apply">Apply</button>${overflowMarkup()}</div>`;
+        <button class="b primary" type="button" data-act="apply">Accept</button>${overflowMarkup()}</div>`;
     card.querySelector('[data-part="type"]').textContent = cap(issue.type || "suggestion");
     card.querySelector('[data-part="position"]').textContent = posText;
-    card.querySelector(".orig").textContent = issue.original;
-    card.querySelector(".sugg").textContent = issue.suggestion;
+    card.querySelector(".source").textContent = issue.source === "ai" ? "AI suggestion · review for accuracy" : "Local suggestion · checked on this Mac";
+    card.querySelector(".orig").textContent = visibleCorrectionText(issue.original);
+    card.querySelector(".sugg").textContent = visibleCorrectionText(issue.suggestion);
     if (issue.explanation) card.querySelector(".expl").textContent = issue.explanation;
+    if (Array.isArray(issue.alternatives) && issue.alternatives.length) {
+      const alternatives = card.querySelector(".alternatives");
+      alternatives.className = "alternatives actions";
+      for (const suggestion of issue.alternatives.slice(0,4)) {
+        const button = document.createElement("button");
+        button.type = "button"; button.className = "b";
+        button.textContent = suggestion;
+        button.setAttribute("aria-label",`Replace with ${suggestion}`);
+        wireButton(button,(event) => {
+          queueFocusForActivationEvent(event);
+          call(handlers,"onApplyAlternative",entry.id,suggestion);
+        });
+        alternatives.appendChild(button);
+      }
+    }
     wire(card, ".x", () => call(handlers, "onClose"));
+    const learn = card.querySelector('[data-act="learn"]');
+    if (learn) {
+      learn.disabled = !handlers || handlers.learnWordAvailable !== true;
+      learn.title = learn.disabled ? "Open Bean to save words to your dictionary" : "Save this word in your Bean dictionary";
+      wireButton(learn,(event) => call(handlers,"onLearnWord",entry.id,event));
+    }
     wire(card, '[data-act="ignore"]', (event) => {
       queueFocusForActivationEvent(event);
       call(handlers, "onIgnore", entry.id);
@@ -502,9 +591,14 @@
     wireOverflow(card, handlers);
     shadow.appendChild(card);
     cardEl = card;
-    anchor(card, entry.rects[0]);
+    anchor(card, entry.rects[entry.rects.length - 1] || entry.cardAnchor);
     announce(`Suggestion: replace ${issue.original} with ${issue.suggestion}`);
     focusAfterKeyboardActivation(card, '[data-act="apply"]');
+  }
+
+  function visibleCorrectionText(text) {
+    if (/^ +$/.test(text)) return `${text.length} ${text.length === 1 ? "space" : "spaces"}`;
+    return text;
   }
 
   function focusAfterKeyboardActivation(card, selector) {
@@ -519,7 +613,8 @@
 
   function anchor(card, rect) {
     const w = card.offsetWidth || 300, h = card.offsetHeight || 120, gap = 8;
-    let x = rect.x + rect.w / 2 - w / 2;
+    const anchorWidth = Number.isFinite(rect.w) ? rect.w : 1;
+    let x = rect.x + anchorWidth / 2 - w / 2;
     x = Math.max(window.scrollX + 8, Math.min(x, window.scrollX + window.innerWidth - w - 8));
     let y = rect.y - h - gap;
     if (y < window.scrollY + 8) y = rect.y + rect.h + gap;
@@ -540,7 +635,7 @@
       groupLayer.replaceChildren();
       if (groupCardEl) { groupCardEl.remove(); groupCardEl = null; }
       if (!groups || !groups.length) return;
-      for (const group of groups) {
+      for (const group of handlers && handlers.hideIcons ? [] : groups) {
         const icon = document.createElement("button");
         icon.type = "button";
         icon.className = "pico";
@@ -577,13 +672,13 @@
     const helper = group.canFix
       ? (usesAI ? "AI checks only the paragraph you just edited." : "Fixes obvious issues locally. No text is sent.")
       : "A safe automatic fix is not available here. Review suggestions one by one.";
-    const fixLabel = usesAI ? "AI Proofread Paragraph" : "Fix Obvious Issues";
+    const fixLabel = usesAI ? "Review AI changes" : "Fix obvious issues";
     card.innerHTML = `<div class="row"><span class="pill" data-part="count"></span>
       <button class="x" type="button" aria-label="Close paragraph suggestions">✕</button></div>
       <div class="expl" data-part="helper"></div><div class="gactions">
         <button class="b primary" type="button" data-act="fix"${group.canFix ? "" : " disabled"}></button>
         <button class="b" type="button" data-act="review">Review one by one</button>
-        <button class="b" type="button" data-act="ignoreAll">Ignore all</button>${overflowMarkup()}</div>`;
+        <button class="b" type="button" data-act="ignoreAll">Dismiss all</button>${overflowMarkup()}</div>`;
     card.querySelector('[data-part="count"]').textContent = `${group.count} suggestions in this paragraph`;
     card.querySelector('[data-part="helper"]').textContent = helper;
     card.querySelector('[data-act="fix"]').textContent = fixLabel;
@@ -599,10 +694,480 @@
     groupCardEl = card;
     anchor(card, { x:group.anchor.x, y:group.anchor.y, w:30, h:group.anchor.h || 30 });
     announce(`${group.count} suggestions in this paragraph`);
-    focusAfterKeyboardActivation(card, group.canFix ? '[data-act="fix"]' : '[data-act="review"]');
+    focusAfterKeyboardActivation(card, '[data-act="review"]');
   }
 
-  function showParagraphBusy(pageRect, message) {
+  function assistantDescription(status, count) {
+    if (status === "appPaused") return "Automatic checks paused for this app";
+    if (status === "waiting") return "Checks update when you pause typing";
+    if (status === "checkingLocal") return "Checking spelling on this Mac…";
+    if (status === "checking") return "Checking the changed paragraph with AI…";
+    if (status === "tooLong") return "This field is too long for inline checks.";
+    if (count) return `${count} writing ${count === 1 ? "suggestion" : "suggestions"}`;
+    if (status === "mappingLimited") return "Suggestions found · exact editing range unavailable";
+    if (status === "empty") return "Ready when you start writing";
+    if (status === "nativeLocal" || status === "ai") return "No spelling or basic grammar suggestions";
+    return "Basic checks only · spelling connection unavailable";
+  }
+
+  function validRect(rect) {
+    return !!rect && [rect.x,rect.y,rect.w,rect.h].every(Number.isFinite) && rect.w > 0 && rect.h > 0;
+  }
+
+  function intersects(a,b,gap = 0) {
+    return a.x < b.x + b.w + gap && a.x + a.w + gap > b.x &&
+      a.y < b.y + b.h + gap && a.y + a.h + gap > b.y;
+  }
+
+  function assistantViewport() {
+    const viewport = {x:window.scrollX,y:window.scrollY,w:window.innerWidth,h:window.innerHeight};
+    if (!validRect(viewport)) return null;
+    const visual = window.visualViewport;
+    if (!visual) return viewport;
+    const visible = {x:viewport.x + visual.offsetLeft,y:viewport.y + visual.offsetTop,
+      w:visual.width,h:visual.height};
+    if (!validRect(visible)) return null;
+    const x = Math.max(viewport.x,visible.x),y = Math.max(viewport.y,visible.y);
+    const w = Math.min(viewport.x + viewport.w,visible.x + visible.w) - x;
+    const h = Math.min(viewport.y + viewport.h,visible.y + visible.h) - y;
+    return validRect({x,y,w,h}) ? {x,y,w,h} : null;
+  }
+
+  function freeEdgeIntervals(lower,upper,blocked) {
+    if (lower > upper) return [];
+    const merged = [];
+    for (const interval of blocked.filter(([a,b])=>b>lower && a<upper).sort((a,b)=>a[0]-b[0])) {
+      const previous = merged[merged.length-1];
+      // Touching open intervals retain their one exact safe origin.
+      if (previous && interval[0] < previous[1]) previous[1] = Math.max(previous[1],interval[1]);
+      else merged.push([...interval]);
+    }
+    const free = [];let cursor = lower;
+    for (const [start,end] of merged) {
+      if (start >= cursor) free.push([cursor,Math.min(start,upper)]);
+      cursor = Math.max(cursor,end);
+      if (cursor > upper) break;
+    }
+    if (cursor <= upper) free.push([cursor,upper]);
+    return free.sort((a,b)=>b[1]-a[1]);
+  }
+
+  // The control belongs to the editable area. Start at its top-right corner,
+  // then use another clear inside edge; typed text and controls are exclusions.
+  function assistantPosition(rect,viewport,exclusions = [],pointSafe = () => true,withinBudget = () => true) {
+    if (!validRect(rect) || !validRect(viewport) || !intersects(rect,viewport) ||
+        !Array.isArray(exclusions) || exclusions.some(r => !validRect(r))) return null;
+    const shortest=Math.min(rect.w,rect.h);
+    if (shortest<20) return null;
+    const size=shortest<32 ? 20 : ASSISTANT_TARGET_SIZE,padding=size===20 ? 2 : ASSISTANT_GAP;
+    const insetX=Math.min(padding,(rect.w-size)/2),insetY=Math.min(padding,(rect.h-size)/2);
+    const left = Math.max(rect.x+insetX,viewport.x+insetX),top = Math.max(rect.y+insetY,viewport.y+insetY);
+    const right = Math.min(rect.x+rect.w-insetX,viewport.x+viewport.w-insetX)-size;
+    const bottom = Math.min(rect.y+rect.h-insetY,viewport.y+viewport.h-insetY)-size;
+    if (left > right || top > bottom) return null;
+    const edges = [
+      {vertical:false,fixed:top,lower:left,upper:right,reverse:true},
+      {vertical:true,fixed:right,lower:top,upper:bottom,reverse:false},
+      {vertical:false,fixed:bottom,lower:left,upper:right,reverse:true},
+      {vertical:true,fixed:left,lower:top,upper:bottom,reverse:false}
+    ];
+    let attempts = 0;
+    for (const edge of edges) {
+      if (!withinBudget()) return null;
+      const blocked = exclusions.filter(obstacle => {
+        const normal = edge.vertical ? obstacle.x : obstacle.y;
+        const length = edge.vertical ? obstacle.w : obstacle.h;
+        return edge.fixed < normal+length+2 && edge.fixed+size+2 > normal;
+      }).map(obstacle => {
+        const tangent = edge.vertical ? obstacle.y : obstacle.x;
+        return [tangent-size-2,tangent+(edge.vertical ? obstacle.h : obstacle.w)+2];
+      });
+      const intervals=freeEdgeIntervals(edge.lower,edge.upper,blocked)
+        .sort((a,b)=>edge.reverse ? b[1]-a[1] : a[0]-b[0]);
+      for (const [a,b] of intervals) {
+        for (const origin of [...new Set(edge.reverse ? [b,(a+b)/2,a] : [a,(a+b)/2,b])]) {
+          if (++attempts > 96 || !withinBudget()) return null;
+          const candidate = edge.vertical ? {x:edge.fixed,y:origin,w:size,h:size} : {x:origin,y:edge.fixed,w:size,h:size};
+          if (exclusions.some(obstacle=>intersects(candidate,obstacle,2))) continue;
+          if ([1,size/2,size-1].every(dx => [1,size/2,size-1].every(dy => pointSafe(candidate.x+dx,candidate.y+dy)))) return candidate;
+        }
+      }
+    }
+    return null;
+  }
+
+  function composedParent(node) {
+    if (!node) return null;
+    if (node.assignedSlot) return node.assignedSlot;
+    if (node.parentElement) return node.parentElement;
+    const root = typeof node.getRootNode === "function" ? node.getRootNode() : null;
+    return root && root.host || null;
+  }
+
+  function beanOwned(node) {
+    for (let current = node; current; current = composedParent(current)) {
+      if (current === hostEl) return true;
+    }
+    return false;
+  }
+
+  function sourceVisible(rect,viewport,source) {
+    if (!source) return true;
+    const x = Math.max(rect.x,viewport.x),y = Math.max(rect.y,viewport.y);
+    const width = Math.min(rect.x + rect.w,viewport.x + viewport.w) - x;
+    const height = Math.min(rect.y + rect.h,viewport.y + viewport.h) - y;
+    if (width <= 0 || height <= 0) return false;
+    return [0.1,0.5,0.9].some(dx => [0.1,0.5,0.9].some(dy => {
+      const hit = document.elementsFromPoint(x + width * dx - window.scrollX,
+        y + height * dy - window.scrollY).find(element => !beanOwned(element));
+      for (let current = hit; current; current = composedParent(current)) if (current === source) return true;
+      return false;
+    }));
+  }
+
+  function assistantDOMPosition(rect,source) {
+    const started = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : null;
+    const overBudget = () => started !== null && performance.now() - started > 12;
+    // Optional surrounding geometry cannot spend the time needed to prove the
+    // exact-source candidate. Keep at least four milliseconds for placement.
+    const optionalBudgetSpent = () => started !== null && performance.now() - started >= 8;
+    const viewport = assistantViewport();
+    if (!validRect(rect) || !viewport || typeof document.elementsFromPoint !== "function" ||
+        source && (!document.contains(source) || source.ownerDocument !== document ||
+          typeof source.getRootNode === "function" && source.getRootNode() !== document)) return null;
+    if (!sourceVisible(rect,viewport,source)) return null;
+    const exclusions=[];let visited=0;
+    const add = (r,caret=false) => {
+      if (!r || overBudget() || exclusions.length>=2048) return false;
+      const box={x:r.x ?? r.left+window.scrollX,y:r.y ?? r.top+window.scrollY,
+        w:r.w ?? r.width,h:r.h ?? r.height};
+      if (![box.x,box.y,box.w,box.h].every(Number.isFinite) || box.w<0 || box.h<0) return false;
+      if (caret && box.h>0 && box.w===0) box.w=2;
+      if (validRect(box) && intersects(box,rect)) exclusions.push(box);
+      return true;
+    };
+    const addClient = r => add({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height});
+    const styleOf = node => typeof window.getComputedStyle === "function" ? window.getComputedStyle(node) : null;
+    const measureTextControl = (node) => {
+      const mapping=window.BeanMapping;
+      if (!mapping || typeof mapping.rectsForRange!=="function") return !node.value && !node.placeholder;
+      const value=String(node.value || "");
+      const controlStyle=styleOf(node);
+      if (controlStyle && controlStyle.writingMode && controlStyle.writingMode!=="horizontal-tb") return false;
+      if (value.length>50000) return false;
+      const rects=mapping.rectsForRange(node,0,value.length);
+      if (value && !rects.length || !rects.every(r=>add(r))) return false;
+      if (!value && node.placeholder) {
+        // Measure an inert copy, never change the real value or its selection.
+        if (typeof node.cloneNode!=="function") return false;
+        const copy=node.cloneNode(false),style=styleOf(node),bounds=node.getBoundingClientRect();
+        copy.removeAttribute("id");copy.removeAttribute("name");copy.tabIndex=-1;
+        copy.setAttribute("aria-hidden","true");copy.value=String(node.placeholder);
+        if (style) for (const property of ["boxSizing","paddingTop","paddingRight","paddingBottom","paddingLeft",
+          "borderTopWidth","borderRightWidth","borderBottomWidth","borderLeftWidth","fontFamily","fontSize",
+          "fontWeight","fontStyle","letterSpacing","textTransform","lineHeight","textIndent","textAlign","direction","writingMode","tabSize"]) copy.style[property]=style[property];
+        Object.assign(copy.style,{position:"fixed",left:`${bounds.left}px`,top:`${bounds.top}px`,
+          width:`${bounds.width}px`,height:`${bounds.height}px`,visibility:"hidden",pointerEvents:"none"});
+        document.body.appendChild(copy);
+        try {const placeholder=mapping.rectsForRange(copy,0,copy.value.length);
+          if (!placeholder.length || !placeholder.every(r=>add(r))) return false;
+        } finally {copy.remove();}
+      }
+      if (document.activeElement===node && Number.isInteger(node.selectionStart)) {
+        const caret=mapping.rectsForRange(node,node.selectionStart,node.selectionStart);
+        if (!caret.length || !caret.every(r=>add(r,true))) return false;
+      }
+      // Keep the target out of a real scrollbar and resize grip.
+      const cs=styleOf(node),border=cs ? (parseFloat(cs.borderLeftWidth)||0)+(parseFloat(cs.borderRightWidth)||0) : 0;
+      if (Number.isFinite(node.clientWidth) && rect.w-node.clientWidth-border>2) {
+        const width=rect.w-node.clientWidth-(parseFloat(cs && cs.borderLeftWidth)||0);
+        exclusions.push({x:rect.x+rect.w-width,y:rect.y,w:width,h:rect.h});
+      }
+      if (cs && cs.resize && cs.resize!=="none") exclusions.push({x:rect.x+rect.w-18,y:rect.y+rect.h-18,w:18,h:18});
+      return true;
+    };
+    if (source && ["INPUT","TEXTAREA"].includes(source.tagName)) {
+      if (!measureTextControl(source)) return null;
+    } else if (source) {
+      const pending=[source];
+      while(pending.length) {
+        const node=pending.pop();if (++visited>1024 || overBudget()) return null;
+        if (node.nodeType===3) {
+          if (!node.nodeValue) continue;
+          if (typeof document.createRange!=="function") return null;
+          const range=document.createRange();range.selectNodeContents(node);
+          const rects=[...range.getClientRects()];
+          if (node.nodeValue.trim() && !rects.length || !rects.every(addClient)) return null;
+          continue;
+        }
+        const cs=styleOf(node);if (cs && cs.display==="none") continue;
+        if (node!==source && (typeof node.matches==="function" && node.matches(ASSISTANT_OBSTACLES) ||
+            ["IMG","SVG","CANVAS","VIDEO","AUDIO","HR"].includes(node.tagName) ||
+            node.getAttribute && node.getAttribute("contenteditable")==="false")) {
+          if (typeof node.getBoundingClientRect!=="function" || !addClient(node.getBoundingClientRect())) return null;
+          continue;
+        }
+        if (node.shadowRoot || String(node.tagName || "").includes("-")) return null;
+        if (!node.childNodes) return null;
+        if (node.childNodes.length+pending.length+visited>1024) return null;
+        for(let i=node.childNodes.length-1;i>=0;i--) pending.push(node.childNodes[i]);
+      }
+      const selection=typeof window.getSelection==="function" ? window.getSelection() : null;
+      if (selection && selection.rangeCount && source.contains(selection.anchorNode)) {
+        const range=selection.getRangeAt(0);
+        for (const r of range.getClientRects()) if (!add({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height},true)) return null;
+      }
+    }
+    // Inspect nearby sibling geometry, not the entire page. A large unrelated
+    // feed or custom element cannot suppress every editor's dot. Intersecting
+    // sibling branches are occupied in full; boxless/pointer-none wrappers
+    // are traversed so an embedded Send button remains an exclusion.
+    if (source) {
+      let child=source;
+      for(let level=0;level<4 && !optionalBudgetSpent();level++) {
+        const parent=composedParent(child);if (!parent || !parent.children) break;
+        const pending=[],seen=new Set();
+        const queueSibling=node=>{
+          if (node && node!==child && !seen.has(node) && !beanOwned(node)) {
+            seen.add(node);pending.push({node,depth:0});
+          }
+        };
+        // Bound collection itself, including a very large flat parent's list.
+        // Immediate neighbors are visited even when the editor occurs late in
+        // a feed; no Array spread/indexOf walks the complete document branch.
+        for(let index=0;index<Math.min(parent.children.length,128);index++) queueSibling(parent.children[index]);
+        for(const direction of ["previousElementSibling","nextElementSibling"]) {
+          let sibling=child[direction];
+          for(let distance=0;sibling && distance<32;distance++,sibling=sibling[direction]) queueSibling(sibling);
+        }
+        let nearbyVisited=0;
+        while(pending.length) {
+          const {node,depth}=pending.pop();if (++nearbyVisited>256 || optionalBudgetSpent()) break;
+          let cs=null;
+          try {cs=styleOf(node);} catch (_optionalGeometryError) {continue;}
+          if (optionalBudgetSpent()) break;
+          if (cs && cs.display==="none") continue;
+          const transparent=cs && (cs.display==="contents" || cs.pointerEvents==="none");
+          if (transparent) {
+            if (!node.children) continue;
+            if (depth<2 && node.children.length<=32) for(const descendant of node.children) pending.push({node:descendant,depth:depth+1});
+            continue;
+          }
+          if (typeof node.getBoundingClientRect!=="function") continue;
+          let r=null;
+          try {r=node.getBoundingClientRect();} catch (_optionalGeometryError) {continue;}
+          if (optionalBudgetSpent()) break;
+          if (!r || ![r.left,r.top,r.width,r.height].every(Number.isFinite) || r.width<0 || r.height<0) continue;
+          addClient(r);
+          // Child fixed/absolute boxes may escape a non-intersecting wrapper.
+          // Only shallow nearby controls are relevant; candidate hit testing
+          // additionally rejects any opaque sibling/top-layer surface.
+          const near={x:rect.x-36,y:rect.y-36,w:rect.w+72,h:rect.h+72};
+          if (node.children && node.children.length<=32 && depth<2 &&
+              (depth===0 || intersects({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height},near)))
+            for(const descendant of node.children) pending.push({node:descendant,depth:depth+1});
+        }
+        if (parent===document.body || parent===document.documentElement) break;
+        child=parent;
+      }
+    }
+    return assistantPosition(rect,viewport,exclusions,(x,y) => {
+      if (overBudget()) return false;
+      const hit=document.elementsFromPoint(x-window.scrollX,y-window.scrollY).find(element=>!beanOwned(element));
+      if (!hit) return false;
+      if (!source) return hit===document.body || hit===document.documentElement;
+      for(let current=hit;current;current=composedParent(current)) {
+        if (current===source) return true;
+        if (typeof current.matches==="function" && current.matches(ASSISTANT_OBSTACLES)) return false;
+      }
+      return false;
+    },()=>!overBudget());
+  }
+
+  function makeAssistantButton() {
+    const button = document.createElement("button");
+    button.type = "button";button.className = "assistant";
+    button.dataset.bean = "overlay";button.dataset.beanAssistant = "";
+    const dot = document.createElement("span");dot.className = "assistant-dot";
+    const issueMark = document.createElement("span");issueMark.className = "assistant-issue-mark";issueMark.hidden = true;
+    issueMark.setAttribute("aria-hidden","true");dot.appendChild(issueMark);
+    dot.setAttribute("aria-hidden","true");button.appendChild(dot);
+    let lastPointerCheck = 0;
+    button.addEventListener("pointerenter",() => {lastPointerCheck = Date.now();refreshAssistantPlacement();});
+    button.addEventListener("pointermove",() => {
+      if (Date.now() - lastPointerCheck < 120) return;
+      lastPointerCheck = Date.now();refreshAssistantPlacement();
+    });
+    button.addEventListener("mousedown",event => {refreshAssistantPlacement();event.preventDefault();});
+    wireButton(button,event => {
+      const current = assistantPlacementState;
+      if (!current) return;
+      // A page control can move between render and click. Revalidate without
+      // taking a new writing snapshot or stealing focus from that control.
+      if (!refreshAssistantPlacement()) return;
+      queueFocusForActivationEvent(event);
+      const scope = call(current.handlers,"onPrepareActions",event);
+      if (scope) current.handlers.actionScope = scope;
+      showAssistantCard(current.rect,current.status,current.handlers,current.count);
+    });
+    shadow.appendChild(button);
+    return button;
+  }
+
+  function refreshAssistantPlacement() {
+    const current = assistantPlacementState;
+    if (!current) return false;
+    const focusToken = keyboardFocusToken();
+    let position = null;
+    try {
+      if (current.source) {
+        const r = current.source.getBoundingClientRect();
+        current.rect = {x:r.left + window.scrollX,y:r.top + window.scrollY,w:r.width,h:r.height};
+      }
+      position = assistantDOMPosition(current.rect,current.source);
+    } catch (_error) {}
+    if (!position) {
+      if (assistantEl) assistantEl.remove();
+      assistantEl = null;
+      if (!validRect(current.rect) || !intersects(current.rect,assistantViewport() || {x:0,y:0,w:0,h:0})) {
+        if (assistantCardEl) assistantCardEl.remove();
+        assistantCardEl = null;assistantCardState = null;
+      }
+      if (focusToken && shadow && !shadow.activeElement) restoreKeyboardFocus(focusToken);
+      return false;
+    }
+    ensureHost();
+    if (!assistantEl) assistantEl = makeAssistantButton();
+    const description = assistantDescription(current.status,current.count);
+    assistantEl.setAttribute("aria-label",`Bean: ${description}. Open writing suggestions.`);
+    assistantEl.title = `Bean: ${description}`;
+    assistantEl.dataset.hasIssues = String(current.count > 0);
+    assistantEl.querySelector(".assistant-issue-mark").hidden = !(current.count > 0);
+    Object.assign(assistantEl.style,{left:`${position.x}px`,top:`${position.y}px`,width:`${position.w}px`,height:`${position.h}px`});
+    if (assistantCardState && assistantCardEl) assistantCardState.refresh(current.rect,current.status,current.count);
+    return true;
+  }
+
+  // One quiet status dot per field, with a larger semantic hit target. The
+  // editor remains usable when no clear inside corner can safely contain that target.
+  function renderAssistant(rect, count, status, handlers, options = {}) {
+    const focusToken = keyboardFocusToken();
+    assistantPlacementState = {rect,count,status,handlers:handlers || {},source:options.source || null};
+    const shown = refreshAssistantPlacement();
+    if (assistantCardState && assistantCardEl) {
+      const scope = assistantCardState.handlers.actionScope;
+      Object.assign(assistantCardState.handlers,handlers || {});
+      assistantCardState.handlers.actionScope = scope;
+      assistantCardState.refresh(assistantPlacementState.rect,status,count);
+    }
+    restoreKeyboardFocus(focusToken);
+    return shown;
+  }
+
+  function hasFieldPresentation() {
+    const viewport = assistantViewport();
+    if (!viewport) return false;
+    const elements = [assistantEl,assistantCardEl,cardEl,groupCardEl,paragraphBusyEl,paragraphReviewEl,
+      ...(underlineLayer && underlineLayer.children || [])];
+    return elements.some(element => {
+      if (!element || typeof element.getBoundingClientRect !== "function") return false;
+      try {
+        const r = element.getBoundingClientRect();
+        const rect = {x:r.left + window.scrollX,y:r.top + window.scrollY,w:r.width,h:r.height};
+        return validRect(rect) && intersects(rect,viewport);
+      } catch (_error) {return false;}
+    });
+  }
+
+  function showAssistantCard(rect, status, handlers, count = 0) {
+    handlers = {...(handlers || {})};
+    if (assistantCardEl) assistantCardEl.remove();
+    const close = () => {
+      if (assistantCardEl) assistantCardEl.remove();
+      assistantCardEl = null;
+      assistantCardState = null;
+      call(handlers, "onClose");
+    };
+    const card = dialogCard("Bean writing assistant", close);
+    card.innerHTML = `<div class="row"><strong></strong><button class="x" type="button" aria-label="Close writing assistant">✕</button></div>
+      <div class="expl"></div>
+      <div class="scope" role="group" aria-label="Writing scope">
+        <button type="button" data-act="scopeDraft">Whole draft</button>
+        <button type="button" data-act="scopeParagraph">Current paragraph</button>
+      </div>
+      <div class="actions"><button class="b" type="button" data-act="review">Review suggestions</button>
+        <button class="b primary" type="button" data-act="proofread">Proofread</button></div>
+      <div class="gactions" data-part="fixAllGroup"><button class="b" type="button" data-act="fixAll"></button></div>
+      <div class="expl" data-part="rewriteScope">Rewrite with AI</div><div class="gactions">
+        <button class="b" type="button" data-act="makeClearer">Clearer</button>
+        <button class="b" type="button" data-act="makeConcise">Concise</button>
+        <button class="b" type="button" data-act="makeProfessional">Professional</button>
+        <button class="b" type="button" data-act="makeCasual">Friendly</button>
+      </div>${overflowMarkup()}`;
+    const updateScope = () => {
+      const actual = handlers && handlers.actionScope || "draft";
+      const scope = actual === "selection" ? "selected text" : actual === "paragraph" ? "current paragraph" : "draft";
+      card.querySelector('[data-act="proofread"]').textContent = `Proofread ${scope}`;
+      card.querySelector('[data-part="rewriteScope"]').textContent = `Rewrite ${scope} with AI`;
+      const group = card.querySelector(".scope");
+      group.hidden = actual === "selection";
+      card.querySelector('[data-act="scopeDraft"]').setAttribute("aria-pressed",String(actual === "draft"));
+      card.querySelector('[data-act="scopeParagraph"]').setAttribute("aria-pressed",String(actual === "paragraph"));
+    };
+    for (const [name,scope] of [["scopeDraft","draft"],["scopeParagraph","paragraph"]]) {
+      wire(card,`[data-act="${name}"]`,(event) => {
+        if (!event || event.isTrusted !== true || handlers.actionScope === "selection") return;
+        const actual = call(handlers,"onPrepareActions",event,scope);
+        if (actual) handlers.actionScope = actual;
+        updateScope();
+        if (actual !== scope) announce("This editor supports the current paragraph. Select a passage to change a different section.");
+      });
+    }
+    const refresh = (nextRect,nextStatus,nextCount) => {
+      card.querySelector("strong").textContent = assistantDescription(nextStatus,nextCount);
+      card.querySelector('[data-act="review"]').hidden = nextCount === 0;
+      card.querySelector('[data-part="fixAllGroup"]').hidden = !(handlers.safeFixCount > 0);
+      card.querySelector('[data-act="fixAll"]').textContent = `Fix ${handlers.safeFixCount || 0} obvious ${handlers.safeFixCount === 1 ? "issue" : "issues"}`;
+      updateScope();
+      card.querySelector(".expl").textContent = nextStatus === "appPaused"
+      ? "Automatic checking is paused in Bean Settings. Proofread and Rewrite remain available when you choose them. Resume this app from Bean’s menu or Settings."
+      : ["nativeLocal","ai"].includes(nextStatus)
+      ? "Spelling and basic grammar checks run on your Mac. AI checks, when enabled, cover the paragraph you last edited."
+      : nextStatus === "mappingLimited" ? "Bean found possible corrections but couldn’t verify their exact range in this editor. Select the text to proofread or use Bean’s Mac keyboard shortcut."
+      : nextStatus === "tooLong" ? "Select a smaller section to proofread or rewrite."
+      : ["waiting","checkingLocal","checking","empty"].includes(nextStatus)
+        ? "Proofread selected text or your current draft in one action. Local proofreading works without an API key."
+        : "Common typo and spacing checks are available. Full spelling needs the Bean app connection. Local results don’t mean the text is error-free.";
+      anchor(card,nextRect);
+    };
+    wire(card, ".x", close);
+    wire(card,'[data-act="review"]',() => call(handlers,"onReview"));
+    const all = card.querySelector('[data-act="fixAll"]');
+    if (all) { all.textContent = `Fix ${handlers.safeFixCount} obvious ${handlers.safeFixCount === 1 ? "issue" : "issues"}`;
+      wireButton(all,(event) => call(handlers,"onFixAll",event)); }
+    for (const action of ["proofread","makeClearer","makeConcise","makeProfessional","makeCasual"]) {
+      wire(card,`[data-act="${action}"]`,(event) => {
+        queueFocusForActivationEvent(event);
+        call(handlers,"onWritingAction",action,event);
+      });
+    }
+    wireOverflow(card, handlers);
+    shadow.appendChild(card); assistantCardEl = card;
+    assistantCardState = {handlers,refresh};
+    refresh(rect,status,count);
+    focusAfterKeyboardActivation(card, '[data-act="proofread"]');
+  }
+
+  function clearAssistant() {
+    if (assistantEl) assistantEl.remove();
+    assistantEl = null;
+    if (assistantCardEl) assistantCardEl.remove();
+    assistantCardEl = null;
+    assistantCardState = null;
+    assistantPlacementState = null;
+  }
+
+  function showParagraphBusy(pageRect, message, onCancel) {
     ensureHost();
     clearParagraphBusy();
     const card = document.createElement("div");
@@ -617,15 +1182,67 @@
     detail.className = "expl";
     detail.textContent = "You can keep typing. Bean will stop if this paragraph changes.";
     card.append(title, detail);
+    if (typeof onCancel === "function") {
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "b"; cancel.dataset.act = "cancel"; cancel.textContent = "Cancel";
+      wireButton(cancel,onCancel); card.appendChild(cancel);
+      card.addEventListener("keydown",(event) => {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCancel(event); }
+      });
+    }
     shadow.appendChild(card);
     paragraphBusyEl = card;
     anchor(card, pageRect || { x:window.scrollX + window.innerWidth / 2, y:window.scrollY + 120, w:1, h:1 });
     announce(title.textContent);
+    focusAfterKeyboardActivation(card,'[data-act="cancel"]');
   }
 
   function clearParagraphBusy() {
     if (paragraphBusyEl) paragraphBusyEl.remove();
     paragraphBusyEl = null;
+  }
+
+  function paragraphDiff(before, after) {
+    const tokenize = (value) => String(value).split(/(\s+|[.,!?;:]+)/).filter(Boolean);
+    const left = tokenize(before), right = tokenize(after);
+    // Requests are capped at 2,000 characters. Keep unusually fragmented text
+    // bounded too; the fallback still shows both full strings without loss.
+    if (left.length > 600 || right.length > 600) return {
+      before:[{ text:before, changed:before !== after }],
+      after:[{ text:after, changed:before !== after }]
+    };
+    const lengths = Array.from({ length:left.length + 1 }, () => new Uint16Array(right.length + 1));
+    for (let i = left.length - 1; i >= 0; i--) {
+      for (let j = right.length - 1; j >= 0; j--) {
+        lengths[i][j] = left[i] === right[j] ? lengths[i + 1][j + 1] + 1
+          : Math.max(lengths[i + 1][j], lengths[i][j + 1]);
+      }
+    }
+    const result = { before:[], after:[] };
+    const append = (parts, text, changed) => {
+      const last = parts[parts.length - 1];
+      if (last && last.changed === changed) last.text += text;
+      else parts.push({ text, changed });
+    };
+    let i = 0, j = 0;
+    while (i < left.length || j < right.length) {
+      if (i < left.length && j < right.length && left[i] === right[j]) {
+        append(result.before, left[i], false); append(result.after, right[j], false); i++; j++;
+      } else if (i < left.length && (j >= right.length || lengths[i + 1][j] >= lengths[i][j + 1])) {
+        append(result.before, left[i++], true);
+      } else append(result.after, right[j++], true);
+    }
+    return result;
+  }
+
+  function renderComparison(element, parts, kind) {
+    element.replaceChildren();
+    for (const part of parts) {
+      const span = document.createElement("span");
+      if (part.changed) span.className = kind === "before" ? "diff-remove" : "diff-add";
+      span.textContent = part.text;
+      element.appendChild(span);
+    }
   }
 
   function reviewParagraph(pageRect, before, after, message) {
@@ -659,20 +1276,21 @@
         event.stopPropagation();
         finish(false);
       });
-      const card = dialogCard("Review unusual Bean result", () => finish(false));
+      const card = dialogCard("Review Bean paragraph changes", () => finish(false));
       card.classList.add("review");
       card.dataset.beanParagraphReview = "";
       card.setAttribute("aria-modal", "true");
       card.removeAttribute("aria-label");
       card.setAttribute("aria-labelledby", "bean-paragraph-review-title");
-      card.innerHTML = `<div class="row"><strong id="bean-paragraph-review-title" tabindex="-1">Review unusual result</strong></div><div class="expl"></div>
-        <div class="compare"><div><label>BEFORE</label><pre data-part="before"></pre></div>
-        <div><label>AFTER</label><pre data-part="after"></pre></div></div>
+      card.innerHTML = `<div class="row"><strong id="bean-paragraph-review-title" tabindex="-1">Review paragraph changes</strong></div><div class="expl"></div>
+        <div class="compare"><div><label>Original</label><pre data-part="before"></pre></div>
+        <div><label>Suggested</label><pre data-part="after"></pre></div></div>
         <div class="actions"><button class="b" type="button" data-act="cancel">Cancel</button><span class="spacer"></span>
-        <button class="b primary" type="button" data-act="apply">Apply reviewed result</button></div>`;
+        <button class="b primary" type="button" data-act="apply">Accept changes</button></div>`;
       card.querySelector(".expl").textContent = message || "Review this result before changing the paragraph.";
-      card.querySelector('[data-part="before"]').textContent = before;
-      card.querySelector('[data-part="after"]').textContent = after;
+      const differences = paragraphDiff(before, after);
+      renderComparison(card.querySelector('[data-part="before"]'), differences.before, "before");
+      renderComparison(card.querySelector('[data-part="after"]'), differences.after, "after");
       wire(card, '[data-act="cancel"]', () => finish(false));
       wire(card, '[data-act="apply"]', () => finish(true));
       card.addEventListener("keydown", (event) => {
@@ -692,7 +1310,7 @@
       paragraphReviewShield = shield;
       paragraphReviewEl = card;
       anchor(card, pageRect || { x:window.scrollX + window.innerWidth / 2, y:window.scrollY + 120, w:1, h:1 });
-      announce("Review unusual Bean result before applying");
+      announce("Review paragraph changes before accepting");
       requestAnimationFrame(() => card.querySelector("#bean-paragraph-review-title")?.focus());
     });
   }
@@ -710,7 +1328,10 @@
     flashEl.setAttribute("role", "status");
     flashEl.setAttribute("aria-live", "polite");
     flashEl.textContent = message;
-    flashEl.style.cssText = `position:absolute;z-index:2147483647;pointer-events:none;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:${ACCENT};color:#fff;padding:5px 9px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap;`;
+    const dark = typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme:dark)").matches;
+    const background = dark ? DARK_ACCENT : ACCENT;
+    const ink = dark ? "#14281D" : "#FFFFFF";
+    flashEl.style.cssText = `position:absolute;z-index:2147483647;pointer-events:none;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:${background};color:${ink};padding:5px 9px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap;`;
     const x = Math.max(window.scrollX + 4, pageRect ? pageRect.x : window.scrollX + 8);
     const y = pageRect ? pageRect.y + (pageRect.h || 18) + 4 : window.scrollY + 8;
     Object.assign(flashEl.style, { left:`${x}px`, top:`${y}px` });
@@ -805,9 +1426,10 @@
   window.BeanOverlay = {
     render, renderGroups, clear, clearUndo, flash, reviewParagraph, showParagraphBusy,
     clearParagraphBusy, showUndo, setFieldDisabled, focusFirstControl, focusLastControl,
-    hasKeyboardControls, setKeyboardExitHandler,
-    _test: { cap, officialMarkURL, wireActivationControl, wireButton,
+    hasKeyboardControls, setKeyboardExitHandler, renderAssistant, clearAssistant, refreshAssistantPlacement, hasFieldPresentation,
+    _test: { cap, assistantDescription, visibleCorrectionText, paragraphDiff, officialMarkURL, wireActivationControl, wireButton,
              queueKeyboardActivationFocus, focusAfterKeyboardActivation, keyboardControls,
-             isPlainTabEvent, keyboardExitDirection, keyboardFocusToken, restoreKeyboardFocus }
+             isPlainTabEvent, keyboardExitDirection, keyboardFocusToken, restoreKeyboardFocus, anchor,
+             assistantPosition, assistantViewport, freeEdgeIntervals }
   };
 })();

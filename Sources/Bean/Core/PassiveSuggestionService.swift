@@ -18,14 +18,19 @@ final class PassiveSuggestionService {
     private let undoStore: ReplacementUndoStore
     private let statusHUD: StatusHUD
 
+    private func dismissPreview() {
+        previewIsShowing = false
+        previewController.dismissPreview()
+    }
+
     private let transformer = WritingTransformService()
     private let popover = SuggestionPopoverController()
     private let previewController = ActionMenuController()
 
     // In-memory only (never persisted, never logged).
-    private var lastShownFingerprint: Int?
     private var lastCallTime: Date?
-    private var ignoredFingerprints = Set<Int>()
+    private var ignoredSnapshot: (element: AXUIElement, value: String)?
+    private var previewIsShowing = false
 
     private struct Session {
         let app: NSRunningApplication?
@@ -39,6 +44,8 @@ final class PassiveSuggestionService {
         var reviewReason: String?
     }
     private var current: Session?
+    /// Revoke the fallback launcher before the richer UI becomes visible.
+    var onWillPresentUI: (() -> Void)?
 
     init(settings: AppSettings, userContent: UserContentStore,
          history: OperationHistoryStore, usageLedger: UsageLedgerStore,
@@ -55,18 +62,30 @@ final class PassiveSuggestionService {
     }
 
     func hideUI() { popover.dismiss() }
-    var isShowingUI: Bool { popover.isShowing }
+    var isShowingUI: Bool { popover.isShowing || previewIsShowing }
+
+    func refreshVisibleTarget() {
+        guard popover.isShowing, let current else { return }
+        guard let app = current.app,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+              let focused = AccessibilityService.focusedField(in: app)?.element,
+              AccessibilityService.isSameElement(focused, current.element),
+              AccessibilityService.value(of: current.element) == current.leading + current.sourceCore + current.trailing
+        else { popover.dismiss(); self.current = nil; return }
+        popover.reposition(sourceAnchor: TextRangeLocator.caretRect(for: current.element)
+                           ?? TextRangeLocator.fieldRect(for: current.element))
+    }
 
     // MARK: - Run (called by the dispatcher)
 
-    /// Runs the passive check for an already-fetched field. `forced` runs even
-    /// if the Passive toggle is off (the inline → passive fallback case).
+    /// A fallback request uses the same automatic-AI opt-in and pause controls
+    /// as ordinary passive checks. Routing cannot bypass the user's choice.
     /// Returns true if a suggestion popover was shown. `reason` is filled with a
     /// skip code when it returns false.
     func run(field: AccessibilityService.FocusedField, app: NSRunningApplication?,
              context: SourceAppContext, isCurrent: @escaping () -> Bool,
              forced: Bool, reason: inout String) async -> Bool {
-        guard forced || settings.passiveActive else { reason = "passiveOff"; return false }
+        guard settings.passiveActive else { reason = "passiveOff"; return false }
         let provider = settings.provider
         let model = settings.model
         // This hidden legacy path can be re-enabled by old preferences. Require
@@ -108,8 +127,15 @@ final class PassiveSuggestionService {
         }
 
         let fp = fingerprint(value)
-        if fp == lastShownFingerprint { reason = "unchanged"; return false }
-        if ignoredFingerprints.contains(fp) { reason = "ignored"; return false }
+        if let ignoredSnapshot,
+           AccessibilityService.isSameElement(ignoredSnapshot.element, field.element),
+           ignoredSnapshot.value == value { reason = "ignored"; return false }
+        if let current, AccessibilityService.isSameElement(current.element, field.element),
+           current.leading + current.sourceCore + current.trailing == value {
+            presentSuggestion(current)
+            reason = "shown"
+            return true
+        }
         if let last = lastCallTime, Date().timeIntervalSince(last) < EngineConfig.automaticLLMCooldown {
             reason = "rateLimited"; return false
         }
@@ -170,7 +196,7 @@ final class PassiveSuggestionService {
         // Stale guard: typing resumed or field changed while in flight.
         guard isCurrent(),
               let nowValue = AccessibilityService.value(of: field.element),
-              fingerprint(nowValue) == fp else {
+              nowValue == value else {
             _ = reservation.complete(
                 usage: completion.usage, outputLength: 0,
                 safetyResult: "notRun", outcome: "staleDiscarded"
@@ -201,17 +227,10 @@ final class PassiveSuggestionService {
             reason = "noChange"; return false
         }
 
-        lastShownFingerprint = fp
         current = Session(app: app, element: field.element, fingerprint: fp,
                           sourceCore: core, leading: leading, trailing: trailing,
                           correctedCore: outCore, context: context, reviewReason: reviewReason)
-        popover.present(
-            previewText: outCore,
-            showApply: reviewReason == nil && !settings.passiveRequirePreview,
-            onApply: { [weak self] in self?.applyCurrent() },
-            onPreview: { [weak self] in self?.previewCurrent() },
-            onIgnore: { [weak self] in self?.ignoreCurrent() },
-            onCopy: { [weak self] in self?.copyCurrent() })
+        if let current { presentSuggestion(current) }
         _ = reservation.complete(
             usage: completion.usage, outputLength: outCore.count,
             safetyResult: reviewReason ?? "ok", outcome: "suggestionShown"
@@ -276,6 +295,21 @@ final class PassiveSuggestionService {
 
     // MARK: - Popover actions
 
+    private func presentSuggestion(_ session: Session) {
+        onWillPresentUI?()
+        popover.present(
+            previewText: session.correctedCore,
+            showApply: true,
+            sourceAnchor: TextRangeLocator.caretRect(for: session.element)
+                ?? TextRangeLocator.selectionRect(for: session.element)
+                ?? TextRangeLocator.fieldRect(for: session.element),
+            onApply: { [weak self] in self?.applyCurrent() },
+            onPreview: { [weak self] in self?.previewCurrent() },
+            onIgnore: { [weak self] in self?.ignoreCurrent() },
+            onCopy: { [weak self] in self?.copyCurrent() }
+        )
+    }
+
     private func applyCurrent() {
         guard let session = current else { return }
         Task { [weak self] in
@@ -294,13 +328,17 @@ final class PassiveSuggestionService {
     }
 
     private func ignoreCurrent() {
-        if let session = current { ignoredFingerprints.insert(session.fingerprint) }
+        if let session = current {
+            ignoredSnapshot = (session.element, session.leading + session.sourceCore + session.trailing)
+        }
+        current = nil
     }
 
     private func previewCurrent() {
         guard let session = current else { return }
         let model = PreviewModel(actionName: "Proofread", transformedText: session.correctedCore,
-                                 originalText: session.sourceCore)
+                                 originalText: session.sourceCore,
+                                 sourceAnchorRect: TextRangeLocator.fieldRect(for: session.element))
         model.helperText = "Review before replacing your text."
         if let reviewReason = session.reviewReason {
             model.reviewWarning = OutputSafetyValidator.reviewMessage(for: reviewReason)
@@ -311,7 +349,7 @@ final class PassiveSuggestionService {
         }
         model.onCopy = model.weakHandler { [weak self] model in
             ClipboardService.writeString(session.leading + model.transformedText + session.trailing)
-            self?.previewController.dismissPreview()
+            self?.dismissPreview()
             self?.statusHUD.show(.success, "Copied")
         }
         model.onTryAgain = model.weakHandler { [weak self] model in
@@ -319,8 +357,10 @@ final class PassiveSuggestionService {
         }
         model.onCancel = model.weakHandler { [weak self] model in
             guard !model.isRunning else { return }
-            self?.previewController.dismissPreview()
+            self?.dismissPreview()
         }
+        onWillPresentUI?()
+        previewIsShowing = true
         previewController.presentPreview(model)
     }
 
@@ -437,12 +477,8 @@ final class PassiveSuggestionService {
 
         let corrected = session.leading + correctedCore + session.trailing
         let result = await replaceFullField(element: session.element, app: app, corrected: corrected, original: nowValue)
-        if case .replacedConfirmed = result {
-            undoStore.registerConfirmedWholeField(app: app, element: session.element,
-                                                  original: nowValue, replacement: corrected)
-        }
         report(result)
-        lastShownFingerprint = nil
+        current = nil
         return result
     }
 
@@ -474,7 +510,7 @@ final class PassiveSuggestionService {
             } else if case let .failed(reason) = result {
                 model.errorMessage = reason
             } else {
-                self.previewController.dismissPreview()
+                self.dismissPreview()
             }
         }
     }
@@ -482,8 +518,11 @@ final class PassiveSuggestionService {
     private func presentRecovery(session: Session, correctedCore: String,
                                  result: TextSelectionService.ReplacementResult) {
         let model = PreviewModel(actionName: "Replacement Recovery", transformedText: correctedCore,
-                                 originalText: session.sourceCore)
+                                 originalText: session.sourceCore,
+                                 sourceAnchorRect: TextRangeLocator.fieldRect(for: session.element))
         configureRecovery(session: session, correctedCore: correctedCore, result: result, model: model)
+        onWillPresentUI?()
+        previewIsShowing = true
         previewController.presentPreview(model)
     }
 
@@ -499,7 +538,7 @@ final class PassiveSuggestionService {
             : "The suggestion remains available here. Check the original field, then copy it if needed."
         model.onCopy = model.weakHandler { [weak self] model in
             ClipboardService.writeString(session.leading + model.transformedText + session.trailing)
-            self?.previewController.dismissPreview()
+            self?.dismissPreview()
             self?.statusHUD.show(.success, "Copied")
         }
         model.onTryAgain = model.weakHandler { [weak self] model in
@@ -507,7 +546,7 @@ final class PassiveSuggestionService {
         }
         model.onCancel = model.weakHandler { [weak self] model in
             guard !model.isRunning else { return }
-            self?.previewController.dismissPreview()
+            self?.dismissPreview()
         }
     }
 
@@ -530,79 +569,11 @@ final class PassiveSuggestionService {
 
     private func replaceFullField(element: AXUIElement, app: NSRunningApplication,
                                   corrected: String, original: String) async -> TextSelectionService.ReplacementResult {
-        // `apply` has already completed the activation delay. Re-read the
-        // exact target and value at the destructive boundary so typing during
-        // activation can never be overwritten by the direct AX write.
-        let currentElementBeforeWrite = AccessibilityService.focusedField(in: app)?.element
-        let targetMatchesBeforeWrite = currentElementBeforeWrite.map {
-            AccessibilityService.isSameElement($0, element)
-        } ?? false
-        guard Self.passiveTargetContinuityFailure(
-            currentTargetExists: currentElementBeforeWrite != nil,
-            targetsMatch: targetMatchesBeforeWrite,
-            valueBefore: original,
-            valueNow: AccessibilityService.value(of: element)
-        ) == nil else {
-            ClipboardService.writeString(corrected)
-            return .staleCopiedToClipboard
-        }
-
-        if AccessibilityService.isValueSettable(element), AccessibilityService.setValue(corrected, on: element) {
-            await Task.pause(Timing.afterActivate)
-            if let after = AccessibilityService.value(of: element),
-               after == corrected { return .replacedConfirmed }
-        }
-
-        let saved = ClipboardService.snapshot()
-        ClipboardService.writeString(corrected)
-        let beanClipboardChangeCount = ClipboardService.changeCount
-        await Task.pause(Timing.afterActivate)
-        ClipboardService.simulateSelectAll()
-        await Task.pause(Timing.afterActivate)
-
-        let clipboardStillOwnedBeforePaste = TextSelectionService.clipboardIsStillOwned(
-            beanOwnedChangeCount: beanClipboardChangeCount,
-            currentChangeCount: ClipboardService.changeCount
-        )
-        let currentElement = AccessibilityService.focusedField(in: app)?.element
-        let targetsMatch = currentElement.map {
-            AccessibilityService.isSameElement($0, element)
-        } ?? false
-        if !clipboardStillOwnedBeforePaste || Self.passiveTargetContinuityFailure(
-            currentTargetExists: currentElement != nil,
-            targetsMatch: targetsMatch,
-            valueBefore: original,
-            valueNow: AccessibilityService.value(of: element)
-        ) != nil {
-            return TextSelectionService.replacementResultAfterClipboardCompletion(
-                .staleCopiedToClipboard,
-                clipboardStillOwned: clipboardStillOwnedBeforePaste
-            )
-        }
-        ClipboardService.simulatePaste()
-        await Task.pause(Timing.afterPaste)
-
-        let result = TextSelectionService.verificationResult(
-            after: AccessibilityService.value(of: element),
-            valueBefore: original,
-            expectedAfter: corrected
-        )
-        let completion = TextSelectionService.clipboardCompletion(for: result)
-        if case .restoreOriginal = completion {
-            await Task.pause(Timing.beforeClipboardRestore)
-        }
-        let clipboardStillOwned = TextSelectionService.clipboardIsStillOwned(
-            beanOwnedChangeCount: beanClipboardChangeCount,
-            currentChangeCount: ClipboardService.changeCount
-        )
-        TextSelectionService.applyClipboardCompletion(
-            completion,
-            saved: saved,
-            clipboardStillOwned: clipboardStillOwned
-        )
-        return TextSelectionService.replacementResultAfterClipboardCompletion(
-            result,
-            clipboardStillOwned: clipboardStillOwned
+        let replacement = TextSelectionService(undoStore: undoStore)
+        defer { replacement.cancel() }
+        return await replacement.replaceWholeField(
+            app: app, element: element, valueBefore: original, replacement: corrected,
+            selectionToRestore: AccessibilityService.selectedRange(of: element)
         )
     }
 

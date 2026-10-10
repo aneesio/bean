@@ -3,6 +3,152 @@
 Notable user-facing changes are recorded here. Bean follows semantic versioning
 once public release tags begin.
 
+## 1.7.1 build 21 — 2026-10-10 (public beta)
+
+- Fix native replacement in Slack and other Chromium/Electron editors by using
+  guarded keyboard edits when their advertised Accessibility selected-text
+  setter cannot reliably apply changes. Keep direct selected-text edits for
+  native editors that support them, exact source verification, and no blind
+  retry after an uncertain edit.
+- Reduce native status dots to 8 points and browser dots to 8 pixels, retaining the
+  28-point normal and 20-point compact pointer targets and contrasting issue
+  marker.
+- Keep one native field assistant when local suggestions or review UI takes
+  over from the fallback dot. Cancel pending fallback presentations so stale
+  timers cannot restore a duplicate.
+- Bundle Bean for the Web 0.8.7. Reuse one overlay per script context, remove
+  invalidated presentations, and update eligible open pages in place after an
+  extension reload without refreshing pages or changing drafts, focus, or
+  selection. Local checks remain available without the native host.
+- Carry the Bean Green palette and dimensional bean icon across the Mac app
+  and extension, with rounded capsule actions and clear primary/secondary
+  treatments.
+- Add provider-specific model choices and compatible request settings,
+  including Claude Haiku 5.5, while preserving previously saved model IDs.
+  Keep OpenAI `gpt-5-nano` and Anthropic `claude-haiku-4-5` as defaults and
+  include cost estimates for Claude Haiku 5.5 usage.
+
+## 1.7.0 build 20 — 2026-10-07 (local candidate)
+
+- Replace the brown brand palette with Bean Green (`#237A48`) across the Mac
+  app and Bean for the Web 0.8.6, including controls, links, field dots, and
+  light/dark surfaces. Retain vivid red possible-issue dots and their contrasting
+  exclamation mark.
+- Remove residual warm warning, error, and shadow tones: use green warnings,
+  clear rose errors, neutral dark marks, and reflected green icon shading.
+- Use the dimensional green-bean artwork with a larger yellow seed scar and a
+  gentler bend. Regenerate every macOS and browser icon resolution from the
+  editable SVG and update the matching monochrome menu-bar silhouette.
+- Bundle the refreshed extension and icons with the Mac app so an in-place
+  app/extension upgrade uses the same green brand.
+- Standardize action buttons on a fully rounded capsule shape across the Mac
+  app and extension, retaining clear primary and secondary action treatments.
+
+## 1.7.0 build 19 — 2026-10-06 (local candidate)
+
+- Keep brand brown for the neutral field dot and use vivid red for possible
+  writing issues in the Mac app and extension 0.8.5.
+- Add a tiny contrasting exclamation mark inside the existing 10-point issue dot, so
+  status differs by shape as well as color in light, dark and browser forced-color
+  appearances.
+- Retain inside placement and the existing 28-point normal / 20-point compact
+  pointer targets; the stronger issue state does not cover additional editor space.
+
+## 1.7.0 build 18 — 2026-10-05 (local candidate)
+
+- Move the brown/amber dot inside the editable text area, preferring its clear
+  top-right corner, in the Mac app and extension 0.8.4. Keep 10-point paint and
+  use a 28-point target in normal fields or 20 points in compact controls.
+- Stop requiring outside margins and complete surrounding app/page geometry.
+  Check the exact field and nearby controls, including visible text fragments,
+  caret, scrollbar and resize-grip geometry where available.
+- Retain another clear inside position when the preferred corner is occupied.
+  Fully occupied, obscured, very small or unsupported fields can still hide the
+  dot; no claim of universal custom-editor compatibility is made.
+- Match alignment, direction and scroll offsets when measuring browser input
+  text and placeholders; large unrelated page branches no longer hide every dot.
+
+## 1.7.0 build 17 — 2026-10-05 (local candidate)
+
+- Use Bean's brand brown for the default field dot, with amber for suggestions,
+  in the Mac app and extension 0.8.3.
+- Keep verified placement available through neutral AX wrappers without their
+  own bounds, and ignore browser backdrops that cannot intercept input. Find
+  clear slots along the complete field edges.
+- Preserve full-target control avoidance, bounded geometry reads and safe hiding
+  when placement cannot be established.
+
+## 1.7.0 build 16 — 2026-10-05 (local candidate)
+
+- Replace native and browser field pills, Bean logos and visible counts with a
+  10-point status dot. Hover retains status; click opens suggestions and actions.
+- Keep the complete click target outside the typing area and clear of neighboring
+  controls. Hide the dot when clear space cannot be verified; underlines and
+  menu-bar/shortcut actions remain available.
+- Apply the same placement safety to the older native launcher so it cannot
+  return over a composer control when the assistant dot is hidden.
+
+## 1.7.0 — 2026-10-02 (public beta candidate)
+
+- Made local live checking and field-side writing actions the default; Bean no
+  longer opens the Writer during ordinary launch or setup completion.
+- Check focused fields after app/focus switches, paste, and programmatic changes,
+  including apps without useful Accessibility notifications.
+- Recognize paste-editable fields without a direct AX value setter, resolve text
+  ancestors/descendants, and enable application-provided Accessibility trees.
+- Recognize editable WebKit surfaces by capabilities and read text through text
+  markers when ordinary text attributes are missing, across apps using that
+  editor framework.
+- Keep the original editor focused after an unsuccessful shortcut read, with
+  an accurate warning instead of a blocking “No Editable Text Found” dialog.
+- Verify source, clipboard and replacement using exact UTF-16 content, including
+  normalization and grapheme boundaries. Never undo an opaque selection by
+  replacing the whole document, or apply a single WebKit issue through a
+  whole-document fallback that could remove unrelated rich formatting.
+- Replace routine proofreading and rewrites in one action, including whole
+  fields, with exact source validation and an Undo action. Failures use a compact
+  notice instead of a comparison window.
+- Prefer a supported selected-text edit after proving the exact range and
+  source. Fallback Paste/Delete targets the captured app with isolated key
+  state; uncertain edits never authorize another replacement attempt.
+- Prevent retry after unconfirmed native delivery, serialize Undo and retain
+  newer history when an older operation finishes.
+- Prevent browser fallback from duplicating an accepted or event-producing edit;
+  respect cancelled beforeinput and uncertain command responses.
+- Give native writing controls and review panels descriptive accessibility
+  names; decorative underlines stay out of the navigation tree.
+- Add offline grammar checks, safe repeated-word/pronoun corrections, and a
+  compact issue tray for fields without exact underline geometry.
+- Give supported browser fields one Bean control for suggestions, direct
+  Proofread, and Rewrite; the native assistant yields only while the extension
+  actively owns that web field.
+- Add offline macOS spelling to browser checks without requiring paid AI, rank
+  ambiguous spelling guesses using nearby prose, and offer alternate spellings.
+  Missing bridge coverage is shown explicitly.
+
+- Proofread rich drafts using bounded minimal edits with exact source checks and reversible batches; keep structural changes outside mechanical proofreading.
+- Unify the native review panel with browser assistance, add app pause, explicit paragraph scope, dictionary learning, stable dismissals, dialect guidance, and cancellable provider actions.
+- Add a family-isolated synthetic quality benchmark, concrete meaning-preservation checks, real owned AppKit/WebKit editor fixtures, bounded performance summaries, and verified install/rollback tests.
+
+## Earlier unreleased — product and writing-quality review
+
+- Added Bean Writer as a first-class writing workspace: native editing, linked
+  underlines and review cards, Accept/Dismiss, personal dictionary, undo,
+  word/character counts, and text/Markdown open/save with unsaved-work protection.
+- Added explicit AI review and previewed rewrites in the Writer, with revision
+  guards so delayed results cannot replace newer typing.
+- Improved setup, app reopening, menu navigation, and Settings sizing so the
+  writing experience is easy to find and works without permission or AI setup.
+- Rebuilt browser assistance around a single quiet field badge, sequential
+  review, reversible corrections, and before/after AI paragraph previews.
+  Site controls no longer reload a page containing an unsaved draft.
+- Fixed repeated-typo mapping, composition handling, stale native suggestions,
+  highlight coordinates, caret preservation, focus recovery, and native undo.
+- Made Quick Fix deterministic; protected URLs, email, code, indentation,
+  Markdown, identifiers, dictionary phrases, and meaningful repeated words.
+  Improved AI candidate confidence, numeric preservation, output parsing, and
+  failure reporting without enabling paid background checks.
+
 ## 1.6.0 — 2026-08-22 (public beta)
 
 - Rebuilt Bean's web experience around all-site local help, a simple blocklist,

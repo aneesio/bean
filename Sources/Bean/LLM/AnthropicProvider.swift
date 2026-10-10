@@ -3,32 +3,11 @@ import Foundation
 // Anthropic Messages API implementation.
 // Endpoint: POST https://api.anthropic.com/v1/messages
 struct AnthropicProvider: LLMProvider {
-    private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
-    private let apiVersion = "2023-06-01"
+    private static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+    private static let apiVersion = "2023-06-01"
 
     func complete(_ request: LLMRequest) async throws -> LLMCompletion {
-        guard !request.apiKey.isEmpty else { throw LLMError.missingAPIKey }
-
-        var urlRequest = URLRequest(url: endpoint)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue(request.apiKey, forHTTPHeaderField: "x-api-key")
-        urlRequest.setValue(apiVersion, forHTTPHeaderField: "anthropic-version")
-
-        // Anthropic takes the TRUSTED instruction as the top-level `system`
-        // field and the UNTRUSTED, delimited user content as the sole user
-        // message. They are never merged, so instructions embedded in the
-        // user's text are not treated as commands.
-        let body: [String: Any] = [
-            "model": request.model,
-            "max_tokens": request.maxOutputTokens,
-            "temperature": 0,
-            "system": request.systemPrompt,
-            "messages": [
-                ["role": "user", "content": request.userText]
-            ]
-        ]
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let urlRequest = try Self.buildRequest(request)
 
         let session = makeSession(timeout: request.timeout)
         let data: Data
@@ -52,6 +31,41 @@ struct AnthropicProvider: LLMProvider {
         let trimmed = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw LLMError.emptyResponse }
         return completion
+    }
+
+    static func buildRequest(_ request: LLMRequest) throws -> URLRequest {
+        guard !request.apiKey.isEmpty else { throw LLMError.missingAPIKey }
+
+        var urlRequest = URLRequest(url: endpoint)
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = request.timeout
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(request.apiKey, forHTTPHeaderField: "x-api-key")
+        urlRequest.setValue(apiVersion, forHTTPHeaderField: "anthropic-version")
+
+        // Anthropic takes the TRUSTED instruction as the top-level `system`
+        // field and the UNTRUSTED, delimited user content as the sole user
+        // message. They are never merged, so instructions embedded in the
+        // user's text are not treated as commands.
+        var body: [String: Any] = [
+            "model": request.model,
+            "max_tokens": request.maxOutputTokens,
+            "system": request.systemPrompt,
+            "messages": [
+                ["role": "user", "content": request.userText]
+            ]
+        ]
+        let options = ProviderKind.anthropic.modelDefinition(for: request.model)?.requestOptions
+        if let temperature = options?.temperature {
+            body["temperature"] = temperature
+        }
+        if options?.anthropicThinkingDisabled == true {
+            // Haiku 5.5 enables adaptive thinking by default. Bean's short
+            // transformations need the bounded output budget for visible text.
+            body["thinking"] = ["type": "disabled"]
+        }
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return urlRequest
     }
 
     static func parseCompletion(data: Data, request: LLMRequest) throws -> LLMCompletion {

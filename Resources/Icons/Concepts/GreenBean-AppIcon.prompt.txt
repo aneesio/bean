@@ -1,0 +1,10 @@
+Generated with the built-in image_gen tool.
+Reference: GreenBean-v2.png.
+
+Use case: precise-object-edit.
+Keep ONLY the detailed green kidney bean and its short soft contact shadow from the input image. Preserve the bean exactly.
+COMPLETELY REPLACE the entire existing background tile and its perimeter. Make a fresh perfectly clean geometrical macOS rounded-square tile: flat smooth pale mint-ivory, clean solid edges, no texture, no raised plate rim, no exterior drop shadow, no glowing outline. Its corners have a large smooth radius. Centered with 7 percent transparent margin on each side. Place the same bean centered on this new tile, same angle and scale.
+The new tile must have an immaculate smooth cutout perimeter. Everything outside this geometrical rounded tile is EMPTY TRANSPARENT ALPHA. Absolutely no residual pixels, detached white fragments, speckles, haze, fringes or texture in the transparent margin.
+The result is a production-ready macOS icon with an actual detailed green bean on a simple pale mint icon tile, not a photograph of a tile. One square image. No text or decorations.
+
+Production export: scaled with CoreGraphics to 1024 x 1024 RGBA; rounded-square tile at x=72, y=72, width=880, height=880, corner radius=197. The geometric export mask removes exterior alpha debris. A pale mint backing inside the mask keeps the tile opaque. AppIcon.png is the authoritative exported artwork.

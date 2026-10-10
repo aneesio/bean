@@ -23,6 +23,7 @@ enum AccessibilityService {
         "AXTextField", "AXTextArea", "AXComboBox"
     ]
     private static let searchSubrole = "AXSearchField"
+    private static let webAreaRole = "AXWebArea"
     // `kAXEditableAncestorAttribute` is missing from older macOS SDK headers
     // even though Chromium/Electron expose the stable AX attribute at runtime.
     // Keep the raw accessibility name so Bean still builds with the macOS 15
@@ -32,6 +33,10 @@ enum AccessibilityService {
         "AXButton", "AXCheckBox", "AXRadioButton", "AXSlider", "AXSwitch",
         "AXLink", "AXMenuItem", "AXPopUpButton", "AXTabGroup"
     ]
+    private static let maximumFallbackTextLength = 200_000
+    private static let messagingTimeout: Float = 0.1
+    private static var preparedApplications = Set<pid_t>()
+    private static let preparedApplicationsLock = NSLock()
 
     // MARK: - Permission
 
@@ -50,19 +55,45 @@ enum AccessibilityService {
     /// The focused UI element across the whole system (inside whatever app is
     /// frontmost), or nil if it can't be resolved.
     static func focusedElement() -> AXUIElement? {
+        let app = NSWorkspace.shared.frontmostApplication
+        if let app { prepareForAccessibility(in: app) }
         let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
         if let element = focusedElement(from: systemWide) { return element }
 
         // Chromium/Electron apps occasionally fail the system-wide focused-UI
         // query while still answering it on their application AX object.
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        guard let app else { return nil }
         return focusedElement(in: app)
     }
 
     /// Reads focus from a specific application AX object. Callers must still
     /// confirm that the app is frontmost before sending synthetic keystrokes.
     static func focusedElement(in app: NSRunningApplication) -> AXUIElement? {
-        focusedElement(from: AXUIElementCreateApplication(app.processIdentifier))
+        prepareForAccessibility(in: app)
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(root, messagingTimeout)
+        return focusedElement(from: root)
+    }
+
+    /// Electron and Chromium often leave their complete accessibility tree off
+    /// until an assistive client asks for it. These application-local flags do
+    /// not grant permission or change the user's system settings.
+    static func prepareForAccessibility(in app: NSRunningApplication) {
+        guard isTrusted else { return }
+        preparedApplicationsLock.lock()
+        if preparedApplications.count > 128 {
+            preparedApplications.formIntersection(Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier)))
+        }
+        let shouldPrepare = preparedApplications.insert(app.processIdentifier).inserted
+        preparedApplicationsLock.unlock()
+        guard shouldPrepare else { return }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(root, messagingTimeout)
+        // Ask by capability rather than a bundle allowlist: unrecognized
+        // attributes are harmless no-ops in ordinary native applications.
+        AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(root, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
     }
 
     private static func focusedElement(from root: AXUIElement) -> AXUIElement? {
@@ -85,6 +116,154 @@ enum AccessibilityService {
     /// Used to confirm focus hasn't moved before we replace a field.
     static func isSameElement(_ a: AXUIElement, _ b: AXUIElement) -> Bool {
         CFEqual(a, b)
+    }
+
+    /// Capture the exact editor/window and known editor-local control geometry.
+    /// Optional range bounds protect the caret/selection without reading labels
+    /// or inspecting unrelated application branches.
+    @MainActor
+    static func fieldOverlayGeometry(for element: AXUIElement,
+                                     protectedTextRects: [CGRect] = [],
+                                     onDiagnostics: ((FieldOverlayGeometryCapture.Diagnostics) -> Void)? = nil) -> FieldOverlayGeometry? {
+        let started = ProcessInfo.processInfo.systemUptime
+        let deadline = started + 0.030
+        let names = [kAXRoleAttribute as String, kAXPositionAttribute as String, kAXSizeAttribute as String]
+
+        func withinBudget() -> Bool { ProcessInfo.processInfo.systemUptime < deadline }
+        func prepare(_ node: AXUIElement) -> Bool {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { return false }
+            AXUIElementSetMessagingTimeout(node, Float(min(remaining, 0.005)))
+            return true
+        }
+        func attribute(_ node: AXUIElement, _ name: String) -> AXUIElement? {
+            guard prepare(node) else { return nil }
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var value: AnyObject?
+            guard AXUIElementCopyAttributeValue(node, name as CFString, &value) == .success,
+                  withinBudget(), let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+            return (value as! AXUIElement)
+        }
+        func geometry(_ node: AXUIElement) -> FieldOverlayGeometryCapture.NodeGeometry? {
+            guard prepare(node) else { return nil }
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var copied: CFArray?
+            let result = AXUIElementCopyMultipleAttributeValues(node, names as CFArray,
+                AXCopyMultipleAttributeOptions(rawValue: 0), &copied)
+            guard withinBudget() else { return nil }
+            guard result == .success, let values = copied as? [Any], values.count == names.count,
+                  let role = values[0] as? String else {
+                // Some neutral wrappers expose a role but do not implement a
+                // geometry batch at all. Their complete child path can still
+                // prove the editor/control rectangles without inventing bounds.
+                guard prepare(node), let role = stringAttribute(node, kAXRoleAttribute as String), withinBudget() else { return nil }
+                return .init(role: role, rect: nil)
+            }
+            guard CFGetTypeID(values[1] as CFTypeRef) == AXValueGetTypeID(),
+                  CFGetTypeID(values[2] as CFTypeRef) == AXValueGetTypeID() else { return .init(role: role, rect: nil) }
+            var point = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(values[1] as! AXValue, .cgPoint, &point),
+                  AXValueGetValue(values[2] as! AXValue, .cgSize, &size),
+                  let primary = NSScreen.screens.first else { return .init(role: role, rect: nil) }
+            let rect = CGRect(x: point.x, y: primary.frame.height - point.y - size.height,
+                              width: size.width, height: size.height)
+            return .init(role: role, rect: OverlayGeometry.isFiniteRect(rect) ? rect : nil)
+        }
+        func children(_ node: AXUIElement, limit: Int) -> [AXUIElement]? {
+            guard prepare(node) else { return nil }
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var count: CFIndex = 0
+            let error = AXUIElementGetAttributeValueCount(node, kAXChildrenAttribute as CFString, &count)
+            // Unsupported is not proof of an empty subtree. Known semantic
+            // leaves need no child read; unresolved containers fail closed.
+            if error == .attributeUnsupported { return nil }
+            guard error == .success, count >= 0, count <= limit, withinBudget() else { return nil }
+            if count == 0 { return [] }
+            var copied: CFArray?
+            guard AXUIElementCopyAttributeValues(node, kAXChildrenAttribute as CFString, 0, count, &copied) == .success,
+                  withinBudget(), let values = copied as? [Any], values.count == count,
+                  values.allSatisfy({ CFGetTypeID($0 as CFTypeRef) == AXUIElementGetTypeID() }) else { return nil }
+            return values.map { $0 as! AXUIElement }
+        }
+        func selectionProtection(_ node: AXUIElement) -> [CGRect] {
+            guard deadline - ProcessInfo.processInfo.systemUptime > 0.015 else { return [] }
+            AXUIElementSetMessagingTimeout(node, 0.002)
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var copied: AnyObject?
+            guard AXUIElementCopyAttributeValue(node, kAXSelectedTextRangeAttribute as CFString, &copied) == .success,
+                  withinBudget(), let copied, CFGetTypeID(copied) == AXValueGetTypeID() else { return [] }
+            var selected = CFRange(location: 0, length: 0)
+            guard AXValueGetValue(copied as! AXValue, .cfRange, &selected), selected.location >= 0, selected.length >= 0,
+                  let range = AXValueCreate(.cfRange, &selected) else { return [] }
+            var bounds: AnyObject?
+            guard AXUIElementCopyParameterizedAttributeValue(node, kAXBoundsForRangeParameterizedAttribute as CFString,
+                  range, &bounds) == .success, withinBudget(), let bounds,
+                  CFGetTypeID(bounds) == AXValueGetTypeID(), let primary = NSScreen.screens.first else { return [] }
+            var axRect = CGRect.zero
+            guard AXValueGetValue(bounds as! AXValue, .cgRect, &axRect), axRect.height > 0,
+                  axRect.origin.x.isFinite, axRect.origin.y.isFinite, axRect.width.isFinite, axRect.height.isFinite else { return [] }
+            let rect = CGRect(x: axRect.minX, y: primary.frame.height - axRect.maxY,
+                              width: max(axRect.width, 1), height: axRect.height)
+            return OverlayGeometry.isFiniteRect(rect) ? [rect] : []
+        }
+        return FieldOverlayGeometryCapture.capture(element: element,
+            window: { attribute($0, kAXWindowAttribute as String) }, geometry: geometry,
+            parent: { attribute($0, kAXParentAttribute as String) }, children: children,
+            isSame: isSameElement, now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline,
+            protectedRects: protectedTextRects, protectedGeometry: selectionProtection,
+            onDiagnostics: onDiagnostics)
+    }
+
+    typealias FieldOverlayTargetHitTest = FieldOverlayGeometryCapture.TargetHitTest
+
+    /// Content-free, application-local hit probes of the complete target.
+    /// Querying the source application avoids intercepting Bean's own overlay.
+    /// Positive control hits reject a candidate; unavailable AX hit capability
+    /// remains a generic best-effort placement rather than hiding the editor.
+    @MainActor
+    static func fieldOverlayTargetHitTest(_ frame: CGRect, for element: AXUIElement) -> FieldOverlayTargetHitTest {
+        guard OverlayGeometry.isFiniteRect(frame), let primary = NSScreen.screens.first else { return .unavailable }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return .unavailable }
+        let root = AXUIElementCreateApplication(pid)
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.010
+        func prepare(_ node: AXUIElement) -> Bool {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { return false }
+            AXUIElementSetMessagingTimeout(node, Float(min(remaining, 0.002)))
+            return true
+        }
+        func read(_ node: AXUIElement, attribute: String) -> AnyObject? {
+            guard prepare(node) else { return nil }
+            defer { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
+            var copied: AnyObject?
+            guard AXUIElementCopyAttributeValue(node, attribute as CFString, &copied) == .success,
+                  ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            return copied
+        }
+        func parent(_ node: AXUIElement) -> AXUIElement? {
+            guard let copied = read(node, attribute: kAXParentAttribute as String),
+                  CFGetTypeID(copied) == AXUIElementGetTypeID() else { return nil }
+            return copied as! AXUIElement
+        }
+        let windowValue = read(element, attribute: kAXWindowAttribute as String)
+        let sourceWindow: AXUIElement? = windowValue.flatMap { value in
+            CFGetTypeID(value) == AXUIElementGetTypeID() ? (value as! AXUIElement) : nil
+        }
+        return FieldOverlayGeometryCapture.targetHitTest(frame: frame, source: element, sourceWindow: sourceWindow,
+            hit: { point in
+                guard prepare(root) else { return nil }
+                defer { AXUIElementSetMessagingTimeout(root, messagingTimeout) }
+                var target: AXUIElement?
+                guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(primary.frame.height - point.y), &target) == .success,
+                      ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+                return target
+            }, role: { read($0, attribute: kAXRoleAttribute as String) as? String }, parent: parent,
+            isSame: isSameElement, belongsToSourceApplication: { node in
+                var targetPID: pid_t = 0
+                return AXUIElementGetPid(node, &targetPID) == .success ? targetPID == pid : nil
+            }, now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
     }
 
     // MARK: - Reading
@@ -112,9 +291,156 @@ enum AccessibilityService {
         return (value as! AXUIElement)
     }
 
+    private static func metadataAttributes(of element: AXUIElement, includeLabels: Bool) -> [String: Any]? {
+        var names = [kAXRoleAttribute as String, kAXSubroleAttribute as String,
+                     kAXEnabledAttribute as String, "AXEditable", "AXIsEditable", "AXReadOnly"]
+        if includeLabels {
+            names += [kAXTitleAttribute as String, kAXPlaceholderValueAttribute as String]
+        }
+        var copied: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(
+            element, names as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &copied
+        ) == .success, let values = copied as? [Any], values.count == names.count else { return nil }
+        return Dictionary(uniqueKeysWithValues: zip(names, values))
+    }
+
     /// Reads the full text value (`kAXValueAttribute`) of a specific element.
     static func value(of element: AXUIElement) -> String? {
-        stringAttribute(element, kAXValueAttribute as String)
+        guard !isSecureElement(element) else { return nil }
+        // WebKit document editors expose a WebArea, whose AXValue can be an
+        // empty placeholder even when its document contains text. Ask for the
+        // complete element range, never its selection or visible descendants.
+        let isWebArea = stringAttribute(element, kAXRoleAttribute as String) == webAreaRole
+        if isWebArea,
+           let text = fullTextMarkerText(of: element) { return text }
+        if let text = stringAttribute(element, kAXValueAttribute as String),
+           !isWebArea || !text.isEmpty { return text }
+        // Rich editors such as Word may expose range text but no AXValue.
+        // Never return a truncated document: replacement verifies the exact
+        // complete snapshot and must not mistake an excerpt for the full field.
+        var countValue: AnyObject?
+        if AXUIElementCopyAttributeValue(
+            element, kAXNumberOfCharactersAttribute as CFString, &countValue
+        ) == .success, let count = boundedTextLength(countValue) {
+            if count == 0 { return "" }
+            if let text = string(in: element, range: NSRange(location: 0, length: count)),
+               (text as NSString).length == count { return text }
+        }
+        return fullTextMarkerText(of: element)
+    }
+
+    static func canReadFallbackText(characterCount: Int) -> Bool {
+        characterCount >= 0 && characterCount <= maximumFallbackTextLength
+    }
+
+    static func selectedText(of element: AXUIElement) -> String? {
+        guard !isSecureElement(element) else { return nil }
+        let ordinaryText = stringAttribute(element, kAXSelectedTextAttribute as String)
+        if let ordinaryText, !ordinaryText.isEmpty { return ordinaryText }
+        if let range = selectedRange(of: element), range.length > 0,
+           let text = string(in: element, range: range) { return text }
+        guard let marker = copiedAttribute("AXSelectedTextMarkerRange", of: element) else { return ordinaryText }
+        return text(forMarkerRange: marker, in: element) ?? ordinaryText
+    }
+
+    /// Opaque WebKit selections preserve the actual position of repeated text.
+    /// They are kept only in memory and are never treated as numeric offsets.
+    struct TextSelectionSnapshot {
+        let text: String
+        let range: NSRange?
+        fileprivate let markerRange: CFTypeRef?
+    }
+
+    static func selectionSnapshot(of element: AXUIElement) -> TextSelectionSnapshot? {
+        guard !isSecureElement(element) else { return nil }
+        if let range = selectedRange(of: element), range.location >= 0, range.length > 0,
+           let text = selectedText(of: element), (text as NSString).length == range.length {
+            return TextSelectionSnapshot(text: text, range: range, markerRange: nil)
+        }
+        guard let marker = copiedAttribute("AXSelectedTextMarkerRange", of: element),
+              let text = text(forMarkerRange: marker, in: element), !text.isEmpty else { return nil }
+        return TextSelectionSnapshot(text: text, range: nil, markerRange: marker)
+    }
+
+    /// Text equality alone cannot prove which repeated occurrence is selected.
+    static func selectionMatches(_ snapshot: TextSelectionSnapshot, on element: AXUIElement) -> Bool {
+        guard let current = selectionSnapshot(of: element),
+              current.text.utf16.elementsEqual(snapshot.text.utf16) else { return false }
+        if let marker = snapshot.markerRange {
+            guard let currentMarker = current.markerRange else { return false }
+            return CFEqual(marker, currentMarker)
+        }
+        guard let range = snapshot.range else { return false }
+        return current.range == range
+    }
+
+    private static func copiedAttribute(_ attribute: String, of element: AXUIElement) -> CFTypeRef? {
+        var result: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &result) == .success else { return nil }
+        return result
+    }
+
+    private static func parameterizedAttribute(_ attribute: String, parameter: CFTypeRef,
+                                               of element: AXUIElement) -> CFTypeRef? {
+        var result: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, attribute as CFString, parameter, &result
+        ) == .success else { return nil }
+        return result
+    }
+
+    private static func boundedTextLength(_ value: CFTypeRef?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let length = number.doubleValue
+        guard length.isFinite, length >= 0, length <= Double(maximumFallbackTextLength),
+              length.rounded(.down) == length else { return nil }
+        return Int(length)
+    }
+
+    private static func text(forMarkerRange marker: CFTypeRef, in element: AXUIElement) -> String? {
+        guard let count = boundedTextLength(parameterizedAttribute(
+            "AXLengthForTextMarkerRange", parameter: marker, of: element
+        )) else { return nil }
+        if count == 0 { return "" }
+        guard let text = parameterizedAttribute(
+            "AXStringForTextMarkerRange", parameter: marker, of: element
+        ) as? String, (text as NSString).length == count else { return nil }
+        return text
+    }
+
+    private static func fullTextMarkerText(of element: AXUIElement) -> String? {
+        guard let marker = parameterizedAttribute(
+            "AXTextMarkerRangeForUIElement", parameter: element, of: element
+        ) else { return nil }
+        return text(forMarkerRange: marker, in: element)
+    }
+
+    /// Distinguishes a DOM editor from browser-owned controls such as the
+    /// omnibox. Extension ownership must never hide native help in browser UI.
+    /// Callers cache this value for the focused AX element; the scan is shallow
+    /// and time bounded so a slow browser cannot stall every monitor tick.
+    static func isBrowserWebContentField(_ field: FocusedField) -> Bool {
+        guard field.acceptsTextInput, !field.isSecure else { return false }
+        var element = field.element
+        let deadline = Date().addingTimeInterval(0.2)
+        for _ in 0..<16 {
+            guard Date() < deadline,
+                  let role = stringAttribute(element, kAXRoleAttribute as String) else { return false }
+            switch role {
+            case "AXWebArea": return true
+            // Web pages can contain ARIA toolbars and dialogs (Gmail's compose
+            // surface is one). Only the window boundary proves we have left
+            // the web document; a toolbar role alone is not browser chrome.
+            case "AXWindow", "AXApplication": return false
+            default: break
+            }
+            guard Date() < deadline,
+                  let parent = elementAttribute(element, kAXParentAttribute as String),
+                  !isSameElement(element, parent) else { return false }
+            AXUIElementSetMessagingTimeout(parent, messagingTimeout)
+            element = parent
+        }
+        return false
     }
 
     /// Reads the full text value of the currently focused element.
@@ -132,8 +458,45 @@ enum AccessibilityService {
         return NSRange(location: range.location, length: range.length)
     }
 
+    @discardableResult
+    static func setSelectedRange(_ range: NSRange, on element: AXUIElement) -> Bool {
+        guard range.location >= 0, range.length >= 0 else { return false }
+        var cfRange = CFRange(location: range.location, length: range.length)
+        guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return false }
+        return AXUIElementSetAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, rangeValue
+        ) == .success
+    }
+
+    /// A supported selected-text setter edits the editor's current span in its
+    /// own model. Callers must prove the live range/source before this call;
+    /// unlike a queued Paste, it cannot be routed to a later keyboard target.
+    @discardableResult
+    static func setSelectedText(_ text: String, on element: AXUIElement) -> Bool {
+        guard !isSecureElement(element), isSelectedTextSettable(element) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString,
+                                           text as CFString) == .success
+    }
+
+    static func isSelectedTextSettable(_ element: AXUIElement) -> Bool {
+        !isSecureElement(element) && isAttributeSettable(kAXSelectedTextAttribute as String, on: element)
+    }
+
+    /// Keep native AppKit setters, but deliver ordinary editing commands to
+    /// web editors. Inspect ancestry as well as app identity to cover embedded
+    /// web views and Electron apps outside the known bundle list.
+    static func selectedTextEditTransport(for field: FocusedField,
+                                          in app: NSRunningApplication?) -> NativeEditTransport {
+        NativeEditTransport.preferred(
+            bundleIdentifier: app?.bundleIdentifier,
+            selectedTextSettable: field.isSelectedTextSettable,
+            isWebContent: field.isSelectedTextSettable && isBrowserWebContentField(field)
+        )
+    }
+
     /// Reads the substring for a range via AXStringForRange, or nil.
     static func string(in element: AXUIElement, range: NSRange) -> String? {
+        guard range.location >= 0, range.length >= 0, !isSecureElement(element) else { return nil }
         var cfRange = CFRange(location: range.location, length: range.length)
         guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return nil }
         var result: AnyObject?
@@ -147,17 +510,24 @@ enum AccessibilityService {
     /// Returns true only on success. Used for single-issue inline apply.
     @discardableResult
     static func replaceRange(_ range: NSRange, with text: String, in element: AXUIElement) -> Bool {
-        var cfRange = CFRange(location: range.location, length: range.length)
-        guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return false }
-        guard AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, rangeValue) == .success else {
-            return false
-        }
-        return AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+        guard isAttributeSettable(kAXSelectedTextRangeAttribute as String, on: element),
+              isAttributeSettable(kAXSelectedTextAttribute as String, on: element) else { return false }
+        let priorSelection = selectedRange(of: element)
+        guard setSelectedRange(range, on: element) else { return false }
+        let wrote = AXUIElementSetAttributeValue(
+            element, kAXSelectedTextAttribute as CFString, text as CFString
+        ) == .success
+        if !wrote, let priorSelection { setSelectedRange(priorSelection, on: element) }
+        return wrote
     }
 
     /// Whether an element's value attribute can be written directly.
     static func isValueSettable(_ element: AXUIElement) -> Bool {
         isAttributeSettable(kAXValueAttribute as String, on: element)
+    }
+
+    static func isSelectedRangeSettable(_ element: AXUIElement) -> Bool {
+        isAttributeSettable(kAXSelectedTextRangeAttribute as String, on: element)
     }
 
     private static func isAttributeSettable(_ attribute: String, on element: AXUIElement) -> Bool {
@@ -199,14 +569,36 @@ enum AccessibilityService {
         let isSelectedTextSettable: Bool
         let isEnabled: Bool
         let hasEditableAncestor: Bool
+        let isExplicitlyEditable: Bool?
+        let isSelectedRangeSettable: Bool
+
+        init(element: AXUIElement, role: String?, subrole: String?, value: String?,
+             title: String?, placeholder: String?, isValueSettable: Bool,
+             isSelectedTextSettable: Bool, isEnabled: Bool, hasEditableAncestor: Bool,
+             isExplicitlyEditable: Bool? = nil, isSelectedRangeSettable: Bool = false) {
+            self.element = element
+            self.role = role
+            self.subrole = subrole
+            self.value = value
+            self.title = title
+            self.placeholder = placeholder
+            self.isValueSettable = isValueSettable
+            self.isSelectedTextSettable = isSelectedTextSettable
+            self.isEnabled = isEnabled
+            self.hasEditableAncestor = hasEditableAncestor
+            self.isExplicitlyEditable = isExplicitlyEditable
+            self.isSelectedRangeSettable = isSelectedRangeSettable
+        }
 
         /// True when the focused element looks like an editable text control we
         /// can safely consider for text operations. A settable value by itself is
         /// not enough: sliders and other controls also expose writable AXValue.
         var isTextLike: Bool {
-            if let role, AccessibilityService.textRoles.contains(role) { return true }
-            if let subrole, subrole == AccessibilityService.searchSubrole { return true }
-            return hasEditableAncestor
+            AccessibilityService.isTextLike(
+                role: role, subrole: subrole, hasEditableAncestor: hasEditableAncestor,
+                isExplicitlyEditable: isExplicitlyEditable,
+                isValueSettable: isValueSettable, isSelectedTextSettable: isSelectedTextSettable
+            )
         }
 
         /// The focused item has an actual text-input semantic role (or a web
@@ -220,8 +612,14 @@ enum AccessibilityService {
         /// inline checks, and whole-field replacement. Read-only/disabled text
         /// and non-text controls must never qualify.
         var acceptsTextInput: Bool {
-            isSemanticTextSurface
-                && (hasEditableAncestor || isValueSettable || isSelectedTextSettable)
+            AccessibilityService.acceptsTextInput(
+                isSemanticTextSurface: isSemanticTextSurface,
+                isExplicitlyEditable: isExplicitlyEditable,
+                hasEditableAncestor: hasEditableAncestor,
+                isValueSettable: isValueSettable,
+                isSelectedTextSettable: isSelectedTextSettable,
+                isSelectedRangeSettable: isSelectedRangeSettable
+            )
         }
 
         /// True when this is a small, conservative field (search box / address
@@ -262,30 +660,145 @@ enum AccessibilityService {
         return focusedField(from: rawElement, includeValue: false)
     }
 
-    private static func focusedField(from rawElement: AXUIElement, includeValue: Bool) -> FocusedField {
-        let rawRole = stringAttribute(rawElement, kAXRoleAttribute as String)
-        let editableAncestor: AXUIElement?
-        if let rawRole, interactiveNonTextRoles.contains(rawRole) {
-            // A button inside a contenteditable container is still a button.
-            editableAncestor = nil
-        } else {
-            editableAncestor = elementAttribute(rawElement, editableAncestorAttribute)
-        }
-        let element = editableAncestor ?? rawElement
+    /// Direct AX writes and ordinary keyboard editing are separate capabilities.
+    /// A focused editable text area can deny AXValue/AXSelectedText writes while
+    /// allowing range selection followed by a normal paste.
+    static func acceptsTextInput(isSemanticTextSurface: Bool,
+                                 isExplicitlyEditable: Bool?,
+                                 hasEditableAncestor: Bool,
+                                 isValueSettable: Bool,
+                                 isSelectedTextSettable: Bool,
+                                 isSelectedRangeSettable: Bool) -> Bool {
+        guard isSemanticTextSurface, isExplicitlyEditable != false else { return false }
+        return isExplicitlyEditable == true || hasEditableAncestor || isValueSettable
+            || isSelectedTextSettable || isSelectedRangeSettable
+    }
+
+    static func isTextLike(role: String?, subrole: String?, hasEditableAncestor: Bool,
+                           isExplicitlyEditable: Bool?, isValueSettable: Bool,
+                           isSelectedTextSettable: Bool) -> Bool {
+        if let role, textRoles.contains(role) { return true }
+        if subrole == searchSubrole || hasEditableAncestor { return true }
+        // A WebArea can be a complete document editor or a read-only page.
+        // Writable selection ranges alone are available on both, so require
+        // actual text-editing evidence before inspecting document contents.
+        return role == webAreaRole && isExplicitlyEditable != false
+            && (isExplicitlyEditable == true || isValueSettable || isSelectedTextSettable)
+    }
+
+    private static func isSecureElement(_ element: AXUIElement) -> Bool {
         let role = stringAttribute(element, kAXRoleAttribute as String)
         let subrole = stringAttribute(element, kAXSubroleAttribute as String)
-        let secure = (role?.contains("Secure") ?? false) || (subrole?.contains("Secure") ?? false)
+        return (role?.contains("Secure") ?? false) || (subrole?.contains("Secure") ?? false)
+    }
+
+    private static func explicitEditability(of element: AXUIElement) -> Bool? {
+        explicitEditability(readOnly: boolAttribute(element, "AXReadOnly"),
+                            editable: boolAttribute(element, "AXEditable"),
+                            isEditable: boolAttribute(element, "AXIsEditable"))
+    }
+
+    static func explicitEditability(readOnly: Bool?, editable: Bool?, isEditable: Bool?) -> Bool? {
+        if readOnly == true || editable == false || isEditable == false { return false }
+        if editable == true || isEditable == true { return true }
+        return nil
+    }
+
+    private static func textElement(from rawElement: AXUIElement) -> (AXUIElement, Bool) {
+        // Some web/custom editors report their focused leaf (static text) or a
+        // grouping element rather than the editable container. Resolve only a
+        // focus-related path; never search arbitrary document contents.
+        let rawRole = stringAttribute(rawElement, kAXRoleAttribute as String)
+        if let rawRole, textRoles.contains(rawRole) {
+            if !isSecureElement(rawElement),
+               let ancestor = elementAttribute(rawElement, editableAncestorAttribute),
+               !isSecureElement(ancestor) {
+                AXUIElementSetMessagingTimeout(ancestor, messagingTimeout)
+                return (ancestor, true)
+            }
+            return (rawElement, false)
+        }
+        guard rawRole != nil else { return (rawElement, false) }
+        var focused = rawElement
+        for _ in 0..<4 {
+            guard !isSecureElement(focused),
+                  let next = elementAttribute(focused, kAXFocusedUIElementAttribute as String)
+                    ?? elementAttribute(focused, "AXActiveDescendant"),
+                  !isSameElement(next, focused) else { break }
+            AXUIElementSetMessagingTimeout(next, messagingTimeout)
+            focused = next
+        }
+        guard !isSecureElement(focused) else { return (focused, false) }
+        let role = stringAttribute(focused, kAXRoleAttribute as String)
+        if let role, interactiveNonTextRoles.contains(role) { return (focused, false) }
+        if let ancestor = elementAttribute(focused, editableAncestorAttribute),
+           !isSecureElement(ancestor) {
+            AXUIElementSetMessagingTimeout(ancestor, messagingTimeout)
+            return (ancestor, true)
+        }
+        if let role, textRoles.contains(role) { return (focused, false) }
+
+        // A static-text leaf inside a native rich text control sometimes omits
+        // AXEditableAncestor. Walk its enclosing chain, bounded at the window.
+        guard role == "AXStaticText" || role == "AXGroup" || role == "AXUnknown" else {
+            return (focused, false)
+        }
+        var candidate = focused
+        for _ in 0..<3 {
+            guard let parent = elementAttribute(candidate, kAXParentAttribute as String),
+                  !isSameElement(candidate, parent) else { break }
+            AXUIElementSetMessagingTimeout(parent, messagingTimeout)
+            candidate = parent
+            let parentRole = stringAttribute(parent, kAXRoleAttribute as String)
+            if isSecureElement(parent) { return (parent, false) }
+            if parentRole == "AXWindow" || parentRole == "AXApplication" { break }
+            if let parentRole, interactiveNonTextRoles.contains(parentRole) { break }
+            let editable = explicitEditability(of: parent)
+            if let parentRole, (textRoles.contains(parentRole) || parentRole == webAreaRole),
+               editable != false,
+               editable == true || isValueSettable(parent)
+                    || isAttributeSettable(kAXSelectedTextAttribute as String, on: parent)
+                    || (textRoles.contains(parentRole) && isSelectedRangeSettable(parent)) {
+                return (parent, true)
+            }
+        }
+        return (focused, false)
+    }
+
+    static func focusedField(from rawElement: AXUIElement, includeValue: Bool = true) -> FocusedField? {
+        AXUIElementSetMessagingTimeout(rawElement, messagingTimeout)
+        let (element, hasEditableAncestor) = textElement(from: rawElement)
+        guard let metadata = metadataAttributes(of: element, includeLabels: includeValue),
+              let role = metadata[kAXRoleAttribute as String] as? String else { return nil }
+        let subrole = metadata[kAXSubroleAttribute as String] as? String
+        let secure = role.contains("Secure") || (subrole?.contains("Secure") ?? false)
+        let enabled = metadata[kAXEnabledAttribute as String] as? Bool ?? true
+        let editable = explicitEditability(readOnly: metadata["AXReadOnly"] as? Bool,
+                                           editable: metadata["AXEditable"] as? Bool,
+                                           isEditable: metadata["AXIsEditable"] as? Bool)
+        let canProbeTextCapabilities = !secure && enabled && editable != false
+            && (textRoles.contains(role) || role == webAreaRole
+                || subrole == searchSubrole || hasEditableAncestor)
+        let valueSettable = canProbeTextCapabilities && isValueSettable(element)
+        let selectedTextSettable = canProbeTextCapabilities
+            && isAttributeSettable(kAXSelectedTextAttribute as String, on: element)
+        let semantic = isTextLike(role: role, subrole: subrole, hasEditableAncestor: hasEditableAncestor,
+                                  isExplicitlyEditable: editable, isValueSettable: valueSettable,
+                                  isSelectedTextSettable: selectedTextSettable)
+        let canInspectText = !secure && semantic && enabled && editable != false
         return FocusedField(
             element: element,
             role: role,
             subrole: subrole,
-            value: includeValue && !secure ? value(of: element) : nil,
-            title: includeValue ? stringAttribute(element, kAXTitleAttribute as String) : nil,
-            placeholder: includeValue ? stringAttribute(element, kAXPlaceholderValueAttribute as String) : nil,
-            isValueSettable: isValueSettable(element),
-            isSelectedTextSettable: isAttributeSettable(kAXSelectedTextAttribute as String, on: element),
-            isEnabled: boolAttribute(element, kAXEnabledAttribute as String) ?? true,
-            hasEditableAncestor: editableAncestor != nil
+            value: includeValue && canInspectText ? value(of: element) : nil,
+            title: includeValue ? metadata[kAXTitleAttribute as String] as? String : nil,
+            placeholder: includeValue ? metadata[kAXPlaceholderValueAttribute as String] as? String : nil,
+            isValueSettable: canInspectText && valueSettable,
+            isSelectedTextSettable: canInspectText && selectedTextSettable,
+            isEnabled: enabled,
+            hasEditableAncestor: hasEditableAncestor,
+            isExplicitlyEditable: editable,
+            isSelectedRangeSettable: canInspectText && isSelectedRangeSettable(element)
         )
     }
 }

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "cases": 1024,
+  "families": 128,
+  "sha256": "b7c518c742d844794cbef69ba740e30afae8588997d3b01fbb2dff9957a647c2",
+  "splits": {
+    "development": 824,
+    "heldout": 200
+  },
+  "cleanCases": 400,
+  "provenance": "Manually annotated synthetic seeds with fixed generated context variants; no personal writing or provider responses.",
+  "reviewStatus": "Agent-curated; requires independent human language review and external corpus evaluation.",
+  "limitations": [
+    "Context variants are correlated, not independent examples.",
+    "Heldout families share some error patterns; this is a regression holdout, not proof of generalization.",
+    "Three short non-English controls recur without context variations.",
+    "Dialect alternatives in clean controls are intentionally valid, not mandatory style changes.",
+    "Provider mapping replay scores measure exact mapping only, never real model quality."
+  ]
+}

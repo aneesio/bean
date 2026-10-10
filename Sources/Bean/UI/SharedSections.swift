@@ -178,8 +178,7 @@ struct ProviderSetupSection: View {
     @ObservedObject var usageLedger: UsageLedgerStore
     /// When true, renders a compact heading (used inside Settings forms).
     var compact: Bool = false
-    /// Onboarding uses the provider's safe default model and keeps technical
-    /// model IDs out of the primary flow.
+    /// Onboarding keeps model selection out of the primary flow.
     var showsModelSettings: Bool = true
 
     @State private var testState: TestState = .idle
@@ -281,17 +280,25 @@ struct ProviderSetupSection: View {
             if showsModelSettings {
                 Text("Model").font(.subheadline)
                 HStack {
-                    TextField("Model", text: $settings.model)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(testState == .running)
-                        .accessibilityLabel("AI model")
+                    Picker("Model", selection: $settings.model) {
+                        ForEach(settings.modelChoices) { model in
+                            Text(model.displayName).tag(model.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .disabled(testState == .running)
+                    .accessibilityLabel("AI model")
+                    .accessibilityHint("Choose a model with compatible settings for \(settings.provider.displayName)")
                     Button("Default") { settings.model = settings.provider.defaultModel }
                         .disabled(testState == .running)
                         .accessibilityHint("Restores \(settings.provider.displayName)'s default model")
                 }
-                Text("Default for \(settings.provider.displayName): \(settings.provider.defaultModel)")
-                    .font(.caption)
-                    .foregroundColor(BeanDesign.secondaryText)
+                if let model = settings.modelChoices.first(where: { $0.id == settings.model }) {
+                    Text(model.detail)
+                        .font(.caption)
+                        .foregroundColor(BeanDesign.secondaryText)
+                }
             }
 
             HStack(spacing: 10) {
@@ -318,7 +325,7 @@ struct ProviderSetupSection: View {
                     }
                 } else {
                     Button("Connect Bean") { runTest() }
-                        .buttonStyle(.borderedProminent)
+                        .beanButton(.primary)
                         .disabled(
                             (keyEditor.draft.isEmpty && !keyEditor.hasSavedKey)
                                 || testState == .running
@@ -546,7 +553,7 @@ struct PermissionsSection: View {
             if !compact {
                 Text("Grant Accessibility")
                     .font(.title2).bold()
-                Text("Bean needs Accessibility access to copy, paste, and replace text in other apps. It can't read or change anything until you act.")
+                Text("Bean needs Accessibility to check supported text fields while you type and apply corrections you choose. Proofread and Rewrite replace text when you run them.")
                     .font(.callout)
                     .foregroundColor(BeanDesign.secondaryText)
             }

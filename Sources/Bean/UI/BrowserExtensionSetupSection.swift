@@ -80,7 +80,7 @@ struct BrowserExtensionSetupSection: View {
             if bridge.status.state != .installed {
                 setupGuide
             } else {
-                Text("Open Bean's browser toolbar icon and choose Check again to verify the live app connection. Reload the extension once after a Bean update. Blocked websites are managed there too.")
+                Text("Open Bean's browser toolbar icon to verify the app connection. Reload the extension once after a Bean update. Pause or resume a website there without reloading your draft.")
                     .font(.caption).foregroundColor(.secondary)
                 Button("Repair Mac Connection") {
                     bridge.installOrRepair(manualExtensionID: manualExtensionID)
@@ -91,7 +91,7 @@ struct BrowserExtensionSetupSection: View {
             Divider().opacity(0.4)
 
             Toggle("Allow deeper AI checks from the browser", isOn: $settings.webInlineEnabled)
-            Text("Optional. The free offline checker works without this. AI checks use your configured provider and automatic-call limit.")
+            Text("Mac spelling and basic grammar work without AI. Automatic deeper checks use your provider and daily limit. Explicit Proofread and Rewrite remain available when you choose them.")
                 .font(.caption).foregroundColor(.secondary)
 
             DisclosureGroup("Connection help") {
@@ -126,7 +126,7 @@ struct BrowserExtensionSetupSection: View {
             Spacer()
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.warmBackground))
+        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.brandBackground))
     }
 
     private var setupGuide: some View {
@@ -148,11 +148,11 @@ struct BrowserExtensionSetupSection: View {
             }
 
             guideRow(number: 2, title: "Install the Mac connection") {
-                Text("After the extension appears in your browser, come back and let Bean install its local connection file. The extension checks live app status after installation.")
+                Text("After adding the extension, install its Mac connection for local spelling, your dictionary, and optional AI actions. The extension shows basic checks only until it can verify the connection.")
                 Button(bridge.isWorking ? "Installing…" : "Install Mac Connection") {
                     bridge.installOrRepair(manualExtensionID: manualExtensionID)
                 }
-                .buttonStyle(.borderedProminent)
+                .beanButton(.primary)
                 .disabled(bridge.isWorking)
             }
         }

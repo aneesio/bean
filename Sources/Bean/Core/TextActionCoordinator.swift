@@ -3,8 +3,8 @@ import AppKit
 // Orchestrates every writing action. Two entry points share one pipeline:
 //   • fixSelectedText()  — deterministic, offline Quick Fix (shortcut/menu).
 //   • proofreadWithAI()  — explicit provider-backed proofreading.
-//   • showActionMenu()   — acquire text, then present the action menu; rewrite
-//                          actions go through a preview before replacing.
+//   • showActionMenu()   — acquire text, then choose an action. Proofread and
+//                          rewrite apply directly to the unchanged source.
 //
 // Acquisition always happens FIRST (while the user's app is frontmost), so the
 // action menu/preview can safely take focus — the replacement pipeline
@@ -29,6 +29,7 @@ final class TextActionCoordinator {
     // interactive menu/preview session so a second trigger can't start mid-flow.
     private var isRunning = false
     private var sessionActive = false
+    private let providerAction = ProviderActionTask()
 
     init(settings: AppSettings, userContent: UserContentStore,
          history: OperationHistoryStore, usageLedger: UsageLedgerStore,
@@ -60,10 +61,10 @@ final class TextActionCoordinator {
         action.usesProvider && EngineConfig.exceedsProviderInputLimit(text)
     }
 
-    /// Provider-backed proofreading may replace an explicit selection after
-    /// verification, but whole-field AI output always needs user review first.
+    /// Selected text and whole fields share the same one-action improvement
+    /// policy. Replacement still verifies the source has not changed.
     static func requiresPreview(for action: WritingAction, mode: TextInputMode) -> Bool {
-        action.requiresPreview || (action == .proofread && mode == .focusedFieldFullText)
+        action.requiresPreview
     }
 
     /// Plain-language scope shown before the user chooses an action. The menu
@@ -98,6 +99,7 @@ final class TextActionCoordinator {
         let mode: TextInputMode
         let context: SourceAppContext
         let sourceAnchorRect: CGRect?
+        let scopeLabel: String
     }
 
     // MARK: - Permissions menu action
@@ -121,7 +123,8 @@ final class TextActionCoordinator {
         guard !isRunning, !sessionActive else {
             statusHUD.showProgress("Bean is already working…",
                                    sourceAppName: NSWorkspace.shared.frontmostApplication?.localizedName,
-                                   sourceAnchorRect: sourceAnchorRect)
+                                   sourceAnchorRect: sourceAnchorRect,
+                                   onCancel: providerAction.isRunning ? { [weak self] in self?.cancelProviderAction() } : nil)
             return
         }
         isRunning = true
@@ -165,7 +168,7 @@ final class TextActionCoordinator {
     }
 
     /// Explicit AI entry point used by the menu bar. Unlike Quick Fix, this is
-    /// visibly provider-backed and follows the AI preview policy.
+    /// visibly provider-backed and replaces the verified source directly.
     func proofreadWithAI() {
         runAction(.proofread)
     }
@@ -173,14 +176,14 @@ final class TextActionCoordinator {
     /// Runs a specific action directly (used by the Bean Bubble mini menu).
     /// Reuses the exact same acquisition/preview/replacement pipeline as the
     /// action menu — no duplicated logic.
-    func runAction(_ action: WritingAction) {
+    func runAction(_ action: WritingAction, currentParagraph: Bool = false) {
         guard beginOperation() else { return }
         Task { [weak self] in
             guard let self else { return }
             defer { self.isRunning = false }
             guard self.ready(requestedAction: action.rawValue,
                              requiresProvider: action.usesProvider) else { return }
-            guard let job = await self.acquire(requestedAction: action.rawValue) else { return }
+            guard let job = await self.acquire(requestedAction: action.rawValue, currentParagraph: currentParagraph) else { return }
             await self.process(job: job, action: action,
                                preview: Self.requiresPreview(for: action, mode: job.mode),
                                explicitProfile: nil)
@@ -202,7 +205,7 @@ final class TextActionCoordinator {
             statusHUD.dismiss()
             self.actionMenu.presentMenu(
                 appName: job.context.appName,
-                captureLabel: Self.captureLabel(for: job.mode),
+                captureLabel: job.scopeLabel,
                 sourceAnchorRect: job.sourceAnchorRect,
                 aiAvailable: self.settings.hasAPIKey,
                 onSelect: { [weak self] action in
@@ -236,7 +239,8 @@ final class TextActionCoordinator {
         if isRunning {
             statusHUD.showProgress("Bean is already working…",
                                    sourceAppName: NSWorkspace.shared.frontmostApplication?.localizedName,
-                                   sourceAnchorRect: sourceAnchorRect)
+                                   sourceAnchorRect: sourceAnchorRect,
+                                   onCancel: providerAction.isRunning ? { [weak self] in self?.cancelProviderAction() } : nil)
             return false
         }
         isRunning = true
@@ -406,21 +410,34 @@ final class TextActionCoordinator {
         return true
     }
 
-    private func acquire(requestedAction: String) async -> Job? {
+    private func acquire(requestedAction: String, currentParagraph: Bool = false) async -> Job? {
         let acquisition = await selection.acquire(
-            allowFocusedFieldFallback: settings.fixFocusedFieldWhenNoSelection
+            allowFocusedFieldFallback: settings.fixFocusedFieldWhenNoSelection,
+            preferCurrentParagraph: currentParagraph
         )
         switch acquisition {
         case let .acquired(text, mode, context):
             let (leading, core, trailing) = TextNormalizer.split(text)
             return Job(original: text, leading: leading, core: core, trailing: trailing,
                        mode: mode, context: context,
-                       sourceAnchorRect: currentSourceAnchorRect(for: mode, context: context))
+                       sourceAnchorRect: currentSourceAnchorRect(for: mode, context: context),
+                       scopeLabel: selection.capturedScopeLabel ?? Self.captureLabel(for: mode))
         case .noSelectionOrFocusedField:
-            recordPreflight(action: requestedAction, outcome: "noSelectionOrFocusedField")
-            presentAcquisitionNotice(
-                title: "No Editable Text Found",
-                message: "Select text or place the cursor in an editable field, then try Quick Fix again."
+            recordPreflight(
+                action: requestedAction,
+                outcome: selection.lastAcquisitionFailureReason.map { "capture_\($0.rawValue)" }
+                    ?? "noSelectionOrFocusedField"
+            )
+            // A failed read needs no acknowledgement and must not move focus
+            // away from the editor the user is already working in.
+            let sourceAppName = NSWorkspace.shared.frontmostApplication?.localizedName
+            let sourceAnchorRect = currentSourceNoticeAnchorRect()
+            selection.cancel()
+            sessionActive = false
+            statusHUD.showWarning(
+                "Bean couldn’t read this editor",
+                sourceAppName: sourceAppName,
+                sourceAnchorRect: sourceAnchorRect
             )
             return nil
         case .tooLong:
@@ -431,7 +448,11 @@ final class TextActionCoordinator {
             )
             return nil
         case .failed(let reason):
-            recordPreflight(action: requestedAction, outcome: "acquisitionFailed")
+            recordPreflight(
+                action: requestedAction,
+                outcome: selection.lastAcquisitionFailureReason.map { "capture_\($0.rawValue)" }
+                    ?? "acquisitionFailed"
+            )
             presentAcquisitionNotice(title: "Bean Couldn’t Read This Field", message: reason, kind: .danger)
             return nil
         }
@@ -486,7 +507,7 @@ final class TextActionCoordinator {
 
         if action == .localQuickCheck {
             statusHUD.showProgress(
-                "Checking \(Self.captureLabel(for: job.mode).lowercased()) locally…",
+                "Checking \(job.scopeLabel.lowercased()) locally…",
                 sourceAppName: job.context.appName,
                 sourceAnchorRect: job.sourceAnchorRect
             )
@@ -500,9 +521,11 @@ final class TextActionCoordinator {
                            sourceAnchorRect: job.sourceAnchorRect)
                 return
             }
+            let acceptanceStartedAt = Date()
             let result = await selection.replace(
                 corrected: job.leading + correctedCore + job.trailing,
-                original: job.original, mode: job.mode)
+                original: job.original, mode: job.mode, strategy: .minimalProofread)
+            recordAcceptance(result, job: job, startedAt: acceptanceStartedAt)
             report(result, job: job)
             diagnostics(job: job, action: action, outLen: correctedCore.count,
                         validator: "local_quick", replacement: resultCode(result),
@@ -554,10 +577,11 @@ final class TextActionCoordinator {
 
         statusHUD.showProgress(
             action == .proofread
-                ? "AI is proofreading \(Self.captureLabel(for: job.mode).lowercased())…"
-                : "AI is rewriting \(Self.captureLabel(for: job.mode).lowercased())…",
+                ? "AI is proofreading \(job.scopeLabel.lowercased())…"
+                : "AI is rewriting \(job.scopeLabel.lowercased())…",
             sourceAppName: job.context.appName,
-            sourceAnchorRect: job.sourceAnchorRect
+            sourceAnchorRect: job.sourceAnchorRect,
+            onCancel: { [weak self] in self?.cancelProviderAction() }
         )
 
         let personalization = userContent.personalization(action: action, context: job.context,
@@ -565,12 +589,16 @@ final class TextActionCoordinator {
 
         let completion: LLMCompletion
         do {
-            completion = try await transformer.transform(
-                text: job.core, action: action, context: job.context,
-                userContextLines: personalization.userContextLines,
-                provider: settings.provider, model: settings.model,
-                apiKey: settings.apiKey, timeout: settings.timeoutSeconds
-            )
+            let contextLines = personalization.userContextLines + (settings.writingDialect.promptInstruction.map { [$0] } ?? [])
+            let provider = settings.provider, model = settings.model, apiKey = settings.apiKey, timeout = settings.timeoutSeconds
+            guard let result = try await providerAction.run({ [transformer] in try await transformer.transform(
+                text: job.core, action: action, context: job.context, userContextLines: contextLines,
+                provider: provider, model: model, apiKey: apiKey, timeout: timeout) }) else {
+                finishCancelledProvider(job: job, action: action, startedAt: operationStartedAt); return
+            }
+            completion = result
+            statusHUD.showProgress("Checking the writing result…", sourceAppName: job.context.appName,
+                                   sourceAnchorRect: job.sourceAnchorRect)
         } catch let error as LLMError {
             diagnostics(job: job, action: action, outLen: 0, validator: "providerError",
                         replacement: providerErrorCode(error), startedAt: operationStartedAt)
@@ -599,7 +627,8 @@ final class TextActionCoordinator {
 
         let outCore = TextNormalizer.sanitizeModelOutput(completion.text, originalCore: job.core)
 
-        if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
+        if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action,
+                protectedTerms: userContent.dictionary.map(\.term)) {
             switch OutputSafetyValidator.disposition(for: reason) {
             case .hardBlock:
                 Log.event("validation: blocked (\(reason))")
@@ -612,9 +641,13 @@ final class TextActionCoordinator {
                 diagnostics(job: job, action: action, outLen: outCore.count, validator: reason,
                             replacement: "reviewRequired", startedAt: operationStartedAt,
                             usage: completion.usage)
-                presentPreview(job: job, action: action, outCore: outCore,
-                               explicitProfile: explicitProfile, personalization: personalization,
-                               reviewReason: reason)
+                if action.allowsDirectReplace {
+                    presentSafetyNotice(job: job)
+                } else {
+                    presentPreview(job: job, action: action, outCore: outCore,
+                                   explicitProfile: explicitProfile, personalization: personalization,
+                                   reviewReason: reason)
+                }
             }
             return
         }
@@ -636,7 +669,12 @@ final class TextActionCoordinator {
             presentPreview(job: job, action: action, outCore: outCore, explicitProfile: explicitProfile, personalization: personalization)
         } else {
             let finalText = job.leading + outCore + job.trailing
-            let result = await selection.replace(corrected: finalText, original: job.original, mode: job.mode)
+            statusHUD.showProgress("Applying the writing change…", sourceAppName: job.context.appName,
+                                   sourceAnchorRect: job.sourceAnchorRect)
+            let acceptanceStartedAt = Date()
+            let result = await selection.replace(corrected: finalText, original: job.original, mode: job.mode,
+                                                strategy: action == .proofread ? .minimalProofread : .selectedSpan)
+            recordAcceptance(result, job: job, startedAt: acceptanceStartedAt)
             report(result, job: job)
             diagnostics(job: job, action: action, outLen: outCore.count, validator: "ok",
                         replacement: resultCode(result), startedAt: operationStartedAt,
@@ -652,6 +690,20 @@ final class TextActionCoordinator {
 
     // MARK: - Preview
 
+    private func cancelProviderAction() {
+        guard providerAction.isRunning else { return }
+        providerAction.cancel()
+        statusHUD.show(.info, "Cancelling writing action…")
+    }
+
+    private func finishCancelledProvider(job: Job, action: WritingAction, startedAt: Date) {
+        diagnostics(job: job, action: action, outLen: 0, validator: "cancelled",
+                    replacement: "cancelled", startedAt: startedAt)
+        endSession(restore: true)
+        statusHUD.show(.info, StatusHUD.sourceAwareMessage("Writing action cancelled. Your text is unchanged.",
+            sourceAppName: job.context.appName), sourceAnchorRect: job.sourceAnchorRect)
+    }
+
     private func presentPreview(job: Job, action: WritingAction, outCore: String,
                                 explicitProfile: UUID?, personalization: Personalization,
                                 reviewReason: String? = nil) {
@@ -662,7 +714,7 @@ final class TextActionCoordinator {
             transformedText: outCore,
             originalText: job.core,
             sourceAppName: job.context.appName,
-            captureLabel: Self.captureLabel(for: job.mode),
+            captureLabel: job.scopeLabel,
             sourceAnchorRect: job.sourceAnchorRect
         )
         model.styleName = personalization.styleName
@@ -702,7 +754,9 @@ final class TextActionCoordinator {
         let finalText = job.leading + model.transformedText + job.trailing
         Task { [weak self] in
             guard let self else { return }
-            let result = await self.selection.replace(corrected: finalText, original: job.original, mode: job.mode)
+            let result = await self.selection.replace(corrected: finalText, original: job.original, mode: job.mode,
+                strategy: action == .proofread ? .minimalProofread : .selectedSpan)
+            self.recordAcceptance(result, job: job, startedAt: startedAt)
             model.isRunning = false
             self.report(result, job: job)
             self.diagnostics(job: job, action: action, outLen: model.transformedText.count,
@@ -748,12 +802,13 @@ final class TextActionCoordinator {
             do {
                 let completion = try await self.transformer.transform(
                     text: job.core, action: action, context: job.context,
-                    userContextLines: personalization.userContextLines,
+                    userContextLines: personalization.userContextLines + (self.settings.writingDialect.promptInstruction.map { [$0] } ?? []),
                     provider: self.settings.provider, model: self.settings.model,
                     apiKey: self.settings.apiKey, timeout: self.settings.timeoutSeconds
                 )
                 let outCore = TextNormalizer.sanitizeModelOutput(completion.text, originalCore: job.core)
-                if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action) {
+                if case let .suspicious(reason) = OutputSafetyValidator.validate(input: job.core, output: outCore, action: action,
+                    protectedTerms: self.userContent.dictionary.map(\.term)) {
                     if OutputSafetyValidator.disposition(for: reason) == .hardBlock {
                         self.diagnostics(job: job, action: action, outLen: outCore.count,
                                          validator: reason, replacement: "retryBlocked",
@@ -784,6 +839,26 @@ final class TextActionCoordinator {
                                             result: TextSelectionService.ReplacementResult,
                                             model existingModel: PreviewModel?) {
         sessionActive = true
+        if existingModel == nil, action.allowsDirectReplace {
+            statusHUD.dismiss()
+            actionMenu.presentNotice(ActionNotice(
+                title: "Couldn’t Apply the Change",
+                message: recoveryMessage(for: result),
+                kind: .warning,
+                primaryAction: .init("Copy Result") { [weak self] in
+                    guard let self else { return }
+                    ClipboardService.writeString(job.leading + outCore + job.trailing)
+                    self.selection.discard()
+                    self.finishNotice(restoreAcquisition: false)
+                    self.statusHUD.showConfirmedSuccess("Result copied", sourceAppName: job.context.appName)
+                },
+                secondaryAction: .init("Return to Writing") { [weak self] in
+                    self?.finishNotice(restoreAcquisition: true)
+                },
+                onDismiss: { [weak self] in self?.finishNotice(restoreAcquisition: true) }
+            ), sourceAnchorRect: job.sourceAnchorRect)
+            return
+        }
         let model = existingModel ?? PreviewModel(
             actionName: "Replacement Recovery",
             transformedText: outCore,
@@ -833,7 +908,7 @@ final class TextActionCoordinator {
         case .staleCopiedToClipboard:
             return "The field changed after Bean read it, so Bean did not overwrite your newer text."
         case .replacementSentUnconfirmed:
-            return "Bean sent the replacement but could not confirm what changed. Check the original field before continuing."
+            return "Bean attempted the edit but could not confirm the result. Check the original field before continuing."
         case .clipboardPreservedRecoveryRequired:
             return "Bean could not replace the text. Your newer clipboard was preserved, and the correction remains here."
         case .failed(let reason):
@@ -864,10 +939,13 @@ final class TextActionCoordinator {
     private func report(_ result: TextSelectionService.ReplacementResult, job: Job) {
         switch result {
         case .replacedConfirmed:
+            let undo: (() -> Void)? = undoStore.isAvailable
+                ? { [weak self] in self?.undoLastChange() } : nil
             statusHUD.showConfirmedSuccess(
-                job.mode == .focusedFieldFullText ? "Whole field fixed" : "Selected text fixed",
+                "\(job.scopeLabel) improved",
                 sourceAppName: job.context.appName,
-                sourceAnchorRect: job.sourceAnchorRect
+                sourceAnchorRect: job.sourceAnchorRect,
+                onUndo: undo
             )
         case .noChangesNeeded:
             statusHUD.showConfirmedSuccess(
@@ -921,6 +999,11 @@ final class TextActionCoordinator {
 
     // MARK: - Diagnostics (text-free)
 
+    private func recordAcceptance(_ result: TextSelectionService.ReplacementResult, job: Job, startedAt: Date) {
+        AssistanceMetrics.shared.record(kind: .nativeAcceptance, inputLength: job.original.utf16.count,
+            elapsedMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1_000), outcome: resultCode(result))
+    }
+
     private func diagnostics(job: Job, action: WritingAction?, outLen: Int, validator: String,
                              replacement: String, startedAt: Date, usage: LLMUsage? = nil) {
         Log.diag([
@@ -940,6 +1023,10 @@ final class TextActionCoordinator {
         ])
         let local = validator == "local_typo" || validator == "localClean"
             || validator == "local_quick"
+        if !local {
+            AssistanceMetrics.shared.record(kind: .providerAction, inputLength: job.core.utf16.count,
+                elapsedMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1_000), outcome: replacement)
+        }
         if let usage {
             usageLedger.record(usage, source: .manual,
                                provider: settings.provider.rawValue, model: settings.model)

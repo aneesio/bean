@@ -47,6 +47,9 @@ function normalizeStoredSites(sites) {
 }
 
 function assessBridgeStatus(response) {
+  const localDetail = response && response.localCheckAvailable === true
+    ? "The Mac spelling connection is ready."
+    : "Basic checks only. Update Bean and repair the Mac connection for full spelling checks.";
   if (response && response.errorCode === "nativeHostForbidden") {
     return {
       app: ["Connection not authorized", "error"],
@@ -86,21 +89,21 @@ function assessBridgeStatus(response) {
     return {
       app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
       ai: ["Not set up", "neutral"],
-      detail: "Local checks are ready. Add an AI provider in Bean only if you want deeper suggestions."
+      detail: `${localDetail} Add an AI provider in Bean only if you want deeper suggestions and rewriting.`
     };
   }
   if (!response.webInlineEnabled) {
     return {
       app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
       ai: ["Off in Bean", "neutral"],
-      detail: "Local checks are ready. Turn on browser AI in the Bean app for deeper suggestions."
+      detail: `${localDetail} Explicit Proofread and Rewrite are available. Turn on browser AI in Bean only for automatic deeper suggestions.`
     };
   }
   if (response.automaticAccountingAvailable !== true) {
     return {
       app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
       ai: ["Usage safety unavailable", "error"],
-      detail: "Local checks still work. Open Bean → Settings → AI & Usage and choose Check Accounting Again. If the warning remains after reopening Bean, Full Reset in Privacy & Help is a data-erasing last resort; contact Support if reset fails."
+      detail: "Local checks still work. Open Bean → Settings → AI & Usage and choose Check Accounting Again."
     };
   }
   if (response.browserAIStatusCode === "settingsUnavailable") {
@@ -114,7 +117,7 @@ function assessBridgeStatus(response) {
     return {
       app: [`Connected${response.appVersion ? ` · Bean ${response.appVersion}` : ""}`, "ok"],
       ai: ["Waiting for you", "warn"],
-      detail: "Local checks are ready. Your previous browser-AI opt-out is preserved; allow it only if you want deeper suggestions."
+      detail: `${localDetail} Your previous automatic browser-AI opt-out is preserved. Explicit writing actions remain available.`
     };
   }
   return {
@@ -125,6 +128,8 @@ function assessBridgeStatus(response) {
 }
 
 let blockedSites = [];
+let pausedSites = {};
+let pauseTimer = null;
 
 function byId(id) { return document.getElementById(id); }
 
@@ -173,6 +178,37 @@ function renderBlockedSites() {
   }
 }
 
+function renderPausedSites() {
+  const list = byId("paused-list");
+  if (!list || typeof document.createElement !== "function") return;
+  list.replaceChildren();
+  const pauses = BeanSitePolicy.normalize(pausedSites);
+  if (!pauses || !Object.keys(pauses).length) {
+    const empty = document.createElement("div"); empty.className = "empty";
+    empty.textContent = pauses ? "No paused websites" : "Website pauses are unavailable. Reopen Settings to retry.";
+    list.appendChild(empty); return;
+  }
+  for (const [host,expiry] of Object.entries(pauses).sort(([a],[b]) => a.localeCompare(b))) {
+    const row = document.createElement("div"); row.className = "site-item";
+    const label = document.createElement("span"); label.className = "site-host";
+    label.textContent = `${host} · ${Math.max(1,Math.ceil((expiry - Date.now()) / 60000))} minutes left`;
+    const resume = document.createElement("button"); resume.type = "button"; resume.className = "remove";
+    resume.textContent = "Resume"; resume.setAttribute("aria-label",`Resume Bean on ${host}`);
+    resume.addEventListener("click",() => {
+      const api = extensionAPI(); if (!api) return;
+      resume.disabled = true;
+      api.runtime.sendMessage({type:"mutateSitePause",operation:"resume",host},(result) => {
+        const error = api.runtime.lastError, saved = result && result.ok && BeanSitePolicy.normalize(result.pausedSites);
+        if (error || !saved) { resume.disabled = false; announce("This website couldn’t be resumed. Try again.",true); return; }
+        pausedSites = saved; renderPausedSites(); announce(`${host} resumed. Open drafts update without reloading.`);
+      });
+    });
+    row.append(label,resume); list.appendChild(row);
+  }
+  if (pauseTimer) clearTimeout(pauseTimer);
+  pauseTimer = setTimeout(renderPausedSites,Math.max(1,Math.min(...Object.values(pauses)) - Date.now() + 25));
+}
+
 function persistBlockedSites(operation, hosts, message) {
   const api = extensionAPI();
   if (!api) { announce("Extension controls are available after Bean is installed in Chrome.", true); return; }
@@ -191,7 +227,7 @@ function persistBlockedSites(operation, hosts, message) {
       api.storage.local.get(["blockedSites"], (settings) => {
         const readError = api.runtime.lastError;
         const savedSites = !readError && settings
-          ? normalizeStoredSites(settings.blockedSites)
+          ? normalizeStoredSites(settings && settings.blockedSites)
           : null;
         const applied = savedSites && (operation === "remove"
           ? hosts.every((host) => !savedSites.includes(host))
@@ -319,23 +355,44 @@ function load() {
   const api = extensionAPI();
   if (!api) {
     blockedSites = [];
-    renderBlockedSites();
+    renderBlockedSites(); renderPausedSites();
     renderBridgeResponse(null);
     announce("Preview mode — extension controls are unavailable on this page.");
     return;
   }
-  api.storage.local.get(["blockedSites"], (settings) => {
-    blockedSites = normalizeStoredSites(settings.blockedSites);
-    renderBlockedSites();
+  api.storage.local.get(["blockedSites","pausedSites"], (settings) => {
+    const readError = api.runtime.lastError;
+    pausedSites = !readError && settings ? BeanSitePolicy.normalize(settings.pausedSites) : null;
+    blockedSites = normalizeStoredSites(settings && settings.blockedSites);
+    renderBlockedSites(); renderPausedSites();
   });
   if (api.storage.onChanged && typeof api.storage.onChanged.addListener === "function") {
     api.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "local" || !changes.blockedSites) return;
-      blockedSites = normalizeStoredSites(changes.blockedSites.newValue);
-      renderBlockedSites();
+      if (areaName !== "local" || !changes) return;
+      if (changes.blockedSites) { blockedSites = normalizeStoredSites(changes.blockedSites.newValue); renderBlockedSites(); }
+      if (changes.pausedSites) { pausedSites = BeanSitePolicy.normalize(changes.pausedSites.newValue); renderPausedSites(); }
     });
   }
   checkConnection();
+}
+
+function copyPerformanceDiagnostics() {
+  const api = extensionAPI(),button = byId("copy-performance");
+  if (!api || typeof navigator === "undefined" || !navigator.clipboard) {
+    announce("Performance diagnostics are unavailable in this browser.",true); return;
+  }
+  if (button) button.disabled = true;
+  api.runtime.sendMessage({type:"getAssistanceMetrics"},(response) => {
+    const error = api.runtime.lastError;
+    if (error || !response || response.ok !== true || !response.metrics) {
+      if (button) button.disabled = false;
+      announce("Could not read performance diagnostics. Try again.",true); return;
+    }
+    navigator.clipboard.writeText(JSON.stringify(response.metrics,null,2)).then(() => {
+      if (button) button.disabled = false;
+      announce("Performance diagnostics copied. No writing or websites are included.");
+    }).catch(() => { if (button) button.disabled = false; announce("Could not copy diagnostics. Check browser clipboard access.",true); });
+  });
 }
 
 const form = byId("add-site-form");
@@ -348,4 +405,6 @@ const checkButton = byId("check-connection");
 if (checkButton) checkButton.addEventListener("click", checkConnection);
 const confirmButton = byId("confirm-browser-ai");
 if (confirmButton) confirmButton.addEventListener("click", confirmBrowserAI);
+const performanceButton = byId("copy-performance");
+if (performanceButton) performanceButton.addEventListener("click",copyPerformanceDiagnostics);
 load();

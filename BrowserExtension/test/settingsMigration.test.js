@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
 
+const sitePolicySource = fs.readFileSync(path.join(__dirname, "..", "src", "sitePolicy.js"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
 
 function runMigration(initial, { failSet = false } = {}) {
@@ -50,7 +51,7 @@ function runMigration(initial, { failSet = false } = {}) {
     }
   };
 
-  vm.runInNewContext(source, { chrome, Object, setTimeout: () => 1, clearTimeout: () => {} });
+  vm.runInNewContext(sitePolicySource + "\n" + source, { chrome, Object, setTimeout: () => 1, clearTimeout: () => {} });
   assert.ok(installedListener, "background registered an install listener");
   installedListener();
   // Values created by the VM have a different object prototype; serialize them

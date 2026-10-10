@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bean for the Web",
-  "version": "0.7.2",
+  "version": "0.8.7",
   "description": "Bean inline proofreading for web text fields, with simple per-field and per-site controls.",
   "permissions": ["storage", "nativeMessaging", "scripting"],
   "host_permissions": ["http://*/*", "https://*/*"],
@@ -10,9 +10,9 @@
   "action": {
     "default_title": "Bean for the Web",
     "default_popup": "popup.html",
-    "default_icon": { "16": "icon128.png", "32": "icon128.png", "48": "icon128.png", "128": "icon128.png" }
+    "default_icon": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" }
   },
-  "icons": { "16": "icon128.png", "32": "icon128.png", "48": "icon128.png", "128": "icon128.png" },
+  "icons": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" },
   "web_accessible_resources": [{
     "resources": ["icon128.png"],
     "matches": ["http://*/*", "https://*/*"]

@@ -12,6 +12,12 @@ struct SettingsActions {
     /// Validates + registers a new shortcut for the given slot. Returns an error
     /// message to show, or nil on success.
     var applyShortcut: (ShortcutSlot, GlobalShortcut) -> String?
+    var openWriter: () -> Void = {}
+
+    func reviewSetupOrRecoverAccessibility(accessibilityGranted: Bool, recoverAccessibility: () -> Void) {
+        if accessibilityGranted { resetOnboarding() }
+        else { recoverAccessibility() }
+    }
 }
 
 // Bean's Settings window — a native, sidebar-organised preferences experience.
@@ -94,8 +100,8 @@ struct SettingsView: View {
                 .controlSize(.large)
                 .navigationTitle(navigation.selection.rawValue)
         }
-        .frame(minWidth: 900, minHeight: 660)
-        .tint(BeanDesign.accent)
+        .frame(minWidth: 820, minHeight: 600)
+        .beanActionButtons()
         .onAppear {
             automaticSpentToday = automaticCallBudget.automaticCallsToday()
             history.refresh()
@@ -150,7 +156,7 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: BeanDesign.Radius.sm, style: .continuous)
                 .fill(
                     category == navigation.selection
-                        ? BeanDesign.accent.opacity(0.18)
+                        ? BeanDesign.selectionBackground
                         : Color.clear
                 )
         )
@@ -206,24 +212,40 @@ struct SettingsView: View {
 
     private var simpleStatusSection: some View {
         Group {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Write in your apps").font(.headline)
+                    Text("Live suggestions appear inside your active field. Proofread and rewrite replace text directly. Bean offers Undo when it can safely restore the original.")
+                        .font(.caption).foregroundColor(BeanDesign.secondaryText)
+                }
+                Spacer()
+                Button("Writing Settings") { navigation.selection = .writing }
+            }
+            Divider()
             HStack(spacing: 12) {
                 IconBadge(symbol: isAccessibilityReady ? "checkmark.seal.fill" : "lock.shield",
                           tint: isAccessibilityReady ? BeanDesign.success : BeanDesign.warning, size: 34)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(isAccessibilityReady ? "Accessibility is ready" : "Allow access to use Bean in other apps")
+                    Text(isAccessibilityReady ? "Accessibility is ready" : "Restore help where you type")
                         .font(.headline)
                     Text(isAccessibilityReady
                          ? (hasVerifiedAIConfiguration
                             ? "Free local help is ready. AI is connected for deliberate actions."
                             : "Local writing help is available; AI is optional.")
-                         : "The guided setup can take you directly to the required macOS permission.")
+                         : "Open macOS Accessibility, enable Bean, then return here.")
                         .font(.caption).foregroundColor(BeanDesign.secondaryText)
                 }
                 Spacer()
-                Button(isAccessibilityReady ? "Review Setup" : "Continue Setup") {
-                    actions.resetOnboarding()
+                Button(isAccessibilityReady ? "Review Setup" : "Open Accessibility Settings") {
+                    actions.reviewSetupOrRecoverAccessibility(accessibilityGranted: isAccessibilityReady) {
+                        PermissionService.requestAccessibility()
+                        PermissionService.openAccessibilitySettings()
+                        permissionStatus.beginBriefPolling()
+                    }
                 }
-                .accessibilityHint("Opens Bean's three-step setup guide")
+                .accessibilityHint(isAccessibilityReady
+                    ? "Opens Bean's three-step setup guide"
+                    : "Opens the macOS Accessibility permission list and refreshes Bean’s status")
             }
             HStack(spacing: 14) {
                 compactCheck("Accessibility", permissionStatus.granted)
@@ -245,7 +267,7 @@ struct SettingsView: View {
         Group {
             Toggle("Live suggestions", isOn: liveSuggestionsBinding)
                 .accessibilityHint("Runs local checks and underlines issues in supported fields")
-            Text("Underlines obvious issues while you type in supported fields. Runs locally on your Mac with no token cost.")
+            Text("Checks spelling, grammar, and spacing while you type. Shows underlines where the app exposes text positions, and a status dot inside the field otherwise. Local checks have no token cost.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
 
             Divider()
@@ -267,9 +289,9 @@ struct SettingsView: View {
 
             Divider()
 
-            Toggle("Bean button", isOn: $settings.bubbleEnabled)
-                .accessibilityHint("Shows a writing-actions button beside eligible editable fields")
-            Text("Shows a small shortcut beside supported editable fields. It stays hidden in secure, read-only, and unsupported fields.")
+            Toggle("Bean dot", isOn: $settings.bubbleEnabled)
+                .accessibilityHint("Shows a status dot inside supported fields when there is clear space")
+            Text("A small dot shows writing status. Hover for status or click for suggestions and writing actions. It stays hidden when there is no clear space inside the field.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
 
             DisclosureGroup("Advanced") { writingAdvancedOptions }
@@ -326,7 +348,7 @@ struct SettingsView: View {
                      : String(format: "US$ %.2f", month.estimatedCostUSD))
                     .monospacedDigit()
             }
-            Text("Quick Fix and Live suggestions are free. Optional AI activity appears below.")
+            Text("Quick Fix and basic local suggestions are free. Optional AI checks and writing actions use your provider; their usage appears below.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
         }
     }
@@ -577,18 +599,18 @@ struct SettingsView: View {
                            kind: settings.automaticAIChecksEnabled ? .warning : .success,
                            showsIcon: false)
             }
-            Text("Deeper AI suggestions and browser AI can call your provider. The daily limit covers all browser AI—including Fix Paragraph—because webpages cannot prove a trusted click. Explicit AI actions in the Bean Mac app remain uncapped. Quick Fix and Live suggestions stay local.")
+            Text("Deeper AI suggestions, automatic browser checks, and Fix Paragraph use the daily limit. Explicit AI actions from Bean’s shortcuts or the browser’s Proofread and Rewrite controls are manual calls and remain available after that limit. Quick Fix and basic Live suggestions stay local.")
                 .font(.caption).foregroundColor(BeanDesign.secondaryText)
             Stepper("Daily automatic-call limit: \(settings.dailyAutomaticCallLimit)",
                     value: $settings.dailyAutomaticCallLimit, in: 1...200)
-                .accessibilityHint("Limits automatic checks and all browser AI, but not explicit AI actions in the Bean Mac app")
+                .accessibilityHint("Limits automatic provider checks and Fix Paragraph, but not explicit native or browser writing actions")
             Stepper("30-day warning: \(settings.monthlyTokenWarningThreshold.formatted()) tokens",
                     value: $settings.monthlyTokenWarningThreshold,
                     in: 25_000...5_000_000, step: 25_000)
                 .accessibilityHint("Sets the token usage warning threshold")
             if let automaticSpentToday {
                 let automaticUsed = max(today.automaticOperationCount, automaticSpentToday)
-                Text("Automatic calls today: \(automaticUsed) of \(settings.dailyAutomaticCallLimit). The limit does not disable explicit AI actions in the Bean Mac app or local Quick Fix.")
+                Text("Automatic calls today: \(automaticUsed) of \(settings.dailyAutomaticCallLimit). Explicit native and browser AI actions and local Quick Fix remain available.")
                     .font(.caption).foregroundColor(BeanDesign.secondaryText)
             } else {
                 Label("Bean couldn't verify automatic-call accounting. Automatic provider checks pause safely until accounting is available; local Quick Fix still works.",
@@ -665,7 +687,7 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 Text(settings.primaryShortcutAction == .quickFix
                      ? "Corrects obvious typos and spacing privately on your Mac."
-                     : "Runs thorough proofreading with your connected AI provider. Full-field changes are previewed before replacement.")
+                     : "Proofreads and replaces the selected text or active field with your connected AI provider. Bean offers Undo when it can safely restore the original.")
                     .font(.caption)
                     .foregroundColor(BeanDesign.secondaryText)
             }
@@ -771,6 +793,28 @@ struct SettingsView: View {
 
     private var writingAdvancedOptions: some View {
         VStack(alignment: .leading, spacing: BeanDesign.Spacing.sm) {
+            Picker("English dialect", selection: $settings.writingDialect) {
+                ForEach(WritingDialect.allCases, id: \.self) { dialect in
+                    Text(dialect.displayName).tag(dialect)
+                }
+            }
+            .accessibilityHint("Sets spelling conventions for local checks and deliberate AI writing actions")
+            Text("Automatic follows your Mac's spelling language. Names and words you add to your dictionary stay protected.")
+                .font(.caption).foregroundColor(BeanDesign.secondaryText)
+            if settings.assistancePausedApps.keys.contains(where: { settings.isAssistancePaused(for: $0) }) {
+                Text("Paused apps").font(.subheadline.weight(.semibold))
+                ForEach(settings.assistancePausedApps.keys.filter { settings.isAssistancePaused(for: $0) }.sorted(), id: \.self) { identifier in
+                    HStack {
+                        Text(NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
+                            .map { $0.deletingPathExtension().lastPathComponent } ?? identifier)
+                        Spacer()
+                        Button("Resume") { settings.resumeAssistance(in: identifier) }
+                            .accessibilityLabel("Resume Bean in \(identifier)")
+                    }
+                }
+                Text("Pausing hides automatic assistance. Your writing shortcuts remain available.")
+                    .font(.caption).foregroundColor(BeanDesign.secondaryText)
+            }
             Text("Live suggestions")
                 .font(.subheadline.weight(.semibold))
             Stepper(
@@ -780,20 +824,25 @@ struct SettingsView: View {
             )
             .accessibilityHint("Sets the maximum simultaneous Live suggestion underlines")
             Toggle("Show explanations", isOn: $settings.inlineShowExplanation)
-            Text("Code editors, search fields, secure fields, and fields Bean cannot verify remain excluded.")
+            Text("Checks editable fields across app categories. Passwords are excluded. Apps that hide their text or editing controls may need an app-specific integration.")
                 .font(BeanDesign.Typography.smallCaption())
                 .foregroundColor(BeanDesign.secondaryText)
 
             monitorStatusRow
 
+            Button("Copy Performance Summary") {
+                _ = ClipboardService.writeString(AssistanceMetrics.shared.summary)
+            }
+            .accessibilityHint("Copies local timing counts without writing or app identities; measurements disappear when Bean quits")
+
             Divider()
 
-            Text("Bean button")
+            Text("Bean dot")
                 .font(.subheadline.weight(.semibold))
             if settings.bubbleEnabled {
                 bubbleOptions
             } else {
-                Text("Turn on Bean button above to customize when and where it appears.")
+                Text("Turn on Bean dot above to customize when and where it appears.")
                     .font(.caption)
                     .foregroundColor(BeanDesign.secondaryText)
             }
@@ -809,16 +858,16 @@ struct SettingsView: View {
             HStack {
                 Text("Delay before showing")
                 Slider(value: $settings.bubbleDelay, in: 0.3...2.0, step: 0.1)
-                    .accessibilityLabel("Bean button delay")
+                    .accessibilityLabel("Bean dot delay")
                     .accessibilityValue(String(format: "%.1f seconds", settings.bubbleDelay))
-                    .accessibilityHint("Adjusts how long Bean waits before showing the button")
+                    .accessibilityHint("Adjusts how long Bean waits before showing the dot")
                 Text(String(format: "%.1fs", settings.bubbleDelay)).monospacedDigit().frame(width: 40)
             }
             Toggle("Allow in chat apps", isOn: $settings.bubbleInChat)
             Toggle("Allow in mail and browser fields", isOn: $settings.bubbleInMailBrowser)
             Toggle("Allow in code editors", isOn: $settings.bubbleInCode)
             Toggle("Allow in search fields", isOn: $settings.bubbleInSearch)
-            Text("These preferences only narrow eligible fields. Bean still hides the button anywhere it cannot verify safe editing.")
+            Text("These preferences only narrow eligible fields. Bean still hides the dot anywhere it cannot verify safe editing or clear space.")
                 .font(BeanDesign.Typography.smallCaption())
                 .foregroundColor(BeanDesign.secondaryText)
         }
@@ -975,7 +1024,7 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(BeanDesign.Spacing.sm)
-        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.warmBackground))
+        .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.brandBackground))
         .accessibilityElement(children: .contain)
     }
 
@@ -1132,14 +1181,14 @@ private struct SupportReportPreview: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(BeanDesign.Spacing.md)
             }
-            .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.warmBackground))
+            .background(RoundedRectangle(cornerRadius: 10).fill(BeanDesign.brandBackground))
 
             HStack {
                 Button(copied ? "Report Copied ✓" : "Copy Support Report") {
                     copyError = onCopy()
                     copied = copyError == nil
                 }
-                .buttonStyle(.borderedProminent)
+                .beanButton(.primary)
                 Button("Open GitHub Bug Form") { issueError = onOpenIssue() }
                 Spacer()
                 Text("Opening GitHub does not upload this preview.")
@@ -1159,7 +1208,7 @@ private struct SupportReportPreview: View {
         }
         .padding(BeanDesign.Spacing.lg)
         .frame(width: 720, height: 620)
-        .tint(BeanDesign.accent)
+        .beanActionButtons()
     }
 }
 
